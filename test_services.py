@@ -535,4 +535,21 @@ class CareerUXAndVisualPreviewTests(unittest.TestCase):
                 self.assertEqual(single_img.mode,'RGB');self.assertGreater(single_img.width,150)
                 self.assertEqual(sheet_img.mode,'RGB');self.assertGreater(sheet_img.height,200)
 
+    def test_about_and_contact_links_and_validation(self):
+        from unittest.mock import patch
+        self.assertEqual(services.DEVELOPER_EMAIL,'njwayelodlamini@gmail.com')
+        self.assertEqual(services.DEVELOPER_GITHUB_URL,'https://github.com/Njwacky')
+        self.assertEqual(services.DEVELOPER_REPO_URL,'https://github.com/Njwacky/internetcafe')
+        opened=[]
+        with patch('webbrowser.open',side_effect=lambda u:(opened.append(u),True)[1]):
+            self.assertEqual(services.open_external_url('mailto:'+services.DEVELOPER_EMAIL),'mailto:njwayelodlamini@gmail.com')
+            self.assertEqual(services.open_external_url(services.DEVELOPER_GITHUB_URL),'https://github.com/Njwacky')
+            self.assertEqual(services.open_external_url(services.DEVELOPER_REPO_URL),'https://github.com/Njwacky/internetcafe')
+        self.assertEqual(len(opened),3)
+        with self.assertRaises(ValueError):
+            services.open_external_url('file:///etc/passwd')
+        with patch('webbrowser.open',return_value=False):
+            with self.assertRaises(ValueError):
+                services.open_external_url(services.DEVELOPER_GITHUB_URL)
+
 if __name__=='__main__': unittest.main()

@@ -59,7 +59,7 @@ from cards_ui import show_cards
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.4.0'
+APP_BUILD='0.5.0'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -272,6 +272,7 @@ class CafeDesk(ctk.CTk):
             'Home':'Use the menu to choose a tool. Open Help & privacy for a step-by-step guide.',
             'Projects & recovery':'Save a career or picture-sheet project with its photos, or open a saved project. Recovery is optional and stores unencrypted copies locally.',
             'Help & privacy':'Read the quick steps below, use the direct link to download Tesseract OCR, or delete a selected customer file (staff).',
+            'About & contact':'View Café Desk version details, developer contact email, and GitHub links — click to open or copy.',
             'Price list':'Search the read-only price list. Staff add prices and units in PIN-protected Price settings.',
             'PDF tools':'Add PDFs, arrange them, then merge and save. You can also extract pages or split each page.',
             'Bluetooth files':'On Windows, pair the phone in Bluetooth settings, open the Windows Bluetooth transfer window, and choose Receive files. After saving, select the file to use it in Café Desk.' ,
@@ -310,6 +311,58 @@ class CafeDesk(ctk.CTk):
         url_entry=entry(ocr_box);url_entry.insert(0,services.TESSERACT_DOWNLOAD_URL);url_entry.configure(state='readonly');url_entry.pack(fill='x',padx=18,pady=(0,16))
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Privacy and file removal',size=15,bold=True).pack(anchor='w',padx=18,pady=(16,4));label(box,'Staff access locks after five minutes without activity. The PIN is basic app-level protection, not encryption. Next customer does not delete saved files. A staff member can deliberately remove a selected file below.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,12))
         button(box,'Delete a selected customer file',self.delete_selected_file,secondary=True,width=210).pack(anchor='w',padx=18,pady=(0,18))
+    def about_screen(self):
+        self.heading(self.body,'About & contact','Information about Café Desk, developer contacts, and GitHub repository.')
+        hero=card(self.body);hero.pack(fill='x',pady=(0,12))
+        top=ctk.CTkFrame(hero,fg_color='transparent');top.pack(fill='x',padx=20,pady=(18,10))
+        ctk.CTkLabel(top,text='',image=self.icon_images[self.business_icon]).pack(side='left',padx=(0,14))
+        info_col=ctk.CTkFrame(top,fg_color='transparent');info_col.pack(side='left')
+        label(info_col,f'{self.business_name.get()}  •  Café Desk Document Studio',size=18,bold=True).pack(anchor='w')
+        label(info_col,f'Version {APP_BUILD}  •  Local-first desktop workspace',size=12,bold=True,color=LIME).pack(anchor='w',pady=(2,0))
+        label(hero,'Café Desk helps internet cafés, print shops and walk-in customers handle everyday paperwork locally on one workspace: PDF merge/split/extract, WIA scanning, English OCR, A4 picture sheets, 13-template CVs & cover letters, 13-template business & invitation cards, Bluetooth file shortcuts, price lists, and simple receipts.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,18))
+
+        def open_link(url,desc):
+            try:
+                services.open_external_url(url)
+                self.status.set(f'Opened {desc}')
+            except ValueError as exc:
+                messagebox.showerror('Could not open link',str(exc),parent=self)
+        def copy_val(val,desc):
+            self.clipboard_clear();self.clipboard_append(val);self.update_idletasks()
+            self.status.set(f'Copied {desc} to clipboard')
+            messagebox.showinfo('Copied',f'{desc} copied to clipboard:\n{val}',parent=self)
+
+        contact_box=card(self.body);contact_box.pack(fill='x',pady=(0,12))
+        label(contact_box,'Developer & support contacts',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
+        label(contact_box,'Have feedback, feature ideas, or need help setting up Café Desk? Reach out directly or visit GitHub.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,14))
+
+        # Email row
+        email_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);email_card.pack(fill='x',padx=20,pady=(0,10))
+        label(email_card,'EMAIL',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
+        erow=ctk.CTkFrame(email_card,fg_color='transparent');erow.pack(fill='x',padx=16,pady=(0,12))
+        e_entry=entry(erow);e_entry.insert(0,services.DEVELOPER_EMAIL);e_entry.configure(state='readonly');e_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
+        button(erow,'✉ Send email',lambda:open_link('mailto:'+services.DEVELOPER_EMAIL,'email app'),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=130,height=34).pack(side='left',padx=(0,8))
+        button(erow,'⧉ Copy email',lambda:copy_val(services.DEVELOPER_EMAIL,'Email address'),secondary=True,width=120,height=34).pack(side='left')
+
+        # GitHub profile row
+        gh_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);gh_card.pack(fill='x',padx=20,pady=(0,10))
+        label(gh_card,'GITHUB PROFILE (@Njwacky)',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
+        grow=ctk.CTkFrame(gh_card,fg_color='transparent');grow.pack(fill='x',padx=16,pady=(0,12))
+        g_entry=entry(grow);g_entry.insert(0,services.DEVELOPER_GITHUB_URL);g_entry.configure(state='readonly');g_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
+        button(grow,'↗ Open GitHub',lambda:open_link(services.DEVELOPER_GITHUB_URL,'GitHub profile'),width=135,height=34).pack(side='left',padx=(0,8))
+        button(grow,'⧉ Copy link',lambda:copy_val(services.DEVELOPER_GITHUB_URL,'GitHub profile URL'),secondary=True,width=115,height=34).pack(side='left')
+
+        # Project repository row
+        repo_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);repo_card.pack(fill='x',padx=20,pady=(0,18))
+        label(repo_card,'PROJECT REPOSITORY & UPDATES',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
+        rrow=ctk.CTkFrame(repo_card,fg_color='transparent');rrow.pack(fill='x',padx=16,pady=(0,12))
+        r_entry=entry(rrow);r_entry.insert(0,services.DEVELOPER_REPO_URL);r_entry.configure(state='readonly');r_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
+        button(rrow,'↗ Open repo',lambda:open_link(services.DEVELOPER_REPO_URL,'GitHub repository'),width=135,height=34).pack(side='left',padx=(0,8))
+        button(rrow,'⧉ Copy link',lambda:copy_val(services.DEVELOPER_REPO_URL,'Repository URL'),secondary=True,width=115,height=34).pack(side='left')
+
+        priv_box=card(self.body);priv_box.pack(fill='x',pady=(0,12))
+        label(priv_box,'Local-first & privacy summary',size=15,bold=True).pack(anchor='w',padx=20,pady=(16,4))
+        label(priv_box,'All PDFs, scans, OCR text, picture sheets, CVs and cards are processed locally on this computer. Nothing is uploaded unless a staff member unlocks AI settings and confirms sending a draft to OpenAI.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,16))
     def delete_selected_file(self):
         if self.busy:return messagebox.showinfo('Please wait','Wait until the current task finishes.',parent=self)
         if not self.require_staff():return
@@ -434,12 +487,12 @@ class CafeDesk(ctk.CTk):
         side=ctk.CTkFrame(self,width=220,corner_radius=0,fg_color='#141B2A'); side.grid(row=0,column=0,sticky='nsew'); side.grid_propagate(False)
         brand=ctk.CTkFrame(side,fg_color='transparent'); brand.pack(fill='x',padx=23,pady=(29,35))
         self.brand_icon=ctk.CTkLabel(brand,text='',image=self.icon_images[self.business_icon]); self.brand_icon.pack(side='left',padx=(0,10))
-        column=ctk.CTkFrame(brand,fg_color='transparent'); column.pack(side='left'); self.brand_label=ctk.CTkLabel(column,textvariable=self.business_name,text_color='white',font=ctk.CTkFont(family=FONT,size=17,weight='bold'),wraplength=150,justify='left'); self.brand_label.pack(anchor='w'); label(column,'DOCUMENT STUDIO',size=10,bold=True,color='#99A9C3').pack(anchor='w')
+        column=ctk.CTkFrame(brand,fg_color='transparent'); column.pack(side='left'); self.brand_label=ctk.CTkLabel(column,textvariable=self.business_name,text_color='white',font=ctk.CTkFont(family=FONT,size=17,weight='bold'),wraplength=150,justify='left'); self.brand_label.pack(anchor='w'); label(column,f'DOCUMENT STUDIO • v{APP_BUILD}',size=10,bold=True,color='#99A9C3').pack(anchor='w')
         label(side,'WORKSPACE',size=10,bold=True,color='#8FA1BF').pack(anchor='w',padx=25,pady=(0,9))
         info=ctk.CTkFrame(side,fg_color='#273248',corner_radius=12); info.pack(side='bottom',fill='x',padx=15,pady=12)
         label(info,'PRIVATE BY DEFAULT',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=13,pady=(12,3)); label(info,'Files stay on this computer\nunless you choose AI.',size=11,color='#B9C7DC',justify='left').pack(anchor='w',padx=13,pady=(0,12))
         nav=ctk.CTkScrollableFrame(side,fg_color='transparent',corner_radius=0);nav.pack(side='top',fill='both',expand=True,padx=(6,0))
-        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
+        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('About & contact','ⓘ'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
             btn_kw={'image':self.icon_images['bluetooth_nav_muted'],'compound':'left','text':f'  {name}'} if icon is None else {'text':f'{icon}   {name}'}
             b=ctk.CTkButton(nav,height=38,anchor='w',corner_radius=10,fg_color='transparent',hover_color='#303C55',text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=13,weight='bold'),command=lambda n=name:self.show(n),**btn_kw); b.pack(fill='x',padx=(5,4),pady=2); self.nav_buttons[name]=b
         main=ctk.CTkFrame(self,fg_color='transparent'); main.grid(row=0,column=1,sticky='nsew'); main.grid_rowconfigure(1,weight=1); main.grid_columnconfigure(0,weight=1)
@@ -466,7 +519,7 @@ class CafeDesk(ctk.CTk):
                 b.configure(image=self.icon_images['bluetooth_nav' if active else 'bluetooth_nav_muted'])
         for child in self.container.winfo_children(): child.destroy()
         self.body=ctk.CTkScrollableFrame(self.container,fg_color='transparent',corner_radius=0); self.body.pack(fill='both',expand=True)
-        {'Home':self.home,'Projects & recovery':self.projects_screen,'Help & privacy':self.help_screen,'Price list':self.price_list_screen,'PDF tools':self.pdf_screen,'Bluetooth files':self.bluetooth_screen,'Scan & images':self.scan_screen,'A4 picture sheets':lambda:PictureSheet(self,self.body,card,label,button),'Career documents':self.career_screen,'Cards & invitations':lambda:show_cards(self,self.body,card,label,button,entry),'Receipts':self.receipt_screen,'Sales reports':lambda:show_reports(self,self.body,card,label,button,entry),'Price settings':self.price_screen,'Business settings':self.business_screen,'AI settings':self.settings_screen}[name]()
+        {'Home':self.home,'Projects & recovery':self.projects_screen,'Help & privacy':self.help_screen,'About & contact':self.about_screen,'Price list':self.price_list_screen,'PDF tools':self.pdf_screen,'Bluetooth files':self.bluetooth_screen,'Scan & images':self.scan_screen,'A4 picture sheets':lambda:PictureSheet(self,self.body,card,label,button),'Career documents':self.career_screen,'Cards & invitations':lambda:show_cards(self,self.body,card,label,button,entry),'Receipts':self.receipt_screen,'Sales reports':lambda:show_reports(self,self.body,card,label,button,entry),'Price settings':self.price_screen,'Business settings':self.business_screen,'AI settings':self.settings_screen}[name]()
     def heading(self,parent,title,subtitle):
         label(parent,title,size=24,bold=True).pack(anchor='w',pady=(2,3)); label(parent,subtitle,size=13,color=MUTED,wraplength=740,justify='left').pack(anchor='w',pady=(0,18))
     def home(self):
@@ -475,7 +528,9 @@ class CafeDesk(ctk.CTk):
         label(hero,'Big help for life’s little paperwork.',size=27,bold=True,color='white').pack(anchor='w',padx=26)
         label(hero,'Everything you need for documents and your next career move.',size=13,color='#C3CEE1').pack(anchor='w',padx=26,pady=(7,17))
         button(hero,'Create a career document   →',lambda:self.show('Career documents'),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=240).pack(anchor='w',padx=26,pady=(0,25))
-        button(self.body,'New here? Open the quick guide  →',lambda:self.show('Help & privacy'),secondary=True,width=270).pack(anchor='w',pady=(0,17))
+        hbtns=ctk.CTkFrame(self.body,fg_color='transparent'); hbtns.pack(anchor='w',pady=(0,17))
+        button(hbtns,'New here? Open the quick guide  →',lambda:self.show('Help & privacy'),secondary=True,width=270).pack(side='left',padx=(0,8))
+        button(hbtns,'ⓘ About & contact',lambda:self.show('About & contact'),secondary=True,width=160).pack(side='left')
         if self.recovery_exists(): label(self.body,'A recovery copy is available. Staff can open it from Projects & recovery.',size=11,color='#B9FF70').pack(anchor='w',pady=(0,10))
         label(self.body,'What can we help with?',size=19,bold=True).pack(anchor='w',pady=(0,11))
         grid=ctk.CTkFrame(self.body,fg_color='transparent'); grid.pack(fill='x'); grid.grid_columnconfigure((0,1),weight=1)
