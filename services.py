@@ -154,7 +154,7 @@ def render_document_preview(text,category,index=0,photo_path=None,page=1,max_siz
                 w, h = page_obj.get_size()
                 if not all(math.isfinite(v) and v > 0 for v in (w, h)):
                     raise ValueError('Invalid PDF page dimensions.')
-                scale = min(2.0, max_w / w, max_h / h)
+                scale = min(3.0, max_w / w, max_h / h)
                 bitmap = page_obj.render(scale=scale)
                 try:
                     image = bitmap.to_pil().convert('RGB').copy()
@@ -163,6 +163,40 @@ def render_document_preview(text,category,index=0,photo_path=None,page=1,max_siz
             finally:
                 page_obj.close()
             return image, page_num, total
+        finally:
+            doc.close()
+
+def export_card_pdf(destination,kind,template_index,fields,sheet_index=0,photo_path=None,crop_marks=True):
+    """Export Business card or Invitation card printable A4 PDF atomically."""
+    if photo_path: _different([photo_path],destination)
+    import cards_renderer
+    _atomic_write(destination,lambda temp:cards_renderer.render_card_pdf(temp,kind,template_index,fields,sheet_index=sheet_index,photo_path=photo_path,crop_marks=crop_marks))
+
+def render_card_preview(kind,template_index,fields,sheet_index=0,photo_path=None,crop_marks=True,single_card=True,max_size=(380,260)):
+    """Rasterize either a single card close-up or the full A4 print sheet to a PIL RGB image."""
+    import math, pypdfium2 as pdfium, cards_renderer
+    max_w, max_h = max_size
+    with tempfile.TemporaryDirectory(prefix='cafedesk-cardprev-') as tmpdir:
+        pdf_path = Path(tmpdir) / 'card.pdf'
+        if single_card:
+            cards_renderer.render_single_card_pdf(pdf_path, kind, template_index, fields, photo_path=photo_path)
+        else:
+            cards_renderer.render_card_pdf(pdf_path, kind, template_index, fields, sheet_index=sheet_index, photo_path=photo_path, crop_marks=crop_marks)
+        doc = pdfium.PdfDocument(str(pdf_path))
+        try:
+            page_obj = doc[0]
+            try:
+                w, h = page_obj.get_size()
+                if not all(math.isfinite(v) and v > 0 for v in (w, h)):
+                    raise ValueError('Invalid card PDF dimensions.')
+                scale = min(4.0, max_w / w, max_h / h)
+                bitmap = page_obj.render(scale=scale)
+                try:
+                    return bitmap.to_pil().convert('RGB').copy()
+                finally:
+                    bitmap.close()
+            finally:
+                page_obj.close()
         finally:
             doc.close()
 

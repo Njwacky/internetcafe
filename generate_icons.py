@@ -23,11 +23,14 @@ make('diamond',lambda l,r,c,p:(p([(16,26),(23,17),(41,17),(48,26),(32,48),(16,26
 make('store',lambda l,r,c,p:(p([(18,27),(20,17),(44,17),(46,27)]),l((18,27,46,27)),p([(20,27),(20,47),(44,47),(44,27)]),r((26,35,34,47),0),r((38,34,41,38),0)))
 make('leaf',lambda l,r,c,p:(p([(18,44),(18,34),(24,23),(36,18),(47,18),(46,29),(41,39),(30,44),(18,44)]),p([(18,46),(25,39),(33,32),(41,25)])))
 make('bluetooth',lambda l,r,c,p:p([(21,23),(43,39),(31,49),(31,15),(43,25),(21,41)]))
-def make_nav(name,fn):
+make('cards',lambda l,r,c,p:(r((14,21,46,45),3),p([(22,20),(22,16),(50,16),(50,38),(46,38)]),l((20,28,33,28)),l((20,34,40,34)),l((20,39,30,39))))
+def make_nav(name,fn,color='#FFFFFF'):
  im=Image.new('RGBA',(20*S,20*S),(0,0,0,0)); d=ImageDraw.Draw(im)
- def p(pts,w=2): d.line([tuple(x*S for x in q) for q in pts],fill=FG,width=w*S,joint='curve')
+ def p(pts,w=2.1): d.line([tuple(int(x*S) for x in q) for q in pts],fill=color,width=int(round(w*S)),joint='curve')
  fn(p)
  im.resize((36,36),Image.Resampling.LANCZOS).save(out/(name+'.png'))
-make_nav('bluetooth-nav',lambda p:p([(6,7),(14,13),(10,17),(10,3),(14,7),(6,13)]))
+make_nav('bluetooth-nav',lambda p:p([(6,7),(14,13),(10,17),(10,3),(14,7),(6,13)]),'#FFFFFF')
+make_nav('bluetooth-nav-muted',lambda p:p([(6,7),(14,13),(10,17),(10,3),(14,7),(6,13)]),'#C4D0E5')
+make_nav('enlarge',lambda p:(p([(3,8),(3,3),(8,3)]),p([(12,3),(17,3),(17,8)]),p([(17,12),(17,17),(12,17)]),p([(8,17),(3,17),(3,12)]),p([(3.5,3.5),(7.5,7.5)]),p([(16.5,3.5),(12.5,7.5)]),p([(16.5,16.5),(12.5,12.5)]),p([(3.5,16.5),(7.5,12.5)])),'#FFFFFF')
 
 

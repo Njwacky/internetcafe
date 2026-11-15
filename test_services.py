@@ -500,13 +500,39 @@ class CareerUXAndVisualPreviewTests(unittest.TestCase):
             self.assertEqual((pg_let,tot_let),(1,1));self.assertGreater(im_let.width,100)
             with self.assertRaises(ValueError):services.render_document_preview('   ','Résumé / CV',0)
 
-    def test_bluetooth_icons_generated_with_visible_pixels(self):
+    def test_bluetooth_and_enlarge_icons_generated_with_correct_colors(self):
         root=Path(__file__).resolve().parent/'assets'/'icons'
-        for name,expected in (('bluetooth.png',(128,128)),('bluetooth-nav.png',(36,36))):
+        for name,expected in (('bluetooth.png',(128,128)),('bluetooth-nav.png',(36,36)),('bluetooth-nav-muted.png',(36,36)),('enlarge.png',(36,36)),('cards.png',(128,128))):
             p=root/name;self.assertTrue(p.exists(),f'Missing {name}')
             with Image.open(p) as im:
                 self.assertEqual(im.size,expected)
                 alpha=im.getchannel('A')
-                self.assertIsNotNone(alpha.getbbox(),f'{name} should have visible Bluetooth glyph pixels')
+                self.assertIsNotNone(alpha.getbbox(),f'{name} should have visible glyph pixels')
+        # Verify bluetooth-nav.png is white (not lime #B9FF70)
+        with Image.open(root/'bluetooth-nav.png').convert('RGBA') as nav_im:
+            raw=nav_im.tobytes()
+            opaque=[(raw[i],raw[i+1],raw[i+2]) for i in range(0,len(raw),4) if raw[i+3]>180]
+            self.assertTrue(opaque)
+            self.assertTrue(all(r>=245 and g>=245 and b>=245 for r,g,b in opaque))
+
+    def test_business_and_invitation_cards_all_13_templates(self):
+        import cards_renderer
+        self.assertEqual(len(cards_renderer.CARD_TEMPLATES),13)
+        self.assertEqual(len(cards_renderer.CARD_NAMES),13)
+        with tempfile.TemporaryDirectory() as d:
+            logo=Path(d)/'logo.png'
+            Image.new('RGB',(96,96),(36,91,131)).save(logo)
+            for kind in cards_renderer.CARD_TYPES:
+                fields=cards_renderer.default_fields(kind)
+                for idx in range(13):
+                    out=Path(d)/f'{kind.split()[0]}_{idx}.pdf'
+                    services.export_card_pdf(out,kind,idx,fields,sheet_index=0,photo_path=logo if idx%3==0 else None,crop_marks=(idx%2==0))
+                    self.assertTrue(out.exists())
+                    self.assertEqual(len(PdfReader(str(out)).pages),1)
+                # Single-card and A4-sheet previews both render cleanly
+                single_img=services.render_card_preview(kind,10,fields,sheet_index=0,photo_path=logo,crop_marks=True,single_card=True,max_size=(400,300))
+                sheet_img=services.render_card_preview(kind,11,fields,sheet_index=0,photo_path=logo,crop_marks=True,single_card=False,max_size=(340,480))
+                self.assertEqual(single_img.mode,'RGB');self.assertGreater(single_img.width,150)
+                self.assertEqual(sheet_img.mode,'RGB');self.assertGreater(sheet_img.height,200)
 
 if __name__=='__main__': unittest.main()
