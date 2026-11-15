@@ -42,7 +42,7 @@ def _safe_ctk_entry_activate_placeholder(self):
 ctk.CTkEntry._textvariable_callback = _safe_ctk_entry_textvariable_callback
 ctk.CTkEntry._activate_placeholder = _safe_ctk_entry_activate_placeholder
 
-from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, make_document
+from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, field_labels_for, uses_company_field, make_document
 import services
 import settings_store
 import sales_store
@@ -53,6 +53,7 @@ import bluetooth_access
 from sales_ui import show_reports
 from collage_ui import PictureSheet
 from scanner_ui import show_scanner
+from ocr_ui import show_ocr
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
@@ -70,7 +71,7 @@ def entry(parent,placeholder=''): return ctk.CTkEntry(parent,placeholder_text=pl
 class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
-        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value='Ready  •  Local document processing')
+        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value='Ready  •  Local document processing')
         preferences=settings_store.load_settings(); self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick)
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
     def note_activity(self,event=None): self.idle.touch()
@@ -80,7 +81,7 @@ class CafeDesk(ctk.CTk):
     def close_app(self):
         if self.busy: return messagebox.showinfo('Please wait','A document is still being processed. Wait for it to finish before closing.',parent=self)
         if self.current=='Career documents': self.sync_long_fields()
-        has_work=bool(self.current_text().strip() or any(v.get().strip() for v in self.values.values()) or self.cv_photo or self.sheet['items'] or self.receipt_items or self.scanned_pages)
+        has_work=bool(self.current_text().strip() or any(v.get().strip() for v in self.values.values()) or self.cv_photo or self.sheet['items'] or self.receipt_items or self.scanned_pages or self.ocr_text.strip() or (self.ocr_editor and self.ocr_editor.winfo_exists() and self.ocr_editor.get('1.0','end-1c').strip()))
         if has_work and not messagebox.askyesno('Close Café Desk?','Current workspace data, including unsaved scans, will be closed. Save any work you need first. If recovery is enabled, the latest copy may not include recent changes. Close anyway?',parent=self): return
         self.remove_session_files(); self.destroy()
     def remove_session_files(self):
@@ -93,6 +94,10 @@ class CafeDesk(ctk.CTk):
             if key=='custom': continue
             with Image.open(root / 'assets' / 'icons' / (key+'.png')) as image:
                 images[key]=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
+        with Image.open(root / 'assets' / 'icons' / 'bluetooth.png') as image:
+            images['bluetooth_card']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(34,34))
+        with Image.open(root / 'assets' / 'icons' / 'bluetooth-nav.png') as image:
+            images['bluetooth_nav']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(18,18))
         try:
             with Image.open(settings_store.logo_path()) as image: images['custom']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
         except (OSError,ValueError): images['custom']=images['office']
@@ -259,11 +264,11 @@ class CafeDesk(ctk.CTk):
         messages={
             'Home':'Use the menu to choose a tool. Open Help & privacy for a step-by-step guide.',
             'Projects & recovery':'Save a career or picture-sheet project with its photos, or open a saved project. Recovery is optional and stores unencrypted copies locally.',
-            'Help & privacy':'Read the quick steps below. Staff can deliberately delete a selected customer file after confirmation.',
+            'Help & privacy':'Read the quick steps below, use the direct link to download Tesseract OCR, or delete a selected customer file (staff).',
             'Price list':'Search the read-only price list. Staff add prices and units in PIN-protected Price settings.',
             'PDF tools':'Add PDFs, arrange them, then merge and save. You can also extract pages or split each page.',
             'Bluetooth files':'On Windows, pair the phone in Bluetooth settings, open the Windows Bluetooth transfer window, and choose Receive files. After saving, select the file to use it in Café Desk.' ,
-            'Scan & images':'On Windows, find and select a WIA scanner, then scan each page in the app and save a PDF. You can also open your scanner app or use English OCR if Tesseract is installed.',
+            'Scan & images':'On Windows, find and select a WIA scanner, then scan each page in the app and save a PDF. Preview selected images and recognise English text with OCR (direct Tesseract download link is in Help & privacy).',
             'A4 picture sheets':'Add images, choose a layout, move and resize in Free layout, then save a PDF or project. Print PDFs at actual size.',
             'Career documents':'Choose a type and template, enter details, create and edit a draft, then save a PDF or project. Add to PDF merge to combine it with other files.',
             'Receipts':'Choose services and quantity. Save a receipt PDF; staff must separately confirm Record sale to add it to history.',
@@ -274,9 +279,27 @@ class CafeDesk(ctk.CTk):
         messagebox.showinfo('Quick help • '+self.current,messages.get(self.current,'Open Help & privacy for the full guide.'),parent=self)
     def help_screen(self):
         self.heading(self.body,'Help & privacy','A quick guide for staff and customers.')
-        sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. English OCR requires Tesseract installed separately.'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Add services in Receipts. Saving a PDF does not record a sale. Staff choose Record sale; staff-only Sales reports show recorded totals. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
+        sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Add services in Receipts. Saving a receipt PDF does not record a sale. Staff choose Record sale; staff-only Sales reports show recorded totals. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
         for title,description in sections:
             box=card(self.body);box.pack(fill='x',pady=(0,8));label(box,title,size=14,bold=True).pack(anchor='w',padx=18,pady=(14,4));label(box,description,size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,14))
+        ocr_box=card(self.body);ocr_box.pack(fill='x',pady=(0,10))
+        label(ocr_box,'Direct download: Tesseract OCR (for English text recognition)',size=15,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(16,4))
+        label(ocr_box,'If you share Café Desk with another computer, install Tesseract OCR (keep English language data ticked during setup), then restart Café Desk. Click a direct link below or copy the URL.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,10))
+        def open_ocr_url(direct_exe=False):
+            try:
+                url=services.open_tesseract_link(direct_installer=direct_exe)
+                self.status.set('Opened Tesseract OCR download link in your browser  •  '+url)
+            except ValueError as exc:
+                messagebox.showerror('Could not open link',str(exc),parent=self)
+        def copy_ocr_url():
+            self.clipboard_clear();self.clipboard_append(services.TESSERACT_DOWNLOAD_URL);self.update_idletasks()
+            self.status.set('Copied Tesseract OCR link to clipboard')
+            messagebox.showinfo('Link copied',f'Copied to clipboard:\n{services.TESSERACT_DOWNLOAD_URL}',parent=self)
+        ocr_btns=ctk.CTkFrame(ocr_box,fg_color='transparent');ocr_btns.pack(fill='x',padx=18,pady=(0,10))
+        button(ocr_btns,'Download Tesseract OCR (Windows .exe)  ↗',lambda:open_ocr_url(True),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=290).pack(side='left',padx=(0,8))
+        button(ocr_btns,'Open Tesseract downloads page  ↗',lambda:open_ocr_url(False),secondary=True,width=235).pack(side='left',padx=(0,8))
+        button(ocr_btns,'Copy link',copy_ocr_url,secondary=True,width=95).pack(side='left')
+        url_entry=entry(ocr_box);url_entry.insert(0,services.TESSERACT_DOWNLOAD_URL);url_entry.configure(state='readonly');url_entry.pack(fill='x',padx=18,pady=(0,16))
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Privacy and file removal',size=15,bold=True).pack(anchor='w',padx=18,pady=(16,4));label(box,'Staff access locks after five minutes without activity. The PIN is basic app-level protection, not encryption. Next customer does not delete saved files. A staff member can deliberately remove a selected file below.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,12))
         button(box,'Delete a selected customer file',self.delete_selected_file,secondary=True,width=210).pack(anchor='w',padx=18,pady=(0,18))
     def delete_selected_file(self):
@@ -397,28 +420,7 @@ class CafeDesk(ctk.CTk):
         button(buttons,'Save receipt PDF',save_receipt,width=135).pack(side='left',padx=(0,8));button(buttons,'Record sale',record,width=115).pack(side='left',padx=(0,8));button(buttons,'New receipt',new_receipt,secondary=True,width=115).pack(side='left')
         label(box,'Record sale is staff-only. No payment status, payment method or tax is tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
     def ocr_screen_part(self):
-        box=card(self.body); box.pack(fill='x',pady=(0,14)); label(box,'Recognise text (OCR)',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
-        label(box,'Extract English text from an image using a separately installed Tesseract OCR engine. Review the result for errors.',size=12,color=MUTED,wraplength=750,justify='left').pack(anchor='w',padx=20)
-        self.ocr_editor=ctk.CTkTextbox(box,height=150,fg_color='#121A29',border_color=BORDER,border_width=1,text_color=INK); self.ocr_editor.pack(fill='x',padx=20,pady=12); self.ocr_editor.insert('1.0',self.ocr_text)
-        row=ctk.CTkFrame(box,fg_color='transparent'); row.pack(fill='x',padx=20,pady=(0,18))
-        def recognize():
-            path=filedialog.askopenfilename(parent=self,filetypes=[('Images','*.png *.jpg *.jpeg *.bmp *.tif *.tiff')])
-            if not path: return
-            if self.ocr_editor.get('1.0','end-1c').strip() and not messagebox.askyesno('Replace OCR text?','Replace the current recognised text?',parent=self): return
-            original=self.ocr_editor.get('1.0','end-1c')
-            def done(text):
-                current=self.ocr_editor.get('1.0','end-1c') if self.ocr_editor and self.ocr_editor.winfo_exists() else self.ocr_text
-                if current!=original and not messagebox.askyesno('Text changed','Text changed while OCR was running. Replace it?',parent=self): return
-                self.ocr_text=text
-                if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end'); self.ocr_editor.insert('1.0',text)
-                messagebox.showinfo('OCR complete','Review the recognised text carefully.',parent=self)
-            self.job('Recognising text…',lambda:services.run_ocr(path),done)
-        def save():
-            text=self.ocr_editor.get('1.0','end-1c').strip()
-            if not text: return messagebox.showinfo('OCR','Recognise or enter text first.',parent=self)
-            path=filedialog.asksaveasfilename(parent=self,defaultextension='.txt',filetypes=[('Text','*.txt')],initialfile='recognised-text.txt')
-            if path: self.job('Saving text…',lambda:services.export_text(text,path),lambda _:messagebox.showinfo('Saved',f'Text saved to:\n{path}',parent=self))
-        button(row,'Choose image & recognise',recognize,width=205).pack(side='left',padx=(0,8)); button(row,'Save text',save,secondary=True,width=115).pack(side='left')
+        show_ocr(self,self.body,card,label,button)
     def create_shell(self):
         self.grid_columnconfigure(1,weight=1); self.grid_rowconfigure(0,weight=1)
         side=ctk.CTkFrame(self,width=220,corner_radius=0,fg_color='#141B2A'); side.grid(row=0,column=0,sticky='nsew'); side.grid_propagate(False)
@@ -429,8 +431,9 @@ class CafeDesk(ctk.CTk):
         info=ctk.CTkFrame(side,fg_color='#273248',corner_radius=12); info.pack(side='bottom',fill='x',padx=15,pady=12)
         label(info,'PRIVATE BY DEFAULT',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=13,pady=(12,3)); label(info,'Files stay on this computer\nunless you choose AI.',size=11,color='#B9C7DC',justify='left').pack(anchor='w',padx=13,pady=(0,12))
         nav=ctk.CTkScrollableFrame(side,fg_color='transparent',corner_radius=0);nav.pack(side='top',fill='both',expand=True,padx=(6,0))
-        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files','ᛒ'),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
-            b=ctk.CTkButton(nav,text=f'{icon}   {name}',height=38,anchor='w',corner_radius=10,fg_color='transparent',hover_color='#303C55',text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=13,weight='bold'),command=lambda n=name:self.show(n)); b.pack(fill='x',padx=(5,4),pady=2); self.nav_buttons[name]=b
+        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
+            btn_kw={'image':self.icon_images['bluetooth_nav'],'compound':'left','text':f'  {name}'} if icon is None else {'text':f'{icon}   {name}'}
+            b=ctk.CTkButton(nav,height=38,anchor='w',corner_radius=10,fg_color='transparent',hover_color='#303C55',text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=13,weight='bold'),command=lambda n=name:self.show(n),**btn_kw); b.pack(fill='x',padx=(5,4),pady=2); self.nav_buttons[name]=b
         main=ctk.CTkFrame(self,fg_color='transparent'); main.grid(row=0,column=1,sticky='nsew'); main.grid_rowconfigure(1,weight=1); main.grid_columnconfigure(0,weight=1)
         bar=ctk.CTkFrame(main,fg_color=BG,height=67); bar.grid(row=0,column=0,sticky='ew',padx=28); bar.grid_propagate(False)
         self.header_title=label(bar,'Home',size=20,bold=True); self.header_title.pack(side='left')
@@ -447,7 +450,7 @@ class CafeDesk(ctk.CTk):
         if self.current=='Career documents':
             self.sync_long_fields()
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_text=self.doc_editor.get('1.0','end-1c')
-        self.doc_editor=None; self.long_fields={}; self.current=name; self.header_title.configure(text=name)
+        self.doc_editor=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.long_fields={}; self.current=name; self.header_title.configure(text=name)
         for key,b in self.nav_buttons.items(): b.configure(fg_color='#344663' if key==name else 'transparent',text_color='white' if key==name else '#C4D0E5')
         for child in self.container.winfo_children(): child.destroy()
         self.body=ctk.CTkScrollableFrame(self.container,fg_color='transparent',corner_radius=0); self.body.pack(fill='both',expand=True)
@@ -489,7 +492,7 @@ class CafeDesk(ctk.CTk):
         for widget in self.long_fields.values():
             if widget.winfo_exists(): widget.delete('1.0','end')
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
-        self.key.set(''); self.staff_unlocked=False; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}
+        self.key.set(''); self.staff_unlocked=False; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
         self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
@@ -516,10 +519,16 @@ class CafeDesk(ctk.CTk):
             types=[('PDF files','*.pdf')] if kind=='pdf' else [('Images','*.png *.jpg *.jpeg *.bmp *.tif *.tiff')]
             paths=filedialog.askopenfilenames(parent=self,title='Choose received '+('PDF files' if kind=='pdf' else 'images'),filetypes=types)
             if paths:
-                (self.pdf_files if kind=='pdf' else self.image_files).extend(paths)
-                self.show('PDF tools' if kind=='pdf' else 'Scan & images')
+                if kind=='pdf':
+                    self.pdf_files.extend(paths)
+                    self.show('PDF tools')
+                else:
+                    if kind=='ocr': self.ocr_images.extend(paths)
+                    else: self.image_files.extend(paths)
+                    self.show('Scan & images')
         button(row,'Add received PDF',lambda:add_received('pdf'),secondary=True,width=160).pack(side='left',padx=(0,8))
-        button(row,'Add received images',lambda:add_received('image'),secondary=True,width=170).pack(side='left')
+        button(row,'Add received images',lambda:add_received('image'),secondary=True,width=170).pack(side='left',padx=(0,8))
+        button(row,'Add received for OCR',lambda:add_received('ocr'),secondary=True,width=175).pack(side='left')
         label(box,'Windows saves the received files on the computer. Next customer clears the app’s lists, not the saved files. Delete them separately when appropriate.',size=11,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,18))
         if sys.platform!='win32':label(self.body,'The shortcuts on this page currently work on Windows only. Use your operating system’s file-sharing tools on macOS or Linux.',size=12,color='#E8C187',wraplength=740,justify='left').pack(anchor='w',pady=(0,10))
     def filebox(self,parent,kind):
@@ -544,7 +553,7 @@ class CafeDesk(ctk.CTk):
                 i=sel[0]; j=i+d
                 if 0<=j<len(files): files[i],files[j]=files[j],files[i]; refresh(j)
         actions=ctk.CTkFrame(box,fg_color='transparent'); actions.pack(fill='x',padx=20,pady=(0,18))
-        for title,cmd in [('＋ Add files',add),('Remove',remove),('↑',lambda:move(-1)),('↓',lambda:move(1))]: button(actions,title,cmd,secondary=True,width=88 if len(title)>2 else 40,height=34).pack(side='left',padx=(0,7))
+        for title,cmd in [('＋ Add files',add),('✕ Remove',remove),('↑',lambda:move(-1)),('↓',lambda:move(1))]: button(actions,title,cmd,secondary=True,width=92 if len(title)>2 else 40,height=34).pack(side='left',padx=(0,7))
         button(actions,'Merge & save' if kind=='pdf' else 'Convert to PDF',lambda:self.save_files(kind),width=145,height=34).pack(side='right')
         refresh()
     def save_files(self,kind):
@@ -604,35 +613,145 @@ class CafeDesk(ctk.CTk):
             else: subprocess.Popen(['simple-scan'])
         except Exception: messagebox.showinfo('Scanner app','Could not launch the scanner app. Install/open Windows Scan, Image Capture, or Linux Document Scanner (simple-scan). Install your scanner drivers too. You can use any scanner app and import the result.',parent=self)
     def career_screen(self):
-        self.heading(self.body,'Career documents','Thoughtful templates for your next opportunity. Edit every draft before saving.')
+        self.heading(self.body,'Career documents','Create a general CV or a targeted cover letter, preview the A4 layout live, then save.')
         selection=card(self.body); selection.pack(fill='x',pady=(0,12)); label(selection,'1   Choose your starting point',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,10))
-        row=ctk.CTkFrame(selection,fg_color='transparent'); row.pack(fill='x',padx=20,pady=(0,17)); row.grid_columnconfigure((0,1),weight=1)
+        row=ctk.CTkFrame(selection,fg_color='transparent'); row.pack(fill='x',padx=20,pady=(0,12)); row.grid_columnconfigure((0,1),weight=1)
         typecell=ctk.CTkFrame(row,fg_color='transparent');typecell.grid(row=0,column=0,sticky='ew',padx=(0,10));label(typecell,'Document type',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,5));ctk.CTkOptionMenu(typecell,values=CATEGORIES,variable=self.doc_type,command=self.change_doc_type,fg_color=GREEN,button_color=GREEN_HOVER,button_hover_color='#374F77',height=36).pack(fill='x')
-        tempcell=ctk.CTkFrame(row,fg_color='transparent');tempcell.grid(row=0,column=1,sticky='ew');self.template_caption=label(tempcell,'Template • 13 CV designs' if self.doc_type.get()==CATEGORIES[0] else 'Template • 10 options',size=11,bold=True,color=MUTED);self.template_caption.pack(anchor='w',pady=(0,5));self.template_menu=ctk.CTkOptionMenu(tempcell,values=CV_NAMES if self.doc_type.get()==CATEGORIES[0] else NAMES,variable=self.template,fg_color=GREEN,button_color=GREEN_HOVER,button_hover_color='#374F77',height=36);self.template_menu.pack(fill='x')
-        button(selection,'View 13 CV designs',self.open_cv_gallery,secondary=True,width=170,height=34).pack(anchor='w',padx=20,pady=(0,15))
-        form=card(self.body); form.pack(fill='x',pady=(0,12)); label(form,'2   Add your details',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,0)); label(form,'Add as many lines as you need for skills, experience and education. Blank fields use placeholders.',size=12,color=MUTED).pack(anchor='w',padx=20,pady=(3,5))
-        grid=ctk.CTkFrame(form,fg_color='transparent'); grid.pack(fill='x',padx=20,pady=(0,9)); grid.grid_columnconfigure((0,1),weight=1)
-        keys=list(LABELS)
-        for i,key in enumerate(keys):
-            cell=ctk.CTkFrame(grid,fg_color='transparent'); cell.grid(row=i//2,column=i%2,sticky='nsew',padx=(0,10) if i%2==0 else (0,0),pady=(8,0)); label(cell,LABELS[key],size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,4))
+        tempcell=ctk.CTkFrame(row,fg_color='transparent');tempcell.grid(row=0,column=1,sticky='ew');self.template_caption=label(tempcell,'Template • 13 CV designs' if self.doc_type.get()==CATEGORIES[0] else 'Template • 10 options',size=11,bold=True,color=MUTED);self.template_caption.pack(anchor='w',pady=(0,5));self.template_menu=ctk.CTkOptionMenu(tempcell,values=CV_NAMES if self.doc_type.get()==CATEGORIES[0] else NAMES,variable=self.template,command=self.on_template_change,fg_color=GREEN,button_color=GREEN_HOVER,button_hover_color='#374F77',height=36);self.template_menu.pack(fill='x')
+        button(selection,'↗ Compare all 13 CV designs',self.open_cv_gallery,secondary=True,width=205,height=34).pack(anchor='w',padx=20,pady=(0,15))
+
+        form=card(self.body); form.pack(fill='x',pady=(0,12)); label(form,'2   Add your details',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,0))
+        self.career_hint=label(form,'',size=12,color=MUTED,wraplength=760,justify='left'); self.career_hint.pack(anchor='w',padx=20,pady=(3,5))
+        self.details_grid=ctk.CTkFrame(form,fg_color='transparent'); self.details_grid.pack(fill='x',padx=20,pady=(0,9)); self.details_grid.grid_columnconfigure((0,1),weight=1)
+        self.field_cells={}; self.field_labels={}
+        for key in LABELS:
+            cell=ctk.CTkFrame(self.details_grid,fg_color='transparent')
+            lbl=label(cell,LABELS[key],size=11,bold=True,color=MUTED); lbl.pack(anchor='w',pady=(0,4))
+            self.field_cells[key]=cell; self.field_labels[key]=lbl
             if key in ('skills','experience','education'):
-                text=ctk.CTkTextbox(cell,height=95,corner_radius=9,border_color=BORDER,border_width=1,fg_color='#121A29',text_color=INK,wrap='word',font=ctk.CTkFont(family=FONT,size=12)); text.pack(fill='x'); text.insert('1.0',self.values[key].get()); self.long_fields[key]=text
-            else: ctk.CTkEntry(cell,textvariable=self.values[key],height=37,corner_radius=9,border_color=BORDER,fg_color='#121A29',text_color=INK).pack(fill='x')
+                text=ctk.CTkTextbox(cell,height=92,corner_radius=9,border_color=BORDER,border_width=1,fg_color='#121A29',text_color=INK,wrap='word',font=ctk.CTkFont(family=FONT,size=12)); text.pack(fill='x'); text.insert('1.0',self.values[key].get()); self.long_fields[key]=text
+            else:
+                ph={'name':'e.g. Nandi Mkhize','contact':'Phone • email • city','role':'Leave blank for a general CV, or e.g. Cashier / Admin','company':'Only for a specific employer — optional'}.get(key,'')
+                ctk.CTkEntry(cell,textvariable=self.values[key],placeholder_text=ph,height=37,corner_radius=9,border_color=BORDER,fg_color='#121A29',text_color=INK).pack(fill='x')
+        self.layout_career_fields()
+
         photo_row=ctk.CTkFrame(form,fg_color='transparent'); photo_row.pack(fill='x',padx=20,pady=(8,0))
-        self.cv_photo_label=label(photo_row,'CV photo: '+(Path(self.cv_photo).name if self.cv_photo else 'none selected'),size=11,color=MUTED); self.cv_photo_label.pack(side='left',padx=(0,8))
-        button(photo_row,'Choose CV photo',self.choose_cv_photo,secondary=True,width=140,height=32).pack(side='left',padx=(0,8))
-        button(photo_row,'Remove photo',self.remove_cv_photo,secondary=True,width=120,height=32).pack(side='left')
-        label(form,'Photo is optional and appears only in CV PDF exports; the text editor and text files do not show it.',size=11,color=MUTED,wraplength=700,justify='left').pack(anchor='w',padx=20,pady=(5,0))
-        button(form,'Create draft   →',self.generate,width=155).pack(anchor='w',padx=20,pady=(3,18))
-        editor=card(self.body); editor.pack(fill='both',expand=True,pady=(0,14)); label(editor,'3   Review and save',size=16,bold=True).pack(anchor='w',padx=20,pady=(17,2)); label(editor,'The draft is editable. Always check the details before sharing.',size=12,color=MUTED).pack(anchor='w',padx=20,pady=(0,9))
-        self.doc_editor=ctk.CTkTextbox(editor,height=250,corner_radius=10,fg_color='#121A29',border_color=BORDER,border_width=1,text_color=INK,font=ctk.CTkFont(family=FONT,size=13),wrap='word'); self.doc_editor.pack(fill='both',expand=True,padx=20,pady=(0,10)); self.doc_editor.insert('1.0',self.doc_text)
-        row=ctk.CTkFrame(editor,fg_color='transparent'); row.pack(fill='x',padx=20,pady=(0,18)); button(row,'Save PDF',self.export_pdf,width=105).pack(side='left',padx=(0,8)); button(row,'Add to PDF merge',self.add_document_to_merge,secondary=True,width=145).pack(side='left',padx=(0,8)); button(row,'Save text',self.export_txt,secondary=True,width=105).pack(side='left',padx=(0,8)); button(row,'✦  Improve with AI',self.improve,secondary=True,width=145).pack(side='left')
-        label(editor,'Merge copies are temporary until you save the merged PDF. Next customer removes them.',size=11,color=MUTED,wraplength=700,justify='left').pack(anchor='w',padx=20,pady=(0,10))
-        project_row=ctk.CTkFrame(editor,fg_color='transparent');project_row.pack(fill='x',padx=20,pady=(0,18));button(project_row,'Save project',lambda:self.save_project('career'),secondary=True,width=130).pack(side='left',padx=(0,8));button(project_row,'Open project',self.open_project,secondary=True,width=130).pack(side='left')
+        self.cv_photo_label=label(photo_row,'CV photo: '+(Path(self.cv_photo).name if self.cv_photo else 'none'),size=11,color=MUTED); self.cv_photo_label.pack(side='left',padx=(0,8))
+        button(photo_row,'＋ Choose CV photo',self.choose_cv_photo,secondary=True,width=150,height=32).pack(side='left',padx=(0,8))
+        button(photo_row,'✕ Remove photo',self.remove_cv_photo,secondary=True,width=130,height=32).pack(side='left')
+        label(form,'Optional CV photo appears in the A4 preview and exported CV PDF.',size=11,color=MUTED,wraplength=700,justify='left').pack(anchor='w',padx=20,pady=(5,6))
+        button(form,'Create draft   →',self.generate,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=165).pack(anchor='w',padx=20,pady=(2,18))
+
+        editor=card(self.body); editor.pack(fill='both',expand=True,pady=(0,14))
+        label(editor,'3   Review, preview & save',size=16,bold=True).pack(anchor='w',padx=20,pady=(17,2))
+        label(editor,'Edit your text on the left and check the actual A4 PDF layout on the right before saving.',size=12,color=MUTED).pack(anchor='w',padx=20,pady=(0,10))
+
+        split=ctk.CTkFrame(editor,fg_color='transparent'); split.pack(fill='both',expand=True,padx=20,pady=(0,12))
+        split.grid_columnconfigure(0,weight=1)
+
+        left_pane=ctk.CTkFrame(split,fg_color='transparent')
+        left_pane.grid(row=0,column=0,sticky='nsew',padx=(0,16))
+        self.doc_editor=ctk.CTkTextbox(left_pane,height=390,corner_radius=10,fg_color='#121A29',border_color=BORDER,border_width=1,text_color=INK,font=ctk.CTkFont(family=FONT,size=13),wrap='word')
+        self.doc_editor.pack(fill='both',expand=True,pady=(0,10))
+        self.doc_editor.insert('1.0',self.doc_text)
+
+        row=ctk.CTkFrame(left_pane,fg_color='transparent'); row.pack(fill='x',pady=(0,8))
+        button(row,'⬇ Save PDF',self.export_pdf,width=115).pack(side='left',padx=(0,8))
+        button(row,'＋ Add to PDF merge',self.add_document_to_merge,secondary=True,width=155).pack(side='left',padx=(0,8))
+        button(row,'⬇ Save text',self.export_txt,secondary=True,width=110).pack(side='left',padx=(0,8))
+        button(row,'✦ Improve with AI',self.improve,secondary=True,width=150).pack(side='left')
+        project_row=ctk.CTkFrame(left_pane,fg_color='transparent');project_row.pack(fill='x',pady=(0,4))
+        button(project_row,'💾 Save project',lambda:self.save_project('career'),secondary=True,width=135).pack(side='left',padx=(0,8))
+        button(project_row,'📂 Open project',self.open_project,secondary=True,width=135).pack(side='left')
+        label(left_pane,'Merge copies are temporary until you save the merged PDF. Next customer removes them.',size=11,color=MUTED,wraplength=520,justify='left').pack(anchor='w',pady=(4,0))
+
+        right_pane=ctk.CTkFrame(split,fg_color='#232E44',corner_radius=12,border_width=1,border_color=BORDER)
+        right_pane.grid(row=0,column=1,sticky='n')
+        phead=ctk.CTkFrame(right_pane,fg_color='transparent'); phead.pack(fill='x',padx=12,pady=(10,6))
+        label(phead,'A4 PDF preview',size=13,bold=True).pack(side='left')
+        button(phead,'↻ Refresh',lambda:self.refresh_doc_preview(),secondary=True,width=92,height=28).pack(side='right')
+        self.doc_preview_label=ctk.CTkLabel(right_pane,text='Click "Create draft →"\nor type in the editor,\nthen click "↻ Refresh"\nto preview the A4 PDF.',width=290,height=410,fg_color='#121A29',corner_radius=8,text_color=MUTED,justify='center')
+        self.doc_preview_label.pack(padx=12,pady=(0,8))
+        pnav=ctk.CTkFrame(right_pane,fg_color='transparent'); pnav.pack(fill='x',padx=12,pady=(0,10))
+        button(pnav,'‹',lambda:self.turn_doc_preview(-1),secondary=True,width=38,height=28).pack(side='left')
+        self.doc_preview_page_label=label(pnav,'Page 1 / 1',size=11,bold=True,color=MUTED)
+        self.doc_preview_page_label.pack(side='left',expand=True)
+        button(pnav,'›',lambda:self.turn_doc_preview(1),secondary=True,width=38,height=28).pack(side='right')
+
+        if self.doc_text.strip():
+            self.after(80,self.refresh_doc_preview)
+
+    def layout_career_fields(self):
+        if not hasattr(self,'details_grid') or not self.details_grid.winfo_exists(): return
+        kind=self.doc_type.get()
+        labels=field_labels_for(kind)
+        show_company=uses_company_field(kind)
+        if kind in (CATEGORIES[0],CATEGORIES[2]):
+            self.career_hint.configure(text='Building a general CV? Leave Desired role blank — no job title or company is required. Add multiple lines for skills, experience and education.')
+        else:
+            self.career_hint.configure(text='Applying for a specific job? Add the role or company if known, or leave either blank for a general speculative application.')
+        for cell in self.field_cells.values():
+            cell.grid_forget()
+        visible=[k for k in LABELS if k!='company' or show_company]
+        row_idx=0; col_idx=0
+        for key in visible:
+            self.field_labels[key].configure(text=labels[key])
+            cell=self.field_cells[key]
+            # If company is hidden, let role span full width neatly so long-text fields start aligned on the next row
+            if key=='role' and not show_company:
+                if col_idx==1: row_idx+=1; col_idx=0
+                cell.grid(row=row_idx,column=0,columnspan=2,sticky='nsew',padx=0,pady=(8,0))
+                row_idx+=1; col_idx=0
+            else:
+                cell.grid(row=row_idx,column=col_idx,sticky='nsew',padx=(0,10) if col_idx==0 else (0,0),pady=(8,0))
+                if col_idx==1: row_idx+=1; col_idx=0
+                else: col_idx=1
+
+    def on_template_change(self,_choice=None):
+        self.doc_preview_page=1
+        if self.current_text(): self.refresh_doc_preview()
+
+    def turn_doc_preview(self,delta):
+        if not self.current_text(): return
+        nxt=max(1,min(self.doc_preview_total,self.doc_preview_page+delta))
+        if nxt!=self.doc_preview_page:
+            self.doc_preview_page=nxt
+            self.refresh_doc_preview()
+
+    def refresh_doc_preview(self):
+        if not self.doc_preview_label or not self.doc_preview_label.winfo_exists(): return
+        text=self.current_text()
+        if not text:
+            self.doc_preview_image=None
+            self.doc_preview_label.configure(image=None,text='Click "Create draft →"\nor type in the editor,\nthen click "↻ Refresh"\nto preview the A4 PDF.')
+            if self.doc_preview_page_label and self.doc_preview_page_label.winfo_exists():
+                self.doc_preview_page_label.configure(text='Page 1 / 1')
+            return
+        if self.busy: return
+        category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None; page=self.doc_preview_page
+        def done(res):
+            pil_img,clamped_page,total=res
+            self.doc_preview_page=clamped_page; self.doc_preview_total=total
+            if self.doc_preview_label and self.doc_preview_label.winfo_exists():
+                ctk_img=ctk.CTkImage(light_image=pil_img,dark_image=pil_img,size=pil_img.size)
+                self.doc_preview_image=ctk_img
+                self.doc_preview_label.configure(text='',image=ctk_img)
+            if self.doc_preview_page_label and self.doc_preview_page_label.winfo_exists():
+                self.doc_preview_page_label.configure(text=f'Page {clamped_page} / {total}')
+        self.job('Rendering A4 preview…',lambda:services.render_document_preview(text,category,index,photo,page,max_size=(290,410)),done)
+
     def change_doc_type(self,kind):
-        choices=CV_NAMES if kind==CATEGORIES[0] else NAMES; self.template.set(choices[0]); self.template_menu.configure(values=choices); self.template_caption.configure(text='Template • 13 CV designs' if kind==CATEGORIES[0] else 'Template • 10 options')
+        choices=CV_NAMES if kind==CATEGORIES[0] else NAMES
+        if self.template.get() not in choices: self.template.set(choices[0])
+        self.template_menu.configure(values=choices)
+        self.template_caption.configure(text='Template • 13 CV designs' if kind==CATEGORIES[0] else 'Template • 10 options')
+        self.doc_preview_page=1
+        self.layout_career_fields()
+        if self.current_text(): self.refresh_doc_preview()
     def selected_template_index(self):
-        return (CV_NAMES if self.doc_type.get()==CATEGORIES[0] else NAMES).index(self.template.get())
+        choices=CV_NAMES if self.doc_type.get()==CATEGORIES[0] else NAMES
+        val=self.template.get()
+        return choices.index(val) if val in choices else 0
     def open_cv_gallery(self):
         root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)); path=root/'cv-design-gallery.html'
         try:
@@ -644,17 +763,20 @@ class CafeDesk(ctk.CTk):
         if not path: return
         try:
             with Image.open(path) as image: image.verify()
-            self.cv_photo=path; self.cv_photo_label.configure(text='CV photo: '+Path(path).name); self.status.set('CV photo selected • shown when you export a CV PDF')
+            self.cv_photo=path; self.cv_photo_label.configure(text='CV photo: '+Path(path).name); self.status.set('CV photo selected • shown in CV preview and PDF')
+            if self.current_text() and self.doc_type.get()==CATEGORIES[0]: self.refresh_doc_preview()
         except Exception as exc: messagebox.showerror('Could not open photo',str(exc),parent=self)
     def remove_cv_photo(self):
-        self.cv_photo=None; self.cv_photo_label.configure(text='CV photo: none selected')
+        self.cv_photo=None; self.cv_photo_label.configure(text='CV photo: none')
+        if self.current_text() and self.doc_type.get()==CATEGORIES[0]: self.refresh_doc_preview()
     def sync_long_fields(self):
         for key,widget in self.long_fields.items():
             if widget.winfo_exists(): self.values[key].set(widget.get('1.0','end-1c'))
     def generate(self):
         self.sync_long_fields()
         if self.doc_editor.get('1.0','end-1c').strip() and not messagebox.askyesno('Replace draft?','This will replace your current editor text. Continue?',parent=self): return
-        content=make_document(self.doc_type.get(),self.selected_template_index(),{k:v.get() for k,v in self.values.items()}); self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',content); self.doc_text=content; self.status.set('Draft created  •  Review and edit before saving')
+        content=make_document(self.doc_type.get(),self.selected_template_index(),{k:v.get() for k,v in self.values.items()}); self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',content); self.doc_text=content; self.doc_preview_page=1; self.status.set('Draft created  •  Review and edit before saving')
+        self.refresh_doc_preview()
     def current_text(self): return self.doc_editor.get('1.0','end-1c').strip() if self.doc_editor else self.doc_text.strip()
     def export_pdf(self):
         text=self.current_text()
@@ -699,6 +821,7 @@ class CafeDesk(ctk.CTk):
             if current!=text and not messagebox.askyesno('Draft changed','The draft changed while the request was running. Replace it with the AI result?',parent=self): return
             self.doc_text=result
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',result)
+            self.refresh_doc_preview()
             messagebox.showinfo('Draft improved','Review the AI result and check all facts before saving.',parent=self)
         self.job('Improving draft with AI…',request,complete)
 

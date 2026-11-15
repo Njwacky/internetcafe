@@ -73,5 +73,5 @@ def show_scanner(app,parent,card,label,button):
         out=filedialog.asksaveasfilename(parent=app,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='scanned-pages.pdf')
         if out:
             paths=list(app.scanned_pages);app.job('Saving scanned pages as PDF…',lambda:services.images_to_pdf(paths,out),lambda _:messagebox.showinfo('Scanned PDF saved',f'Saved to:\n{out}\n\nThe saved PDF is not removed by Next customer.',parent=app))
-    button(row,'Save scanned pages as PDF',save_pdf,width=210).pack(side='left',padx=(0,8));button(row,'Remove selected scan',remove,secondary=True,width=170).pack(side='left')
+    button(row,'⬇ Save scans as PDF',save_pdf,width=185).pack(side='left',padx=(0,8));button(row,'✕ Delete scan',remove,secondary=True,width=135).pack(side='left')
     label(box,'Scans are temporary files on this computer until saved. Next customer or normal exit attempts to remove them; crashes may leave copies. Saved PDFs are not deleted.',size=11,color='#A2ACC5',wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,16))

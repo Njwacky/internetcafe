@@ -52,4 +52,4 @@ def show_reports(app,parent,card,label,button,entry):
         app.job('Saving sale record…',lambda:services.export_document_pdf(text,path,'Sale record',0),lambda _:messagebox.showinfo('Sale record saved',f'Saved to:\n{path}\n\nThis copy is not proof of payment.',parent=app))
     button(row,'View report',load,width=120,height=34).pack(side='left')
     actions=ctk.CTkFrame(result,fg_color='transparent');actions.pack(fill='x',padx=20,pady=(0,18))
-    button(actions,'Export CSV',export,secondary=True,width=125).pack(side='left',padx=(0,8));button(actions,'Save selected record PDF',export_record,secondary=True,width=190).pack(side='left');load()
+    button(actions,'⬇ Export CSV',export,secondary=True,width=130).pack(side='left',padx=(0,8));button(actions,'⬇ Save record PDF',export_record,secondary=True,width=165).pack(side='left');load()
