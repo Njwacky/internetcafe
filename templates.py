@@ -13,6 +13,17 @@ SUMMARIES = [
  'Committed to growing in {role}, with a foundation in {skills} and experience in {experience}.',
  '{name} brings {skills} and experience in {experience} to a potential {role} position.',
  '{name} is a candidate for {role} with a background in {experience} and skills that include {skills}.']
+GENERAL_SUMMARIES = [
+ '{name} is a reliable, motivated job seeker ready for new opportunities. Key strengths include {skills}.',
+ 'Dedicated candidate with strengths in {skills}. Background: {experience}.',
+ 'Bringing {skills} to new work opportunities. Experience includes {experience}.',
+ 'With experience in {experience}, {name} offers {skills} and a dependable work ethic.',
+ 'Motivated candidate ready to learn and contribute, with skills in {skills}.',
+ 'Adaptable professional offering transferable strengths in {skills} and experience in {experience}.',
+ 'Collaborative team member with skills in {skills} and a background in {experience}.',
+ 'Committed to learning and growing on the job, with a foundation in {skills} and experience in {experience}.',
+ '{name} brings {skills} and experience in {experience} to new employment opportunities.',
+ '{name} is a dependable candidate with a background in {experience} and skills that include {skills}.']
 OPENINGS = [
  'I am applying for the {role} position at {company}.',
  'Please consider my application for {role} at {company}.',
@@ -47,18 +58,129 @@ INTRODUCTIONS = [
  'Hi, I am {name}. I enjoy using my skills in {skills} and am interested in working as a {role}.',
  'Hello, I am {name}. I am interested in contributing to {company} in a {role} position.']
 CATEGORIES=['Résumé / CV','Cover letter','Professional summary','Introduction']
-LABELS={'name':'Full name','contact':'Contact details','role':'Job title','company':'Company','skills':'Skills','experience':'Experience','education':'Education'}
+LABELS={
+    'name':'Full name',
+    'contact':'Contact details',
+    'role':'Desired role or field (optional)',
+    'company':'Target company (optional)',
+    'skills':'Skills',
+    'experience':'Experience',
+    'education':'Education'
+}
+
+def field_labels_for(category):
+    """Return user-facing field labels and which fields apply to `category`."""
+    labels=dict(LABELS)
+    if category in (CATEGORIES[0], CATEGORIES[2]):
+        labels['role']='Desired role or field (optional — leave blank for a general CV)'
+    elif category == CATEGORIES[1]:
+        labels['role']='Role or vacancy (optional — leave blank for a general application)'
+        labels['company']='Company or organisation (optional)'
+    else:
+        labels['role']='Desired role or field (optional)'
+        labels['company']='Company or organisation (optional)'
+    return labels
+
+def uses_company_field(category):
+    """CVs and standalone professional summaries are general career documents and do not need a target company."""
+    return category in (CATEGORIES[1], CATEGORIES[3])
+
+def _general_opening(index, role, company):
+    i = index % len(OPENINGS)
+    if role and company:
+        return OPENINGS[i].format(role=role, company=company)
+    if role:
+        options = [
+            f'I am writing to apply for a {role} position with your organisation.',
+            f'Please consider my application for a {role} role on your team.',
+            f'I am excited to apply for a {role} opportunity with your team.',
+            f'I am writing to express my interest in joining your team as a {role}.',
+            f'I am eager to develop my career as a {role} within your organisation.',
+            f'I am applying for a {role} role as I take the next step in my career.',
+            f'I am interested in a {role} opportunity with your organisation and the chance to contribute.',
+            f'I would welcome the opportunity to join your team as a {role}.',
+            f'Working as a {role} appeals to me as an opportunity to contribute and grow.',
+            f'Please accept this letter as my application for a {role} position.'
+        ]
+        return options[i]
+    if company:
+        options = [
+            f'I am writing to express my interest in suitable employment opportunities at {company}.',
+            f'Please consider my application for any suitable opening at {company}.',
+            f'I am keen to contribute my skills and work ethic to the team at {company}.',
+            f'I am writing to enquire about current or upcoming opportunities to join {company}.',
+            f'I am eager to develop my career and contribute to {company}.',
+            f'I am submitting my application for consideration at {company} as I take the next step in my career.',
+            f'I am interested in working with {company} and supporting your day-to-day operations.',
+            f'I would welcome the opportunity to join the team at {company}.',
+            f'Working at {company} appeals to me as an opportunity to contribute and grow.',
+            f'Please accept this letter as my general application for employment with {company}.'
+        ]
+        return options[i]
+    options = [
+        'I am writing to express my interest in suitable employment opportunities with your organisation.',
+        'Please consider my application for any suitable role within your team.',
+        'I am keen to bring my skills and dependable work ethic to your organisation.',
+        'I am writing to enquire about current or upcoming job opportunities on your team.',
+        'I am eager to learn, contribute and grow within your organisation.',
+        'Please consider my general application as I take the next step in my career.',
+        'I am interested in joining your team and contributing wherever my skills are most useful.',
+        'I would welcome the opportunity to contribute to your organisation.',
+        'Joining your team appeals to me as an opportunity to work hard and grow.',
+        'Please accept this letter as my application for suitable opportunities with your organisation.'
+    ]
+    return options[i]
+
+def _general_introduction(index, d, role, company):
+    i = index % len(INTRODUCTIONS)
+    if role and (i != 9 or company):
+        data = dict(d, role=role, company=company or 'your team')
+        return INTRODUCTIONS[i].format(**data)
+    if role and i == 9:
+        return f"Hello, I am {d['name']}. I am interested in contributing to your team in a {role} position."
+    if company:
+        return f"Hello, my name is {d['name']}. I am interested in opportunities with {company} and bring strengths in {d['skills']}."
+    options = [
+        f"Hello, my name is {d['name']}. I am looking for new work opportunities and have skills in {d['skills']}.",
+        f"My name is {d['name']}, and I am exploring new job opportunities. My background includes {d['experience']}.",
+        f"Hi, I am {d['name']}. I am open to new employment opportunities and would be glad to connect.",
+        f"Hello, I am {d['name']}. I bring skills in {d['skills']} and am ready for new opportunities.",
+        f"I am {d['name']}, with experience in {d['experience']}. I am currently seeking my next role.",
+        f"Hello, I am {d['name']}. I am keen to learn and contribute, using my skills in {d['skills']}.",
+        f"I am {d['name']}, ready for my next career step with transferable skills in {d['skills']}.",
+        f"Good day. My name is {d['name']}, and I would like to introduce myself for suitable opportunities.",
+        f"Hi, I am {d['name']}. I enjoy putting my skills in {d['skills']} to work and am ready to contribute.",
+        f"Hello, I am {d['name']}. I am interested in contributing to your team and growing in a suitable role."
+    ]
+    return options[i]
 
 def make_document(category,index,values):
-    d={k:values.get(k,'').strip() or '['+label+']' for k,label in LABELS.items()}
+    raw_role = values.get('role','').strip()
+    raw_company = values.get('company','').strip()
+    d = {k: values.get(k,'').strip() or '['+label+']' for k,label in {
+        'name':'Full name',
+        'contact':'Contact details',
+        'skills':'Skills',
+        'experience':'Experience',
+        'education':'Education'
+    }.items()}
+    d['role'] = raw_role
+    d['company'] = raw_company
     if category == CATEGORIES[0]:
         # A profile should not repeat all multi-line job and skill entries; full text remains below.
-        summary_data=dict(d)
+        summary_data = dict(d)
         for field in ('skills','experience','education'):
-            first=next((x.strip() for x in d[field].splitlines() if x.strip()),d[field])
-            summary_data[field]=first if len(first)<=160 else first[:157]+'...'
-        return f"{d['name']}\n{d['contact']}\n\nPROFESSIONAL PROFILE\n{SUMMARIES[index % len(SUMMARIES)].format(**summary_data)}\n\nSKILLS\n{d['skills']}\n\nEXPERIENCE\n{d['experience']}\n\nEDUCATION\n{d['education']}"
+            first = next((x.strip() for x in d[field].splitlines() if x.strip()), d[field])
+            summary_data[field] = first if len(first)<=160 else first[:157]+'...'
+        templates = SUMMARIES if raw_role else GENERAL_SUMMARIES
+        profile = templates[index % len(templates)].format(**summary_data)
+        return f"{d['name']}\n{d['contact']}\n\nPROFESSIONAL PROFILE\n{profile}\n\nSKILLS\n{d['skills']}\n\nEXPERIENCE\n{d['experience']}\n\nEDUCATION\n{d['education']}"
     if category == CATEGORIES[1]:
-        return f"{d['name']}\n{d['contact']}\n\nHiring Manager\n{d['company']}\n\nDear Hiring Manager,\n\n{OPENINGS[index].format(**d)}\n\nMy experience includes {d['experience']}. I can offer skills in {d['skills']}. My education includes {d['education']}.\n\n{CLOSINGS[index]}\n\nYours sincerely,\n{d['name']}"
-    return (SUMMARIES if category==CATEGORIES[2] else INTRODUCTIONS)[index].format(**d)
-
+        recipient = f"Hiring Manager\n{raw_company}" if raw_company else "Hiring Manager"
+        opening = _general_opening(index, raw_role, raw_company)
+        closing = CLOSINGS[index % len(CLOSINGS)]
+        return f"{d['name']}\n{d['contact']}\n\n{recipient}\n\nDear Hiring Manager,\n\n{opening}\n\nMy experience includes {d['experience']}. I can offer skills in {d['skills']}. My education includes {d['education']}.\n\n{closing}\n\nYours sincerely,\n{d['name']}"
+    if category == CATEGORIES[2]:
+        templates = SUMMARIES if raw_role else GENERAL_SUMMARIES
+        return templates[index % len(templates)].format(**d)
+    return _general_introduction(index, d, raw_role, raw_company)
