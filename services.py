@@ -208,14 +208,24 @@ def save_custom_logo(source,destination):
 
 TESSERACT_DOWNLOAD_URL='https://github.com/UB-Mannheim/tesseract/wiki'
 TESSERACT_WINDOWS_INSTALLER_URL='https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe'
+DEVELOPER_EMAIL='njwayelodlamini@gmail.com'
+DEVELOPER_GITHUB_URL='https://github.com/Njwacky'
+DEVELOPER_REPO_URL='https://github.com/Njwacky/internetcafe'
+
+def open_external_url(url):
+    """Open a trusted http/https/mailto link in the user's default browser or mail app."""
+    import webbrowser
+    target=str(url).strip()
+    if not target.startswith(('https://','http://','mailto:')):
+        raise ValueError('Unsupported link format.')
+    if not webbrowser.open(target):
+        raise ValueError(f'Could not open your browser or mail app automatically. Open manually:\n{target}')
+    return target
 
 def open_tesseract_link(direct_installer=False):
     """Open the official Tesseract OCR download link in the user's web browser."""
-    import webbrowser
     url=TESSERACT_WINDOWS_INSTALLER_URL if direct_installer else TESSERACT_DOWNLOAD_URL
-    if not webbrowser.open(url):
-        raise ValueError(f'Could not open your web browser automatically. Open this link manually:\n{url}')
-    return url
+    return open_external_url(url)
 
 def load_ocr_preview(source,max_size=(260,300)):
     """Load and resize an image safely for OCR preview without altering the source file."""
