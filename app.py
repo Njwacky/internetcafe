@@ -54,10 +54,12 @@ from sales_ui import show_reports
 from collage_ui import PictureSheet
 from scanner_ui import show_scanner
 from ocr_ui import show_ocr
+import cards_renderer
+from cards_ui import show_cards
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.3.0'
+APP_BUILD='0.4.0'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -72,7 +74,7 @@ def entry(parent,placeholder=''): return ctk.CTkEntry(parent,placeholder_text=pl
 class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
-        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
+        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
         preferences=settings_store.load_settings(); self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick)
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
     def note_activity(self,event=None): self.idle.touch()
@@ -98,7 +100,11 @@ class CafeDesk(ctk.CTk):
         with Image.open(root / 'assets' / 'icons' / 'bluetooth.png') as image:
             images['bluetooth_card']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(34,34))
         with Image.open(root / 'assets' / 'icons' / 'bluetooth-nav.png') as image:
-            images['bluetooth_nav']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(18,18))
+            images['bluetooth_nav']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+        with Image.open(root / 'assets' / 'icons' / 'bluetooth-nav-muted.png') as image:
+            images['bluetooth_nav_muted']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+        with Image.open(root / 'assets' / 'icons' / 'enlarge.png') as image:
+            images['enlarge']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
         try:
             with Image.open(settings_store.logo_path()) as image: images['custom']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
         except (OSError,ValueError): images['custom']=images['office']
@@ -271,7 +277,8 @@ class CafeDesk(ctk.CTk):
             'Bluetooth files':'On Windows, pair the phone in Bluetooth settings, open the Windows Bluetooth transfer window, and choose Receive files. After saving, select the file to use it in Café Desk.' ,
             'Scan & images':'On Windows, find and select a WIA scanner, then scan each page in the app and save a PDF. Preview selected images and recognise English text with OCR (direct Tesseract download link is in Help & privacy).',
             'A4 picture sheets':'Add images, choose a layout, move and resize in Free layout, then save a PDF or project. Print PDFs at actual size.',
-            'Career documents':'Choose a type and template, enter details, create and edit a draft, then save a PDF or project. Add to PDF merge to combine it with other files.',
+            'Career documents':'Add your details, create and edit a draft, then choose the Document type and Template right beside the live A4 preview (click the enlarge icon to inspect full size).',
+            'Cards & invitations':'Design Business cards or Invitation cards across all 13 templates, preview a single card or A4 sheet live, and save printable A4 PDFs with optional trim marks.',
             'Receipts':'Choose services and quantity. Save a receipt PDF; staff must separately confirm Record sale to add it to history.',
             'Sales reports':'Choose a date range to view locally recorded totals, export a CSV or save a selected sale record. Payment and tax are not tracked.',
             'Price settings':'Enter each business service and price on its own line as service | price. Include units in the service name.',
@@ -432,8 +439,8 @@ class CafeDesk(ctk.CTk):
         info=ctk.CTkFrame(side,fg_color='#273248',corner_radius=12); info.pack(side='bottom',fill='x',padx=15,pady=12)
         label(info,'PRIVATE BY DEFAULT',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=13,pady=(12,3)); label(info,'Files stay on this computer\nunless you choose AI.',size=11,color='#B9C7DC',justify='left').pack(anchor='w',padx=13,pady=(0,12))
         nav=ctk.CTkScrollableFrame(side,fg_color='transparent',corner_radius=0);nav.pack(side='top',fill='both',expand=True,padx=(6,0))
-        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
-            btn_kw={'image':self.icon_images['bluetooth_nav'],'compound':'left','text':f'  {name}'} if icon is None else {'text':f'{icon}   {name}'}
+        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
+            btn_kw={'image':self.icon_images['bluetooth_nav_muted'],'compound':'left','text':f'  {name}'} if icon is None else {'text':f'{icon}   {name}'}
             b=ctk.CTkButton(nav,height=38,anchor='w',corner_radius=10,fg_color='transparent',hover_color='#303C55',text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=13,weight='bold'),command=lambda n=name:self.show(n),**btn_kw); b.pack(fill='x',padx=(5,4),pady=2); self.nav_buttons[name]=b
         main=ctk.CTkFrame(self,fg_color='transparent'); main.grid(row=0,column=1,sticky='nsew'); main.grid_rowconfigure(1,weight=1); main.grid_columnconfigure(0,weight=1)
         bar=ctk.CTkFrame(main,fg_color=BG,height=67); bar.grid(row=0,column=0,sticky='ew',padx=28); bar.grid_propagate(False)
@@ -452,10 +459,14 @@ class CafeDesk(ctk.CTk):
             self.sync_long_fields()
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_text=self.doc_editor.get('1.0','end-1c')
         self.doc_editor=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.long_fields={}; self.current=name; self.header_title.configure(text=name)
-        for key,b in self.nav_buttons.items(): b.configure(fg_color='#344663' if key==name else 'transparent',text_color='white' if key==name else '#C4D0E5')
+        for key,b in self.nav_buttons.items():
+            active=(key==name)
+            b.configure(fg_color='#344663' if active else 'transparent',text_color='white' if active else '#C4D0E5')
+            if key=='Bluetooth files':
+                b.configure(image=self.icon_images['bluetooth_nav' if active else 'bluetooth_nav_muted'])
         for child in self.container.winfo_children(): child.destroy()
         self.body=ctk.CTkScrollableFrame(self.container,fg_color='transparent',corner_radius=0); self.body.pack(fill='both',expand=True)
-        {'Home':self.home,'Projects & recovery':self.projects_screen,'Help & privacy':self.help_screen,'Price list':self.price_list_screen,'PDF tools':self.pdf_screen,'Bluetooth files':self.bluetooth_screen,'Scan & images':self.scan_screen,'A4 picture sheets':lambda:PictureSheet(self,self.body,card,label,button),'Career documents':self.career_screen,'Receipts':self.receipt_screen,'Sales reports':lambda:show_reports(self,self.body,card,label,button,entry),'Price settings':self.price_screen,'Business settings':self.business_screen,'AI settings':self.settings_screen}[name]()
+        {'Home':self.home,'Projects & recovery':self.projects_screen,'Help & privacy':self.help_screen,'Price list':self.price_list_screen,'PDF tools':self.pdf_screen,'Bluetooth files':self.bluetooth_screen,'Scan & images':self.scan_screen,'A4 picture sheets':lambda:PictureSheet(self,self.body,card,label,button),'Career documents':self.career_screen,'Cards & invitations':lambda:show_cards(self,self.body,card,label,button,entry),'Receipts':self.receipt_screen,'Sales reports':lambda:show_reports(self,self.body,card,label,button,entry),'Price settings':self.price_screen,'Business settings':self.business_screen,'AI settings':self.settings_screen}[name]()
     def heading(self,parent,title,subtitle):
         label(parent,title,size=24,bold=True).pack(anchor='w',pady=(2,3)); label(parent,subtitle,size=13,color=MUTED,wraplength=740,justify='left').pack(anchor='w',pady=(0,18))
     def home(self):
@@ -468,8 +479,11 @@ class CafeDesk(ctk.CTk):
         if self.recovery_exists(): label(self.body,'A recovery copy is available. Staff can open it from Projects & recovery.',size=11,color='#B9FF70').pack(anchor='w',pady=(0,10))
         label(self.body,'What can we help with?',size=19,bold=True).pack(anchor='w',pady=(0,11))
         grid=ctk.CTkFrame(self.body,fg_color='transparent'); grid.pack(fill='x'); grid.grid_columnconfigure((0,1),weight=1)
-        for i,(title,desc,icon,dest) in enumerate([('Price list','See the café’s current services and prices.','≡','Price list'),('Merge & split PDFs','Bring files together or extract pages.','▤','PDF tools'),('Receive via Bluetooth','Open Windows Bluetooth file transfer.','ᛒ','Bluetooth files'),('Scan & convert','Import images and create a PDF.','▧','Scan & images'),('Career documents','Make a CV, cover letter or introduction.','✎','Career documents'),('AI writing help','Improve your draft with your own API key.','✦','AI settings')]):
-            box=card(grid); box.grid(row=i//2,column=i%2,sticky='nsew',padx=(0,10) if i%2==0 else (0,0),pady=(0,10)); label(box,icon,size=24,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(14,2)); label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),secondary=True,width=90,height=32).pack(anchor='w',padx=18,pady=(0,14))
+        for i,(title,desc,icon,dest) in enumerate([('Price list','See the café’s current services and prices.','≡','Price list'),('Merge & split PDFs','Bring files together or extract pages.','▤','PDF tools'),('Receive via Bluetooth','Open Windows Bluetooth file transfer.',None,'Bluetooth files'),('Scan & convert','Import images and create a PDF.','▧','Scan & images'),('Career documents','Make a CV, cover letter or introduction.','✎','Career documents'),('Cards & invitations','Design business cards & event invitations (13 templates).','▭','Cards & invitations'),('A4 picture sheets','Arrange, crop and resize pictures on A4.','▦','A4 picture sheets'),('AI writing help','Improve your draft with your own API key.','✦','AI settings')]):
+            box=card(grid); box.grid(row=i//2,column=i%2,sticky='nsew',padx=(0,10) if i%2==0 else (0,0),pady=(0,10))
+            if icon is None: ctk.CTkLabel(box,text='',image=self.icon_images['bluetooth_card']).pack(anchor='w',padx=18,pady=(14,4))
+            else: label(box,icon,size=24,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(14,2))
+            label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),secondary=True,width=90,height=32).pack(anchor='w',padx=18,pady=(0,14))
     def job(self,description,fn,success):
         if self.busy: return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
         self.busy=True; self.status.set(description)
@@ -493,7 +507,7 @@ class CafeDesk(ctk.CTk):
         for widget in self.long_fields.values():
             if widget.winfo_exists(): widget.delete('1.0','end')
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
-        self.key.set(''); self.staff_unlocked=False; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}
+        self.key.set(''); self.staff_unlocked=False; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
         self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
@@ -614,14 +628,9 @@ class CafeDesk(ctk.CTk):
             else: subprocess.Popen(['simple-scan'])
         except Exception: messagebox.showinfo('Scanner app','Could not launch the scanner app. Install/open Windows Scan, Image Capture, or Linux Document Scanner (simple-scan). Install your scanner drivers too. You can use any scanner app and import the result.',parent=self)
     def career_screen(self):
-        self.heading(self.body,'Career documents','Create a general CV or a targeted cover letter, preview the A4 layout live, then save.')
-        selection=card(self.body); selection.pack(fill='x',pady=(0,12)); label(selection,'1   Choose your starting point',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,10))
-        row=ctk.CTkFrame(selection,fg_color='transparent'); row.pack(fill='x',padx=20,pady=(0,12)); row.grid_columnconfigure((0,1),weight=1)
-        typecell=ctk.CTkFrame(row,fg_color='transparent');typecell.grid(row=0,column=0,sticky='ew',padx=(0,10));label(typecell,'Document type',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,5));ctk.CTkOptionMenu(typecell,values=CATEGORIES,variable=self.doc_type,command=self.change_doc_type,fg_color=GREEN,button_color=GREEN_HOVER,button_hover_color='#374F77',height=36).pack(fill='x')
-        tempcell=ctk.CTkFrame(row,fg_color='transparent');tempcell.grid(row=0,column=1,sticky='ew');self.template_caption=label(tempcell,'Template • 13 CV designs' if self.doc_type.get()==CATEGORIES[0] else 'Template • 10 options',size=11,bold=True,color=MUTED);self.template_caption.pack(anchor='w',pady=(0,5));self.template_menu=ctk.CTkOptionMenu(tempcell,values=CV_NAMES if self.doc_type.get()==CATEGORIES[0] else NAMES,variable=self.template,command=self.on_template_change,fg_color=GREEN,button_color=GREEN_HOVER,button_hover_color='#374F77',height=36);self.template_menu.pack(fill='x')
-        button(selection,'↗ Compare all 13 CV designs',self.open_cv_gallery,secondary=True,width=205,height=34).pack(anchor='w',padx=20,pady=(0,15))
+        self.heading(self.body,'Career documents','Add your details, edit your draft, and switch document types & all 13 designs right beside the live A4 preview.')
 
-        form=card(self.body); form.pack(fill='x',pady=(0,12)); label(form,'2   Add your details',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,0))
+        form=card(self.body); form.pack(fill='x',pady=(0,12)); label(form,'1   Add your details',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,0))
         self.career_hint=label(form,'',size=12,color=MUTED,wraplength=760,justify='left'); self.career_hint.pack(anchor='w',padx=20,pady=(3,5))
         self.details_grid=ctk.CTkFrame(form,fg_color='transparent'); self.details_grid.pack(fill='x',padx=20,pady=(0,9)); self.details_grid.grid_columnconfigure((0,1),weight=1)
         self.field_cells={}; self.field_labels={}
@@ -644,15 +653,15 @@ class CafeDesk(ctk.CTk):
         button(form,'Create draft   →',self.generate,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=165).pack(anchor='w',padx=20,pady=(2,18))
 
         editor=card(self.body); editor.pack(fill='both',expand=True,pady=(0,14))
-        label(editor,'3   Review, preview & save',size=16,bold=True).pack(anchor='w',padx=20,pady=(17,2))
-        label(editor,'Edit your text on the left and check the actual A4 PDF layout on the right before saving.',size=12,color=MUTED).pack(anchor='w',padx=20,pady=(0,10))
+        label(editor,'2   Review, choose template & preview',size=16,bold=True).pack(anchor='w',padx=20,pady=(17,2))
+        label(editor,'Edit your text on the left, and choose the Document type & Template right above the live A4 preview.',size=12,color=MUTED).pack(anchor='w',padx=20,pady=(0,10))
 
         split=ctk.CTkFrame(editor,fg_color='transparent'); split.pack(fill='both',expand=True,padx=20,pady=(0,12))
         split.grid_columnconfigure(0,weight=1)
 
         left_pane=ctk.CTkFrame(split,fg_color='transparent')
         left_pane.grid(row=0,column=0,sticky='nsew',padx=(0,16))
-        self.doc_editor=ctk.CTkTextbox(left_pane,height=390,corner_radius=10,fg_color='#121A29',border_color=BORDER,border_width=1,text_color=INK,font=ctk.CTkFont(family=FONT,size=13),wrap='word')
+        self.doc_editor=ctk.CTkTextbox(left_pane,height=470,corner_radius=10,fg_color='#121A29',border_color=BORDER,border_width=1,text_color=INK,font=ctk.CTkFont(family=FONT,size=13),wrap='word')
         self.doc_editor.pack(fill='both',expand=True,pady=(0,10))
         self.doc_editor.insert('1.0',self.doc_text)
 
@@ -668,10 +677,24 @@ class CafeDesk(ctk.CTk):
 
         right_pane=ctk.CTkFrame(split,fg_color='#232E44',corner_radius=12,border_width=1,border_color=BORDER)
         right_pane.grid(row=0,column=1,sticky='n')
-        phead=ctk.CTkFrame(right_pane,fg_color='transparent'); phead.pack(fill='x',padx=12,pady=(10,6))
+
+        # Document type & Template placed right around the preview
+        picker_box=ctk.CTkFrame(right_pane,fg_color='transparent')
+        picker_box.pack(fill='x',padx=12,pady=(12,8))
+        label(picker_box,'Document type',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,3))
+        ctk.CTkOptionMenu(picker_box,values=CATEGORIES,variable=self.doc_type,command=self.change_doc_type,fg_color=GREEN,button_color=GREEN_HOVER,button_hover_color='#374F77',height=33,width=290).pack(fill='x',pady=(0,7))
+        self.template_caption=label(picker_box,'Template • 13 CV designs' if self.doc_type.get()==CATEGORIES[0] else 'Template • 10 options',size=11,bold=True,color=MUTED)
+        self.template_caption.pack(anchor='w',pady=(0,3))
+        self.template_menu=ctk.CTkOptionMenu(picker_box,values=CV_NAMES if self.doc_type.get()==CATEGORIES[0] else NAMES,variable=self.template,command=self.on_template_change,fg_color=GREEN,button_color=GREEN_HOVER,button_hover_color='#374F77',height=33,width=290)
+        self.template_menu.pack(fill='x',pady=(0,6))
+        button(picker_box,'↗ Compare all 13 CV designs',self.open_cv_gallery,secondary=True,width=290,height=28).pack(fill='x')
+
+        phead=ctk.CTkFrame(right_pane,fg_color='transparent'); phead.pack(fill='x',padx=12,pady=(6,6))
         label(phead,'A4 PDF preview',size=13,bold=True).pack(side='left')
-        button(phead,'↻ Refresh',lambda:self.refresh_doc_preview(),secondary=True,width=92,height=28).pack(side='right')
-        self.doc_preview_label=ctk.CTkLabel(right_pane,text='Click "Create draft →"\nor type in the editor,\nthen click "↻ Refresh"\nto preview the A4 PDF.',width=290,height=410,fg_color='#121A29',corner_radius=8,text_color=MUTED,justify='center')
+        pbtns=ctk.CTkFrame(phead,fg_color='transparent'); pbtns.pack(side='right')
+        button(pbtns,'↻',lambda:self.refresh_doc_preview(),secondary=True,width=34,height=28).pack(side='left',padx=(0,6))
+        ctk.CTkButton(pbtns,text='',image=self.icon_images['enlarge'],command=self.enlarge_doc_preview,width=34,height=28,corner_radius=8,fg_color=SOFT,hover_color='#40506D').pack(side='left')
+        self.doc_preview_label=ctk.CTkLabel(right_pane,text='Click "Create draft →"\nor type in the editor,\nthen click "↻"\nto preview the A4 PDF.',width=290,height=390,fg_color='#121A29',corner_radius=8,text_color=MUTED,justify='center')
         self.doc_preview_label.pack(padx=12,pady=(0,8))
         pnav=ctk.CTkFrame(right_pane,fg_color='transparent'); pnav.pack(fill='x',padx=12,pady=(0,10))
         button(pnav,'‹',lambda:self.turn_doc_preview(-1),secondary=True,width=38,height=28).pack(side='left')
@@ -739,7 +762,45 @@ class CafeDesk(ctk.CTk):
                 self.doc_preview_label.configure(text='',image=ctk_img)
             if self.doc_preview_page_label and self.doc_preview_page_label.winfo_exists():
                 self.doc_preview_page_label.configure(text=f'Page {clamped_page} / {total}')
-        self.job('Rendering A4 preview…',lambda:services.render_document_preview(text,category,index,photo,page,max_size=(290,410)),done)
+        self.job('Rendering A4 preview…',lambda:services.render_document_preview(text,category,index,photo,page,max_size=(290,390)),done)
+
+    def enlarge_doc_preview(self):
+        text=self.current_text()
+        if not text: return messagebox.showinfo('Preview','Create a draft or type in the editor first to enlarge the A4 preview.',parent=self)
+        if self.busy: return
+        category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None
+        modal_state={'page':self.doc_preview_page,'total':1,'img':None}
+        try:
+            pil_img,clamped,total=services.render_document_preview(text,category,index,photo,modal_state['page'],max_size=(560,780))
+        except Exception as exc:
+            return messagebox.showerror('Preview unavailable',str(exc),parent=self)
+        modal_state['page']=clamped; modal_state['total']=total
+        win=ctk.CTkToplevel(self)
+        win.title(f'{category}  •  {self.template.get()} (Large A4 preview)')
+        win.configure(fg_color=BG)
+        win_w=max(620,pil_img.width+80); win_h=min(880,max(640,pil_img.height+130))
+        win.geometry(f'{win_w}x{win_h}')
+        win.transient(self)
+        head=ctk.CTkFrame(win,fg_color='transparent'); head.pack(fill='x',padx=22,pady=(14,6))
+        label(head,f'{category}  •  {self.template.get()}',size=15,bold=True).pack(side='left')
+        page_lbl=label(head,f'Page {clamped} / {total}',size=12,bold=True,color=LIME); page_lbl.pack(side='right')
+        scroll=ctk.CTkScrollableFrame(win,fg_color='#151D2C',corner_radius=12)
+        scroll.pack(fill='both',expand=True,padx=20,pady=6)
+        modal_state['img']=ctk.CTkImage(light_image=pil_img,dark_image=pil_img,size=pil_img.size)
+        big_lbl=ctk.CTkLabel(scroll,text='',image=modal_state['img'])
+        big_lbl.pack(pady=10)
+        foot=ctk.CTkFrame(win,fg_color='transparent'); foot.pack(fill='x',padx=22,pady=(6,14))
+        def turn_big(delta):
+            nxt=max(1,min(modal_state['total'],modal_state['page']+delta))
+            if nxt==modal_state['page']: return
+            im2,cl2,tot2=services.render_document_preview(text,category,index,photo,nxt,max_size=(560,780))
+            modal_state['page']=cl2; modal_state['total']=tot2
+            modal_state['img']=ctk.CTkImage(light_image=im2,dark_image=im2,size=im2.size)
+            big_lbl.configure(image=modal_state['img']); page_lbl.configure(text=f'Page {cl2} / {tot2}')
+        button(foot,'‹ Previous page',lambda:turn_big(-1),secondary=True,width=130,height=32).pack(side='left',padx=(0,8))
+        button(foot,'Next page ›',lambda:turn_big(1),secondary=True,width=115,height=32).pack(side='left')
+        button(foot,'✕ Close',win.destroy,secondary=True,width=100,height=32).pack(side='right')
+        win.grab_set(); win.focus_set()
 
     def change_doc_type(self,kind):
         choices=CV_NAMES if kind==CATEGORIES[0] else NAMES
