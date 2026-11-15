@@ -22,3 +22,12 @@ make('star',lambda l,r,c,p:p([(32,14),(37,26),(50,27),(40,35),(43,48),(32,41),(2
 make('diamond',lambda l,r,c,p:(p([(16,26),(23,17),(41,17),(48,26),(32,48),(16,26)]),l((16,26,48,26)),p([(23,17),(27,26),(32,48),(37,26),(41,17)])))
 make('store',lambda l,r,c,p:(p([(18,27),(20,17),(44,17),(46,27)]),l((18,27,46,27)),p([(20,27),(20,47),(44,47),(44,27)]),r((26,35,34,47),0),r((38,34,41,38),0)))
 make('leaf',lambda l,r,c,p:(p([(18,44),(18,34),(24,23),(36,18),(47,18),(46,29),(41,39),(30,44),(18,44)]),p([(18,46),(25,39),(33,32),(41,25)])))
+make('bluetooth',lambda l,r,c,p:p([(21,23),(43,39),(31,49),(31,15),(43,25),(21,41)]))
+def make_nav(name,fn):
+ im=Image.new('RGBA',(20*S,20*S),(0,0,0,0)); d=ImageDraw.Draw(im)
+ def p(pts,w=2): d.line([tuple(x*S for x in q) for q in pts],fill=FG,width=w*S,joint='curve')
+ fn(p)
+ im.resize((36,36),Image.Resampling.LANCZOS).save(out/(name+'.png'))
+make_nav('bluetooth-nav',lambda p:p([(6,7),(14,13),(10,17),(10,3),(14,7),(6,13)]))
+
+

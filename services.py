@@ -131,20 +131,93 @@ def export_document_pdf(text,destination,category,index,photo_path=None):
         SimpleDocTemplate(temp,pagesize=A4,leftMargin=55,rightMargin=55,topMargin=50,bottomMargin=50,title=category).build(story)
     _atomic_write(destination,build)
 
+def render_document_preview(text,category,index=0,photo_path=None,page=1,max_size=(340,481)):
+    """Render a career document page to a PIL RGB image for in-app A4 preview.
+
+    Returns `(image, clamped_page, total_pages)` without leaving temporary files behind.
+    """
+    if not text or not text.strip():
+        raise ValueError('Create or write a document first to preview it.')
+    import math, pypdfium2 as pdfium
+    max_w, max_h = max_size
+    with tempfile.TemporaryDirectory(prefix='cafedesk-docprev-') as tmpdir:
+        pdf_path = Path(tmpdir) / 'preview.pdf'
+        export_document_pdf(text, pdf_path, category, index, photo_path if category=='Résumé / CV' else None)
+        doc = pdfium.PdfDocument(str(pdf_path))
+        try:
+            total = len(doc)
+            if total < 1:
+                raise ValueError('Preview generated an empty PDF.')
+            page_num = max(1, min(int(page), total))
+            page_obj = doc[page_num - 1]
+            try:
+                w, h = page_obj.get_size()
+                if not all(math.isfinite(v) and v > 0 for v in (w, h)):
+                    raise ValueError('Invalid PDF page dimensions.')
+                scale = min(2.0, max_w / w, max_h / h)
+                bitmap = page_obj.render(scale=scale)
+                try:
+                    image = bitmap.to_pil().convert('RGB').copy()
+                finally:
+                    bitmap.close()
+            finally:
+                page_obj.close()
+            return image, page_num, total
+        finally:
+            doc.close()
+
 def save_custom_logo(source,destination):
     """Copy and normalize a logo into the per-user config folder."""
     with Image.open(source) as src:
         image=ImageOps.exif_transpose(src).convert('RGBA'); image.thumbnail((256,256))
         _atomic_write(destination,lambda temp:image.save(temp,format='PNG'))
 
+TESSERACT_DOWNLOAD_URL='https://github.com/UB-Mannheim/tesseract/wiki'
+TESSERACT_WINDOWS_INSTALLER_URL='https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe'
+
+def open_tesseract_link(direct_installer=False):
+    """Open the official Tesseract OCR download link in the user's web browser."""
+    import webbrowser
+    url=TESSERACT_WINDOWS_INSTALLER_URL if direct_installer else TESSERACT_DOWNLOAD_URL
+    if not webbrowser.open(url):
+        raise ValueError(f'Could not open your web browser automatically. Open this link manually:\n{url}')
+    return url
+
+def load_ocr_preview(source,max_size=(260,300)):
+    """Load and resize an image safely for OCR preview without altering the source file."""
+    p=Path(source)
+    if not p.is_file(): raise ValueError(f'Image not found: {p.name}')
+    try:
+        with Image.open(p) as src:
+            image=ImageOps.exif_transpose(src).convert('RGB')
+            image.thumbnail(max_size,Image.Resampling.LANCZOS)
+            return image.copy()
+    except Exception as exc:
+        raise ValueError(f'Could not preview {p.name}: {exc}') from exc
+
+def run_ocr_many(sources):
+    """Run English OCR across one or more images in order."""
+    paths=[str(s) for s in sources if str(s).strip()]
+    if not paths: raise ValueError('Select at least one image first.')
+    if len(paths)==1: return run_ocr(paths[0])
+    parts=[]
+    for i,path in enumerate(paths,1):
+        text=run_ocr(path)
+        header=f'--- Image {i}: {Path(path).name} ---'
+        parts.append(f'{header}\n{text}' if text else f'{header}\n[No text detected]')
+    return '\n\n'.join(parts)
+
 def run_ocr(source):
     """OCR an image locally with a separately installed Tesseract, English only."""
     import subprocess,shutil,os
     executable=os.environ.get('TESSERACT_CMD') or shutil.which('tesseract')
     if not executable and os.name=='nt':
-        possible=Path(os.environ.get('ProgramFiles',r'C:\Program Files'))/'Tesseract-OCR'/'tesseract.exe'
-        if possible.exists(): executable=str(possible)
-    if not executable: raise ValueError('Tesseract OCR was not found. Install Tesseract with English language data, then restart the app. See README.')
+        for env_key in ('ProgramFiles','ProgramFiles(x86)','LOCALAPPDATA'):
+            base=os.environ.get(env_key)
+            if not base: continue
+            candidate=(Path(base)/'Programs'/'Tesseract-OCR'/'tesseract.exe') if env_key=='LOCALAPPDATA' else (Path(base)/'Tesseract-OCR'/'tesseract.exe')
+            if candidate.exists(): executable=str(candidate); break
+    if not executable: raise ValueError('Tesseract OCR was not found. Open Help & privacy and click the direct Tesseract OCR download link to install it (with English language data), then restart the app.')
     try:
         p=subprocess.run([str(executable),str(source),'stdout','-l','eng'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120,check=False)
     except (OSError,subprocess.TimeoutExpired) as exc: raise ValueError('OCR could not run or timed out. Check that Tesseract is installed correctly.') from exc

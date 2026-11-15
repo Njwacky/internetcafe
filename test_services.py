@@ -404,4 +404,109 @@ class BluetoothShortcutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d,patch.object(bluetooth_access.sys,'platform','win32'),patch.dict(bluetooth_access.os.environ,{'SystemRoot':d},clear=True):
             with self.assertRaises(ValueError):bluetooth_access.open_transfer()
 
+
+class OCRLinkAndPreviewTests(unittest.TestCase):
+    def test_direct_tesseract_links_and_browser_fallback(self):
+        from unittest.mock import patch
+        self.assertTrue(services.TESSERACT_DOWNLOAD_URL.startswith('https://'))
+        self.assertTrue(services.TESSERACT_WINDOWS_INSTALLER_URL.endswith('.exe'))
+        with patch('webbrowser.open',return_value=True) as opened:
+            self.assertEqual(services.open_tesseract_link(False),services.TESSERACT_DOWNLOAD_URL)
+            opened.assert_called_once_with(services.TESSERACT_DOWNLOAD_URL)
+        with patch('webbrowser.open',return_value=True) as opened:
+            self.assertEqual(services.open_tesseract_link(True),services.TESSERACT_WINDOWS_INSTALLER_URL)
+            opened.assert_called_once_with(services.TESSERACT_WINDOWS_INSTALLER_URL)
+        with patch('webbrowser.open',return_value=False):
+            with self.assertRaisesRegex(ValueError,'https://'):services.open_tesseract_link(False)
+    def test_ocr_image_preview_and_multi_image_ocr(self):
+        from unittest.mock import patch,Mock
+        with tempfile.TemporaryDirectory() as d:
+            p1=Path(d)/'one.png';p2=Path(d)/'two.jpg';bad=Path(d)/'broken.png'
+            Image.new('RGBA',(500,800),(40,80,120,255)).save(p1)
+            Image.new('RGB',(300,200),'white').save(p2)
+            bad.write_bytes(b'not-an-image')
+            preview=services.load_ocr_preview(p1,max_size=(200,250))
+            self.assertEqual(preview.mode,'RGB')
+            self.assertLessEqual(preview.width,200);self.assertLessEqual(preview.height,250)
+            with self.assertRaises(ValueError):services.load_ocr_preview(bad)
+            with self.assertRaises(ValueError):services.load_ocr_preview(Path(d)/'missing.png')
+            outputs=[Mock(returncode=0,stdout=b'First page text',stderr=b''),Mock(returncode=0,stdout=b'Second page text',stderr=b'')]
+            with patch('shutil.which',return_value='/bin/tesseract'),patch('subprocess.run',side_effect=outputs):
+                combined=services.run_ocr_many([p1,p2])
+                self.assertIn('--- Image 1: one.png ---',combined)
+                self.assertIn('First page text',combined)
+                self.assertIn('--- Image 2: two.jpg ---',combined)
+                self.assertIn('Second page text',combined)
+            with self.assertRaises(ValueError):services.run_ocr_many([])
+    def test_scan_line_bounce_math(self):
+        import importlib.util,sys
+        from unittest.mock import MagicMock,patch
+        # Test scan_step bounce logic even in headless environments without tkinter
+        fake_tk=MagicMock()
+        with patch.dict(sys.modules,{'tkinter':fake_tk,'tkinter.filedialog':fake_tk,'tkinter.messagebox':fake_tk,'PIL.ImageTk':fake_tk,'customtkinter':fake_tk}):
+            spec=importlib.util.spec_from_file_location('ocr_ui_test',Path(__file__).resolve().parent/'ocr_ui.py')
+            mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+            y,d=mod.scan_step(18,1,10,20,speed=5)
+            self.assertEqual((y,d),(20.0,-1))
+            y,d=mod.scan_step(y,d,10,20,speed=5)
+            self.assertEqual((y,d),(15.0,-1))
+            y,d=mod.scan_step(12,-1,10,20,speed=5)
+            self.assertEqual((y,d),(10.0,1))
+
+
+class CareerUXAndVisualPreviewTests(unittest.TestCase):
+    def test_general_job_seeker_fields_produce_clean_bracket_free_text(self):
+        import templates
+        self.assertFalse(templates.uses_company_field('Résumé / CV'))
+        self.assertFalse(templates.uses_company_field('Professional summary'))
+        self.assertTrue(templates.uses_company_field('Cover letter'))
+        self.assertTrue(templates.uses_company_field('Introduction'))
+        self.assertIn('optional',templates.field_labels_for('Résumé / CV')['role'].lower())
+        self.assertIn('optional',templates.field_labels_for('Cover letter')['company'].lower())
+        general_fields={'name':'Nandi Mkhize','contact':'nandi@example.com','role':'','company':'','skills':'Microsoft Office, filing','experience':'2 years reception','education':'Matric'}
+        for cat in templates.CATEGORIES:
+            names=templates.CV_NAMES if cat=='Résumé / CV' else templates.NAMES
+            for i in range(len(names)):
+                doc=templates.make_document(cat,i,general_fields)
+                self.assertNotIn('[',doc,f'Unexpected bracket placeholder in {cat} #{i}')
+                self.assertNotIn(']',doc,f'Unexpected bracket placeholder in {cat} #{i}')
+                self.assertTrue(doc.strip())
+        # Cover letter with role only or company only should read naturally
+        role_only=templates.make_document('Cover letter',0,{**general_fields,'role':'Receptionist'})
+        self.assertIn('Receptionist',role_only);self.assertNotIn('[Company]',role_only)
+        company_only=templates.make_document('Cover letter',9,{**general_fields,'company':'Sunrise Clinic'})
+        self.assertIn('Sunrise Clinic',company_only);self.assertNotIn('[',company_only)
+        intro_general=templates.make_document('Introduction',9,general_fields)
+        self.assertIn('Nandi Mkhize',intro_general);self.assertNotIn('[',intro_general)
+
+    def test_in_app_document_preview_renders_all_cv_designs_and_letters(self):
+        import templates
+        sample=templates.make_document('Résumé / CV',0,{'name':'Nandi Mkhize','contact':'012 345 6789','role':'','company':'','skills':'Customer service, Excel','experience':'Admin clerk\n'+'\n'.join(f'• Duty {i}' for i in range(45)),'education':'National Senior Certificate'})
+        with tempfile.TemporaryDirectory() as d:
+            photo=Path(d)/'portrait.png'
+            Image.new('RGB',(160,200),(50,90,140)).save(photo)
+            for idx in (0,5,10,11,12):
+                im,page,total=services.render_document_preview(sample,'Résumé / CV',idx,photo_path=photo,page=1,max_size=(340,480))
+                self.assertEqual(im.mode,'RGB')
+                self.assertLessEqual(im.width,340);self.assertLessEqual(im.height,480)
+                self.assertEqual(page,1);self.assertGreaterEqual(total,2)
+            # Page clamping works cleanly when asking past the end or below 1
+            _,clamped,total=services.render_document_preview(sample,'Résumé / CV',10,page=99,max_size=(300,420))
+            self.assertEqual(clamped,total)
+            _,clamped_low,_=services.render_document_preview(sample,'Résumé / CV',10,page=0,max_size=(300,420))
+            self.assertEqual(clamped_low,1)
+            letter=templates.make_document('Cover letter',2,{'name':'Nandi','contact':'012','role':'','company':''})
+            im_let,pg_let,tot_let=services.render_document_preview(letter,'Cover letter',2,page=1,max_size=(300,420))
+            self.assertEqual((pg_let,tot_let),(1,1));self.assertGreater(im_let.width,100)
+            with self.assertRaises(ValueError):services.render_document_preview('   ','Résumé / CV',0)
+
+    def test_bluetooth_icons_generated_with_visible_pixels(self):
+        root=Path(__file__).resolve().parent/'assets'/'icons'
+        for name,expected in (('bluetooth.png',(128,128)),('bluetooth-nav.png',(36,36))):
+            p=root/name;self.assertTrue(p.exists(),f'Missing {name}')
+            with Image.open(p) as im:
+                self.assertEqual(im.size,expected)
+                alpha=im.getchannel('A')
+                self.assertIsNotNone(alpha.getbbox(),f'{name} should have visible Bluetooth glyph pixels')
+
 if __name__=='__main__': unittest.main()

@@ -10,7 +10,7 @@ class CropEditor:
         image=collage.photo(item['path'],rotation=item.get('rotation',0))
         image.thumbnail((680,440),Image.Resampling.LANCZOS)
         self.width,self.height=image.size
-        self.window=ctk.CTkToplevel(parent); self.window.title('Crop selected picture'); self.window.transient(parent)
+        self.window=ctk.CTkToplevel(parent); self.window.title('Crop picture'); self.window.transient(parent)
         self.window.configure(fg_color='#101522'); self.window.resizable(False,False)
         ctk.CTkLabel(self.window,text='Crop this picture',font=ctk.CTkFont(size=19,weight='bold'),text_color='white').pack(anchor='w',padx=18,pady=(16,3))
         ctk.CTkLabel(self.window,text='Drag the lime corners to resize the crop. Drag inside the box to move it. The original is not changed.',text_color='#b9c7dc',wraplength=650,justify='left').pack(anchor='w',padx=18,pady=(0,10))
