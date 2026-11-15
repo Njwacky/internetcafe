@@ -8,6 +8,40 @@ import time
 import customtkinter as ctk
 from PIL import Image, ImageOps
 import requests
+
+# CustomTkinter 5.2.x can fire placeholder callbacks after a widget has been destroyed,
+# which raises TclError during screen changes. Guard the callbacks so the desktop app
+# remains stable while switching between views.
+_original_ctk_entry_textvariable_callback = ctk.CTkEntry._textvariable_callback
+_original_ctk_entry_activate_placeholder = ctk.CTkEntry._activate_placeholder
+
+def _safe_ctk_entry_textvariable_callback(self, var_name, index, mode):
+    try:
+        if not self.winfo_exists() or not self._entry.winfo_exists():
+            return
+        if self._textvariable is not None and self._textvariable.get() == "":
+            self._activate_placeholder()
+    except (AttributeError, tk.TclError):
+        pass
+
+def _safe_ctk_entry_activate_placeholder(self):
+    try:
+        if not self.winfo_exists() or not self._entry.winfo_exists():
+            return
+        if self._entry.get() == "" and self._placeholder_text is not None and (self._textvariable is None or self._textvariable == ""):
+            self._placeholder_text_active = True
+            self._pre_placeholder_arguments = {"show": self._entry.cget("show")}
+            self._entry.config(fg=self._apply_appearance_mode(self._placeholder_text_color),
+                               disabledforeground=self._apply_appearance_mode(self._placeholder_text_color),
+                               show="")
+            self._entry.delete(0, tk.END)
+            self._entry.insert(0, self._placeholder_text)
+    except (AttributeError, tk.TclError):
+        pass
+
+ctk.CTkEntry._textvariable_callback = _safe_ctk_entry_textvariable_callback
+ctk.CTkEntry._activate_placeholder = _safe_ctk_entry_activate_placeholder
+
 from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, make_document
 import services
 import settings_store
