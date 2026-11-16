@@ -103,6 +103,7 @@ def _default_station():
     return 'Counter PC 1'
 
 def _default_dict():
+    import cloud_sync
     return {
         'business_name':DEFAULT_NAME,
         'business_icon':DEFAULT_ICON,
@@ -111,8 +112,8 @@ def _default_dict():
         'station_name':_default_station(),
         'shop_id':'',
         'lan_sync_folder':'',
-        'supabase_url':os.environ.get('CAFE_DESK_SUPABASE_URL','').strip(),
-        'supabase_anon_key':os.environ.get('CAFE_DESK_SUPABASE_ANON_KEY','').strip(),
+        'supabase_url':os.environ.get('CAFE_DESK_SUPABASE_URL',cloud_sync.PUBLIC_PROJECT_SUPABASE_URL).strip(),
+        'supabase_anon_key':os.environ.get('CAFE_DESK_SUPABASE_ANON_KEY',cloud_sync.PUBLIC_PROJECT_SUPABASE_ANON_KEY).strip(),
     }
 def _parse_settings_file(target):
     default=_default_dict()

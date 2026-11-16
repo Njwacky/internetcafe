@@ -32,9 +32,15 @@ import license_guard
 
 APP_VERSION = '0.8.0'
 
-# Optional defaults you can bake in before building CafeDesk.exe (PUBLIC anon key ONLY; never service_role!).
-DEFAULT_SUPABASE_URL = os.environ.get('CAFE_DESK_SUPABASE_URL', '').strip()
-DEFAULT_SUPABASE_ANON_KEY = os.environ.get('CAFE_DESK_SUPABASE_ANON_KEY', '').strip()
+# Default PUBLIC Supabase project endpoint & anon key (safe for client builds — RLS + RPC enforced; NEVER put service_role here!).
+PUBLIC_PROJECT_SUPABASE_URL = 'https://rmtkppzqzxuuuhbeufjy.supabase.co'
+PUBLIC_PROJECT_SUPABASE_ANON_KEY = (
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.'
+    'eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtdGtwcHpxenh1dXVoYmV1Zmp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ4NDg5ODksImV4cCI6MjExMDQyNDk4OX0.'
+    'FES1qZBI3btnS3Z96x17pXh3hCneM37mz-tKW7jU2cc'
+)
+DEFAULT_SUPABASE_URL = os.environ.get('CAFE_DESK_SUPABASE_URL', PUBLIC_PROJECT_SUPABASE_URL).strip()
+DEFAULT_SUPABASE_ANON_KEY = os.environ.get('CAFE_DESK_SUPABASE_ANON_KEY', PUBLIC_PROJECT_SUPABASE_ANON_KEY).strip()
 
 OWNER_SUPABASE_CONFIG_PATH = Path(__file__).resolve().parent / 'owner-keys' / 'supabase-owner.json'
 

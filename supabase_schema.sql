@@ -409,4 +409,16 @@ begin
 end;
 $$;
 
+-- Public Read-Only Storage Bucket for Remote Over-the-Internet Installer Releases
+insert into storage.buckets (id, name, public)
+values ('cafedesk-releases', 'cafedesk-releases', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "Public can download cafedesk releases" on storage.objects;
+create policy "Public can download cafedesk releases"
+    on storage.objects
+    for select
+    to anon, authenticated
+    using (bucket_id = 'cafedesk-releases');
+
 grant execute on function public.sync_shop_sales(text, text, jsonb, text) to anon, authenticated;
