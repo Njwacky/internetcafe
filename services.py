@@ -331,16 +331,23 @@ def run_ocr_many(sources):
     return '\n\n'.join(parts)
 
 def run_ocr(source):
-    """OCR an image locally with a separately installed Tesseract, English only."""
+    """OCR an image locally with a separately installed or USB-bundled Tesseract, English only."""
     import subprocess,shutil,os
-    executable=os.environ.get('TESSERACT_CMD') or shutil.which('tesseract')
+    executable=os.environ.get('TESSERACT_CMD')
+    if not executable:
+        bundled_dir=settings_store.app_exe_dir()/'Tesseract-OCR'
+        bundled_exe=bundled_dir/('tesseract.exe' if os.name=='nt' else 'tesseract')
+        if bundled_exe.is_file():
+            executable=str(bundled_exe)
+    if not executable:
+        executable=shutil.which('tesseract')
     if not executable and os.name=='nt':
         for env_key in ('ProgramFiles','ProgramFiles(x86)','LOCALAPPDATA'):
             base=os.environ.get(env_key)
             if not base: continue
             candidate=(Path(base)/'Programs'/'Tesseract-OCR'/'tesseract.exe') if env_key=='LOCALAPPDATA' else (Path(base)/'Tesseract-OCR'/'tesseract.exe')
             if candidate.exists(): executable=str(candidate); break
-    if not executable: raise ValueError('Tesseract OCR was not found. Open Help & privacy and click the direct Tesseract OCR download link to install it (with English language data), then restart the app.')
+    if not executable: raise ValueError('Tesseract OCR was not found. Open Help & privacy and click the direct Tesseract OCR download link to install it (with English language data), or place a Tesseract-OCR folder beside CafeDesk.exe.')
     if Path(source).is_file():
         with open_safe_image(source):
             pass

@@ -61,7 +61,7 @@ from forms_ui import show_forms
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.6.0'
+APP_BUILD='0.6.1'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -130,9 +130,11 @@ class CafeDesk(ctk.CTk):
         with Image.open(root / 'assets' / 'icons' / 'bluetooth.png') as image:
             images['bluetooth_card']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(34,34))
         with Image.open(root / 'assets' / 'icons' / 'bluetooth-nav.png') as image:
-            images['bluetooth_nav']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+            cropped=image.crop(image.getbbox() or (0,0,image.width,image.height))
+            images['bluetooth_nav']=ctk.CTkImage(light_image=cropped.copy(),dark_image=cropped.copy(),size=(13,16))
         with Image.open(root / 'assets' / 'icons' / 'bluetooth-nav-muted.png') as image:
-            images['bluetooth_nav_muted']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+            cropped=image.crop(image.getbbox() or (0,0,image.width,image.height))
+            images['bluetooth_nav_muted']=ctk.CTkImage(light_image=cropped.copy(),dark_image=cropped.copy(),size=(13,16))
         with Image.open(root / 'assets' / 'icons' / 'enlarge.png') as image:
             images['enlarge']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
         try:
@@ -363,6 +365,10 @@ class CafeDesk(ctk.CTk):
         button(ocr_btns,'Open Tesseract downloads page  ↗',lambda:open_ocr_url(False),secondary=True,width=235).pack(side='left',padx=(0,8))
         button(ocr_btns,'Copy link',copy_ocr_url,secondary=True,width=95).pack(side='left')
         url_entry=entry(ocr_box);url_entry.insert(0,services.TESSERACT_DOWNLOAD_URL);url_entry.configure(state='readonly');url_entry.pack(fill='x',padx=18,pady=(0,16))
+        usb_box=card(self.body);usb_box.pack(fill='x',pady=(0,10))
+        label(usb_box,'Share Café Desk to other computers via USB',size=15,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(16,4))
+        mode_note='ACTIVE (saving inside CafeDeskData beside the app)' if settings_store.is_portable_data_mode() else 'Per-PC mode (create a "CafeDeskData" folder beside CafeDesk.exe to store prices/settings on USB)'
+        label(usb_box,'1. Build once on Windows by double-clicking packaging\\build-windows.bat (or download CafeDesk-Windows-USB-Portable.zip from GitHub Actions on the repository).\n2. Copy the ENTIRE CafeDesk folder (including _internal) onto a USB flash drive — target Windows 10/11 PCs run CafeDesk.exe directly with NO Python installation needed.\n3. Optional USB Portable Data Mode: '+mode_note+'.\n4. Optional USB OCR: install Tesseract OCR on the target PC or place a Tesseract-OCR folder right inside the USB CafeDesk folder.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,16))
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Privacy, local data folders & file removal',size=15,bold=True).pack(anchor='w',padx=18,pady=(16,4));label(box,'Staff access locks after five minutes without activity. The PIN is basic app-level protection — run Café Desk inside a standard (non-Administrator) Windows/OS kiosk user account on shared PCs.\n\n• Session temp folder (wiped on Next customer & app close): '+str(self.session_temp.name)+'\n• App configuration, sales & recovery folder (protected from public exports): '+str(settings_store.settings_path().parent)+'\n\nNext customer clears in-app workspace data, temporary merge copies and recovery files, and locks staff, without deleting customer-saved PDFs or Downloads/Bluetooth files. A staff member can deliberately remove a selected customer file below.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,12))
         button(box,'Delete a selected customer file',self.delete_selected_file,secondary=True,width=210).pack(anchor='w',padx=18,pady=(0,18))
     def about_screen(self):
@@ -373,7 +379,7 @@ class CafeDesk(ctk.CTk):
         info_col=ctk.CTkFrame(top,fg_color='transparent');info_col.pack(side='left')
         label(info_col,f'{self.business_name.get()}  •  Café Desk Document Studio',size=18,bold=True).pack(anchor='w')
         label(info_col,f'Version {APP_BUILD}  •  Local-first desktop workspace',size=12,bold=True,color=LIME).pack(anchor='w',pady=(2,0))
-        label(hero,'Café Desk helps internet cafés, print shops and walk-in customers handle everyday paperwork locally on one workspace: PDF merge/split/extract, WIA scanning, English OCR, A4 picture sheets, 13-template CVs & cover letters, 13-template business & invitation cards, Bluetooth file shortcuts, price lists, and simple receipts.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,18))
+        label(hero,'Café Desk helps internet cafés, print shops and walk-in customers handle everyday paperwork locally on one workspace: PDF merge/split/extract, WIA scanning, English OCR, A4 picture sheets, 13-template CVs & cover letters, 13-template business & invitation cards, printable & AcroForm-fillable forms, Bluetooth file shortcuts, price lists, and simple receipts.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,18))
 
         def open_link(url,desc):
             try:
@@ -546,8 +552,8 @@ class CafeDesk(ctk.CTk):
         info=ctk.CTkFrame(side,fg_color='#273248',corner_radius=12); info.pack(side='bottom',fill='x',padx=15,pady=12)
         label(info,'PRIVATE BY DEFAULT',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=13,pady=(12,3)); label(info,'Files stay on this computer\nunless you choose AI.',size=11,color='#B9C7DC',justify='left').pack(anchor='w',padx=13,pady=(0,12))
         nav=ctk.CTkScrollableFrame(side,fg_color='transparent',corner_radius=0);nav.pack(side='top',fill='both',expand=True,padx=(6,0))
-        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('About & contact','ⓘ'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Forms creator','⊞'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
-            btn_kw={'image':self.icon_images['bluetooth_nav_muted'],'compound':'left','text':f'  {name}'} if icon is None else {'text':f'{icon}   {name}'}
+        for name,icon in [('Home','⌂'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Forms creator','⊞'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦'),('Projects & recovery','▣'),('About & contact','ⓘ'),('Help & privacy','?')]:
+            btn_kw={'image':self.icon_images['bluetooth_nav_muted'],'compound':'left','text':f' {name}'} if icon is None else {'text':f'{icon}   {name}'}
             b=ctk.CTkButton(nav,height=38,anchor='w',corner_radius=10,fg_color='transparent',hover_color='#303C55',text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=13,weight='bold'),command=lambda n=name:self.show(n),**btn_kw); b.pack(fill='x',padx=(5,4),pady=2); self.nav_buttons[name]=b
         main=ctk.CTkFrame(self,fg_color='transparent'); main.grid(row=0,column=1,sticky='nsew'); main.grid_rowconfigure(1,weight=1); main.grid_columnconfigure(0,weight=1)
         bar=ctk.CTkFrame(main,fg_color=BG,height=67); bar.grid(row=0,column=0,sticky='ew',padx=28); bar.grid_propagate(False)

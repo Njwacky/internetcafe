@@ -9,7 +9,26 @@ ICONS={'office':'Office','document':'Document','printer':'Printer','scanner':'Sc
 class CorruptedSettingsError(ValueError):
     """Raised when the settings file exists on disk but is unreadable or damaged."""
 
+def app_exe_dir():
+    """Return the directory containing CafeDesk.exe when frozen, or the repo folder in source mode."""
+    if getattr(sys,'frozen',False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+def is_portable_data_mode():
+    """Return True if a portable `CafeDeskData` folder exists beside the executable or CAFE_DESK_PORTABLE_DIR is set."""
+    override=os.environ.get('CAFE_DESK_PORTABLE_DIR','').strip()
+    if override:
+        return True
+    return (app_exe_dir()/'CafeDeskData').is_dir()
+
 def app_data_dir():
+    override=os.environ.get('CAFE_DESK_PORTABLE_DIR','').strip()
+    if override:
+        return Path(override)
+    portable_dir=app_exe_dir()/'CafeDeskData'
+    if portable_dir.is_dir():
+        return portable_dir
     if sys.platform=='win32': root=Path(os.environ.get('APPDATA') or Path.home()/'AppData'/'Roaming')
     elif sys.platform=='darwin': root=Path(os.environ.get('CAFE_DESK_MAC_DIR') or (Path.home()/'Library'/'Application Support'))
     else:

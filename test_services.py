@@ -731,4 +731,86 @@ class DiagnosticRemediationTests(unittest.TestCase):
             self.assertEqual(im.mode,'RGB')
             self.assertEqual((pnum,tot),(1,1))
 
+    def test_sidebar_nav_order_and_bluetooth_label_alignment(self):
+        import ast
+        src=Path(__file__).resolve().parent.joinpath('app.py').read_text(encoding='utf-8')
+        tree=ast.parse(src)
+        nav_items=None
+        bt_text=None
+        for node in ast.walk(tree):
+            if isinstance(node,ast.For) and isinstance(node.iter,ast.List) and len(node.iter.elts)>=15:
+                elts=node.iter.elts
+                if all(isinstance(e,ast.Tuple) and len(e.elts)==2 for e in elts):
+                    names=[e.elts[0].value for e in elts if isinstance(e.elts[0],ast.Constant)]
+                    if 'Home' in names and 'Bluetooth files' in names:
+                        nav_items=names
+                        for sub in ast.walk(node):
+                            if isinstance(sub,ast.Dict):
+                                keys=[k.value for k in sub.keys if isinstance(k,ast.Constant)]
+                                if 'compound' in keys and 'text' in keys:
+                                    t_idx=keys.index('text')
+                                    val_node=sub.values[t_idx]
+                                    if isinstance(val_node,ast.JoinedStr) and isinstance(val_node.values[0],ast.Constant):
+                                        bt_text=val_node.values[0].value
+        self.assertIsNotNone(nav_items)
+        self.assertEqual(nav_items[-3:],['Projects & recovery','About & contact','Help & privacy'])
+        self.assertEqual(bt_text,' ')
+
+    def test_usb_portable_data_dir_and_packaging_version_sync(self):
+        import os,sys
+        from unittest import mock
+        import settings_store
+        repo=Path(__file__).resolve().parent
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_app_dir=Path(tmp)/'CafeDesk'
+            fake_app_dir.mkdir()
+            fake_exe=fake_app_dir/'CafeDesk.exe'
+            fake_exe.write_bytes(b'MZ')
+            with mock.patch.object(sys,'frozen',True,create=True), mock.patch.object(sys,'executable',str(fake_exe)), mock.patch.dict(os.environ,{'CAFE_DESK_PORTABLE_DIR':''},clear=False):
+                # Without CafeDeskData folder -> falls back to per-PC OS folder
+                self.assertFalse(settings_store.is_portable_data_mode())
+                self.assertNotEqual(settings_store.app_data_dir().resolve(),(fake_app_dir/'CafeDeskData').resolve())
+                # With CafeDeskData folder beside CafeDesk.exe -> uses USB portable folder
+                portable_data=fake_app_dir/'CafeDeskData'
+                portable_data.mkdir()
+                self.assertTrue(settings_store.is_portable_data_mode())
+                self.assertEqual(settings_store.app_data_dir().resolve(),portable_data.resolve())
+                settings_store.save_settings('USB Cyber Cafe',next(iter(settings_store.ICONS)))
+                self.assertTrue((portable_data/'settings.json').is_file())
+                self.assertEqual(settings_store.load_settings()['business_name'],'USB Cyber Cafe')
+                # Internal path guard protects portable CafeDeskData from public overwrite
+                self.assertTrue(settings_store.is_internal_path(portable_data/'settings.json'))
+
+        # Verify packaging scripts and Inno Setup match APP_BUILD
+        app_src=(repo/'app.py').read_text(encoding='utf-8')
+        iss_src=(repo/'packaging'/'windows-installer.iss').read_text(encoding='utf-8')
+        bat_src=(repo/'packaging'/'build-windows.bat').read_text(encoding='utf-8')
+        unix_src=(repo/'packaging'/'build-unix.sh').read_text(encoding='utf-8')
+        wf_src=(repo/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
+        self.assertIn("APP_BUILD='0.6.1'",app_src)
+        self.assertIn('#define MyAppVersion "0.6.1"',iss_src)
+        self.assertIn('--collect-all pypdfium2_raw',bat_src)
+        self.assertIn('--collect-all pypdfium2_raw',unix_src)
+        self.assertIn('--collect-all reportlab',bat_src)
+        self.assertIn('CafeDesk-Windows-USB-Portable.zip',wf_src)
+
+    def test_usb_bundled_tesseract_lookup(self):
+        import os
+        from unittest import mock
+        import settings_store
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_app_dir=Path(tmp)/'CafeDesk'
+            tess_dir=fake_app_dir/'Tesseract-OCR'
+            tess_dir.mkdir(parents=True)
+            exe_name='tesseract.exe' if os.name=='nt' else 'tesseract'
+            fake_tess=tess_dir/exe_name
+            fake_tess.write_text('#!/bin/sh\n',encoding='utf-8')
+            img_path=Path(tmp)/'sample.png'
+            Image.new('RGB',(40,20),'white').save(img_path)
+            completed=mock.Mock(returncode=0,stdout=b'USB OCR OK\n',stderr=b'')
+            with mock.patch.object(settings_store,'app_exe_dir',return_value=fake_app_dir), mock.patch.dict(os.environ,{'TESSERACT_CMD':''},clear=False), mock.patch('subprocess.run',return_value=completed) as run_mock:
+                out=services.run_ocr(img_path)
+                self.assertEqual(out,'USB OCR OK')
+                self.assertEqual(run_mock.call_args[0][0][0],str(fake_tess))
+
 if __name__=='__main__': unittest.main()
