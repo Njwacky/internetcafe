@@ -1579,10 +1579,12 @@ class WorkspaceTelemetryTests(unittest.TestCase):
         with mock.patch.object(cloud_sync,'_supabase_request',side_effect=OSError('offline')):
             res=cloud_sync.send_workspace_telemetry(cfg,machine_id='CD-1111-2222-3333',screen_counts={'Home':1})
         self.assertFalse(res['ok'])
-        # Telemetry failures never raise into the shop UI — even with no settings at all.
-        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=RuntimeError('boom')):
-            self.assertFalse(cloud_sync.send_workspace_telemetry({'supabase_url':'','supabase_anon_key':''})['ok'])
-        self.assertFalse(cloud_sync.send_workspace_telemetry(None,current_screen='Home')['ok'])
+        # A PC with no cloud project configured skips telemetry without touching the network.
+        with mock.patch.object(cloud_sync,'resolve_client_supabase',return_value=('','')):
+            with mock.patch.object(cloud_sync,'_supabase_request',side_effect=AssertionError('must not call the network')):
+                skipped=cloud_sync.send_workspace_telemetry({},current_screen='Home')
+        self.assertFalse(skipped['ok'])
+        self.assertEqual(skipped.get('reason'),'unconfigured')
 
     def test_screen_allowlist_matches_the_17_sidebar_tools(self):
         import cloud_sync
