@@ -58,13 +58,55 @@ If nothing is listed, verify power, USB connection, the scanner driver and the W
 On macOS/Linux, direct in-app scanning is not implemented. The separate scanner button attempts to launch Image Capture or Linux Document Scanner (`simple-scan`); use that app to scan and import saved files. Device compatibility depends on the driver and system.
 
 
-## Build a USB-ready copy
+## Share to other computers via USB (no Python needed on target PCs)
 
-This download contains source code and scripts, **not prebuilt installers or executables**. Build separately on each target operating system and CPU architecture. Python and internet are needed on the build computer; Tesseract must still be installed separately on target machines for OCR.
+You have **two ways** to get a standalone USB copy of Café Desk that runs on other 64-bit Windows 10/11 computers without installing Python:
 
-**Windows:** Run `packaging\build-windows.bat` on Windows. To make a portable USB copy, copy the entire resulting `dist\CafeDesk` folder and run `CafeDesk.exe` inside it. To make an installer, install Inno Setup 6 on the build computer and compile `packaging\windows-installer.iss` after the portable build; copy `installer-output\CafeDesk-Setup.exe` to USB. Test on the intended Windows versions.
+### Option A — Download the pre-built USB ZIP from GitHub Actions (easiest)
+1. Open the **Actions** tab on GitHub (`Build USB Portable & Installer Packages`).
+2. Open the latest green workflow run and download the **`CafeDesk-Windows-USB-and-Installer`** artifact.
+3. Extract **`CafeDesk-Windows-USB-Portable.zip`** and copy the entire **`CafeDesk`** folder (keep `_internal` inside it!) onto your USB flash drive.
+4. Plug the USB drive into any Windows 10/11 PC and run **`CafeDesk.exe`** (or copy the `CafeDesk` folder onto that PC's Desktop for faster startup).
+   - *Also included in the artifact:* **`CafeDesk-Setup.exe`** if you prefer a standard Windows Desktop/Start-Menu installer for each café PC.
 
-**macOS/Linux:** Run `sh packaging/build-unix.sh` on the corresponding system. Copy the entire `dist/CafeDesk.app` bundle (macOS) or `dist/CafeDesk` folder (Linux) to USB. System and CPU compatibility still matter. Unsigned Windows/macOS builds can produce security warnings; wider distribution may require code signing and macOS notarization. The current version's Windows and macOS builds have not been tested.
+### Option B — Build a USB-ready copy locally
+Python 3.11+ and internet access are needed only on the build computer:
+
+- **Windows:** Run `packaging\build-windows.bat`. Copy the entire resulting **`dist\CafeDesk`** folder (including `_internal`, `HOW-TO-RUN-FROM-USB.txt`, and `Enable-USB-Portable-Data.bat`) onto a USB drive and run `CafeDesk.exe` on target Windows PCs. To make a single-file installer, install Inno Setup 6 and compile `packaging\windows-installer.iss` (`installer-output\CafeDesk-Setup.exe`).
+- **macOS/Linux:** Run `sh packaging/build-unix.sh` on the corresponding system. Copy the entire `dist/CafeDesk.app` bundle (macOS) or `dist/CafeDesk` folder (Linux) to USB.
+
+### Portable USB Settings & Prices vs. Per-PC Mode
+- **Default (Per-PC mode):** When you copy `CafeDesk` onto several café computers, each computer stores its own business name, logo, price list, PIN, and sales log in `%APPDATA%\CafeDesk`.
+- **Portable USB Data mode (carry prices & settings on the USB stick):** Double-click **`Enable-USB-Portable-Data.bat`** inside the `CafeDesk` folder (or create a subfolder named **`CafeDeskData`** right next to `CafeDesk.exe`). When `CafeDeskData` exists beside `CafeDesk.exe`, all settings, logos, prices, recovery files, and sales stay **inside that USB folder** across computers.
+- **Optional USB OCR (`Tesseract-OCR`):** Either install Tesseract OCR on target PCs via the direct link in **Help & privacy**, or copy a `Tesseract-OCR` folder (with `tesseract.exe` and English `tessdata`) directly inside `CafeDesk\Tesseract-OCR` on the USB stick.
+
+Unsigned Windows/macOS builds can show SmartScreen/Gatekeeper prompts (`More info` → `Run anyway` on Windows); wider distribution may use code signing.
+
+## Commercial Per-Computer Locking & 1-Year Licensing (`v0.7.0`)
+
+Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 1 — Offline Hardware Machine-ID + 1-Year Ed25519 Signed Activation**:
+
+1. **One-time Owner Keypair Setup (on YOUR private PC only):**
+   ```bash
+   python admin_keygen.py --init-keys --apply-public-key
+   ```
+   - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` (**gitignored — NEVER share or copy `owner-keys/` or `admin_keygen.py` onto customer USBs!**).
+   - Writes only your Ed25519 **public key** into `license_guard.py`, then commit & push (or run `packaging\build-windows.bat`) so your `.exe` builds verify signatures against **your** keypair.
+   - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.
+
+2. **Installing & Activating on a Customer's Computer:**
+   - Copy `dist\CafeDesk` (or `CafeDesk-Setup.exe`) from your USB onto the customer's PC and launch `CafeDesk.exe`.
+   - Café Desk displays that computer's unique hardware **Machine ID** (`CD-XXXX-XXXX-XXXX`) and blocks access until activated.
+   - On **your** laptop, generate a 1-year (365-day) license bound to that exact `Machine ID`:
+     ```bash
+     python admin_keygen.py --machine-id CD-8F3A-91BC-204E --customer "Benoni Cyber Cafe" --days 365
+     ```
+     *(Or simply run `python admin_keygen.py` with no arguments for the interactive prompt, which also saves a `.cafelicense` file in `owner-keys/issued-files/`.)*
+   - Paste the `CDLIC1...` activation key (or load the `.cafelicense` file) into the customer's Activation window.
+
+3. **What Happens If Someone Copies the App to Another PC or After 1 Year?**
+   - **Copied to another PC:** `license.json` is stored per-PC (`%APPDATA%\CafeDesk\license.json`, never shared via `CafeDeskData`), and even if someone copies `license.json` manually, the second computer's hardware `Machine ID` will not match — Café Desk immediately blocks startup and asks for a new key from you.
+   - **After 365 days (1 year):** Café Desk shows that the 1-year license expired (with clock-rollback tamper detection) and prompts the customer to contact you with their `Machine ID` for a renewal key. Staff can also check remaining days or enter a renewal key early under **About & contact**.
 
 ## Tests and limitations
 
@@ -153,9 +195,7 @@ Open **PDF tools**, choose a PDF under **Split or extract pages**, and select **
 
 Preview uses PDFium via `pypdfium2`, installed with the Python requirements and included by the packaging scripts. It requires a supported build on the target platform. Preview renders locally and does not send the PDF online. The selector supports up to 10,000 pages and renders six thumbnails at a time; complex or malformed PDFs may not preview, and document features such as interactive forms may render differently. Review the extracted file. PDFs requiring a password are unsupported. If the file changes while previewing, select it again before extracting. Preview images stay in memory; saved extracted PDFs are separate files and are not deleted by **Next customer**.
 
-`page-selection-preview.html` is a phone-friendly interactive simulation with sample pages, not a PDF extractor and not a way to load customer PDFs. The actual feature requires the desktop application. GUI and native package builds have not been tested. The security findings from the diagnostic report remain unresolved in this revision, including the known vulnerable Pillow version restriction; do not process untrusted files or deploy to customers until fixed and retested.
-
-The resized-picture phone preview is illustrative; it is separate from the actual desktop app. The earlier security-diagnostic findings, including the known Pillow version restriction, have not been fixed in this revision.
+`page-selection-preview.html` is a phone-friendly interactive simulation with sample pages, not a PDF extractor and not a way to load customer PDFs. The actual feature requires the desktop application. All dependency pins in `requirements.txt` and `requirements-lock.txt` enforce `Pillow>=13.0.0` (Python 3.11+) and current security updates.
 
 The phone scanner preview is a simulation only. It cannot discover or scan physical devices. Previously identified security issues remain unresolved in this revision, including the Pillow version restriction; do not deploy or process untrusted files until they are fixed and retested.
 

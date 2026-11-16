@@ -1,2 +1,2 @@
--r requirements.txt
+-r requirements-lock.txt
 pyinstaller>=6.10,<7

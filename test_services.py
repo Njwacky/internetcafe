@@ -731,4 +731,203 @@ class DiagnosticRemediationTests(unittest.TestCase):
             self.assertEqual(im.mode,'RGB')
             self.assertEqual((pnum,tot),(1,1))
 
+    def test_sidebar_nav_order_and_bluetooth_label_alignment(self):
+        import ast
+        src=Path(__file__).resolve().parent.joinpath('app.py').read_text(encoding='utf-8')
+        tree=ast.parse(src)
+        nav_items=None
+        bt_text=None
+        for node in ast.walk(tree):
+            if isinstance(node,ast.For) and isinstance(node.iter,ast.List) and len(node.iter.elts)>=15:
+                elts=node.iter.elts
+                if all(isinstance(e,ast.Tuple) and len(e.elts)==2 for e in elts):
+                    names=[e.elts[0].value for e in elts if isinstance(e.elts[0],ast.Constant)]
+                    if 'Home' in names and 'Bluetooth files' in names:
+                        nav_items=names
+                        for sub in ast.walk(node):
+                            if isinstance(sub,ast.Dict):
+                                keys=[k.value for k in sub.keys if isinstance(k,ast.Constant)]
+                                if 'compound' in keys and 'text' in keys:
+                                    t_idx=keys.index('text')
+                                    val_node=sub.values[t_idx]
+                                    if isinstance(val_node,ast.JoinedStr) and isinstance(val_node.values[0],ast.Constant):
+                                        bt_text=val_node.values[0].value
+        self.assertIsNotNone(nav_items)
+        self.assertEqual(nav_items[-3:],['Projects & recovery','About & contact','Help & privacy'])
+        self.assertEqual(bt_text,' ')
+        # Verify Lock staff top-bar control uses padlock icon assets with empty button text
+        icons_dir=Path(__file__).resolve().parent/'assets'/'icons'
+        for icon_name in ('lock-staff.png','unlock-staff.png'):
+            p=icons_dir/icon_name
+            self.assertTrue(p.is_file(),f'Missing {icon_name}')
+            with Image.open(p) as im:
+                self.assertEqual(im.size,(36,36))
+                self.assertIsNotNone(im.getchannel('A').getbbox())
+        self.assertIn("self.lock_staff_btn=button(bar,'',self.lock_staff",src)
+        self.assertNotIn("button(bar,'Lock staff'",src)
+
+    def test_usb_portable_data_dir_and_packaging_version_sync(self):
+        import os,sys
+        from unittest import mock
+        import settings_store
+        repo=Path(__file__).resolve().parent
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_app_dir=Path(tmp)/'CafeDesk'
+            fake_app_dir.mkdir()
+            fake_exe=fake_app_dir/'CafeDesk.exe'
+            fake_exe.write_bytes(b'MZ')
+            with mock.patch.object(sys,'frozen',True,create=True), mock.patch.object(sys,'executable',str(fake_exe)), mock.patch.dict(os.environ,{'CAFE_DESK_PORTABLE_DIR':''},clear=False):
+                # Without CafeDeskData folder -> falls back to per-PC OS folder
+                self.assertFalse(settings_store.is_portable_data_mode())
+                self.assertNotEqual(settings_store.app_data_dir().resolve(),(fake_app_dir/'CafeDeskData').resolve())
+                # With CafeDeskData folder beside CafeDesk.exe -> uses USB portable folder
+                portable_data=fake_app_dir/'CafeDeskData'
+                portable_data.mkdir()
+                self.assertTrue(settings_store.is_portable_data_mode())
+                self.assertEqual(settings_store.app_data_dir().resolve(),portable_data.resolve())
+                settings_store.save_settings('USB Cyber Cafe',next(iter(settings_store.ICONS)))
+                self.assertTrue((portable_data/'settings.json').is_file())
+                self.assertEqual(settings_store.load_settings()['business_name'],'USB Cyber Cafe')
+                # Internal path guard protects portable CafeDeskData from public overwrite
+                self.assertTrue(settings_store.is_internal_path(portable_data/'settings.json'))
+
+        # Verify packaging scripts and Inno Setup match APP_BUILD
+        app_src=(repo/'app.py').read_text(encoding='utf-8')
+        iss_src=(repo/'packaging'/'windows-installer.iss').read_text(encoding='utf-8')
+        bat_src=(repo/'packaging'/'build-windows.bat').read_text(encoding='utf-8')
+        unix_src=(repo/'packaging'/'build-unix.sh').read_text(encoding='utf-8')
+        wf_src=(repo/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
+        self.assertIn("APP_BUILD='0.7.0'",app_src)
+        self.assertIn('#define MyAppVersion "0.7.0"',iss_src)
+        self.assertIn('--exclude-module admin_keygen',bat_src)
+        self.assertIn('--exclude-module admin_keygen',unix_src)
+        self.assertIn('--exclude-module admin_keygen',wf_src)
+        self.assertIn('--collect-all pypdfium2_raw',bat_src)
+        self.assertIn('--collect-all pypdfium2_raw',unix_src)
+        self.assertIn('--collect-all reportlab',bat_src)
+        self.assertIn('CafeDesk-Windows-USB-Portable.zip',wf_src)
+
+    def test_usb_bundled_tesseract_lookup(self):
+        import os
+        from unittest import mock
+        import settings_store
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_app_dir=Path(tmp)/'CafeDesk'
+            tess_dir=fake_app_dir/'Tesseract-OCR'
+            tess_dir.mkdir(parents=True)
+            exe_name='tesseract.exe' if os.name=='nt' else 'tesseract'
+            fake_tess=tess_dir/exe_name
+            fake_tess.write_text('#!/bin/sh\n',encoding='utf-8')
+            img_path=Path(tmp)/'sample.png'
+            Image.new('RGB',(40,20),'white').save(img_path)
+            completed=mock.Mock(returncode=0,stdout=b'USB OCR OK\n',stderr=b'')
+            with mock.patch.object(settings_store,'app_exe_dir',return_value=fake_app_dir), mock.patch.dict(os.environ,{'TESSERACT_CMD':''},clear=False), mock.patch('subprocess.run',return_value=completed) as run_mock:
+                out=services.run_ocr(img_path)
+                self.assertEqual(out,'USB OCR OK')
+                self.assertEqual(run_mock.call_args[0][0][0],str(fake_tess))
+
+    def test_hardware_machine_lock_and_one_year_ed25519_license(self):
+        import datetime as dt, os
+        from unittest import mock
+        import license_guard, admin_keygen, settings_store
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p=Path(tmp)
+            priv_file=tmp_p/'owner.private.key'
+            pub_file=tmp_p/'owner.public.txt'
+            lic_dir=tmp_p/'pc_license_dir'
+            priv_b64,pub_b64=admin_keygen.generate_owner_keypair(priv_path=priv_file,pub_path=pub_file)
+
+            pc1_mid='CD-1A2B-3C4D-5E6F'
+            pc2_mid='CD-9988-7766-5544'
+            issue_day=dt.date(2026,11,15)
+
+            # Owner signs a 365-day (1-year) license strictly for PC #1
+            token,payload=admin_keygen.sign_license_token(
+                pc1_mid,customer='Benoni Cyber Cafe',days=365,
+                issued_date=issue_day,private_key_b64=priv_b64
+            )
+            self.assertEqual(payload['exp'],'2027-11-15')
+
+            env={'CAFE_DESK_PUBLIC_KEY':pub_b64,'CAFE_DESK_LICENSE_DIR':str(lic_dir),'CAFE_DESK_TEST_MACHINE_ID':pc1_mid}
+            with mock.patch.dict(os.environ,env,clear=False):
+                # Before activation -> invalid
+                st0=license_guard.current_license_status(today=issue_day)
+                self.assertFalse(st0['valid'])
+
+                # Activate on PC #1 -> succeeds with 365 days remaining
+                activated=license_guard.activate_and_save_license(token,today=issue_day)
+                self.assertTrue(activated['valid'])
+                self.assertEqual(activated['customer'],'Benoni Cyber Cafe')
+                self.assertEqual(activated['days_remaining'],365)
+                self.assertTrue((lic_dir/'license.json').is_file())
+                # Internal path guard also protects license.json from public overwrite/delete
+                self.assertTrue(settings_store.is_internal_path(lic_dir/'license.json'))
+
+                # Day 365 (expiry day) -> still valid (0 days remaining)
+                st_last=license_guard.current_license_status(today=dt.date(2027,11,15))
+                self.assertTrue(st_last['valid'])
+                self.assertEqual(st_last['days_remaining'],0)
+
+                # Day 366 (after 1 year) -> rejected as expired!
+                st_exp=license_guard.current_license_status(today=dt.date(2027,11,16))
+                self.assertFalse(st_exp['valid'])
+                self.assertIn('expired on 2027-11-15',st_exp['reason'])
+
+            # Someone copies the app + license.json to PC #2 -> rejected (Machine ID mismatch)!
+            env_pc2={'CAFE_DESK_PUBLIC_KEY':pub_b64,'CAFE_DESK_LICENSE_DIR':str(lic_dir),'CAFE_DESK_TEST_MACHINE_ID':pc2_mid}
+            with mock.patch.dict(os.environ,env_pc2,clear=False):
+                st_copied=license_guard.current_license_status(today=issue_day)
+                self.assertFalse(st_copied['valid'])
+                self.assertIn('belongs to another computer',st_copied['reason'])
+                with self.assertRaises(license_guard.LicenseError):
+                    license_guard.activate_and_save_license(token,today=issue_day)
+
+            # Forged/tampered signature with wrong private key -> rejected!
+            rogue_priv,_=admin_keygen.generate_owner_keypair(priv_path=tmp_p/'rogue.key',pub_path=tmp_p/'rogue.pub')
+            rogue_token,_=admin_keygen.sign_license_token(pc2_mid,customer='Pirate Copy',days=365,issued_date=issue_day,private_key_b64=rogue_priv)
+            with mock.patch.dict(os.environ,env_pc2,clear=False):
+                with self.assertRaises(license_guard.LicenseError):
+                    license_guard.activate_and_save_license(rogue_token,today=issue_day)
+
+            # System clock rolled backward to cheat expiry -> rejected by clock guard!
+            with mock.patch.dict(os.environ,env,clear=False):
+                license_guard._check_and_update_clock_guard(dt.date(2027,6,1))
+                with self.assertRaises(license_guard.LicenseError):
+                    license_guard._check_and_update_clock_guard(dt.date(2027,5,1))
+
+    def test_ai_provider_autodetect_openrouter_and_openai(self):
+        from unittest import mock
+        # OpenRouter sk-or-v1-... key auto-detects openrouter.ai and prefixes bare gpt-4o-mini -> openai/gpt-4o-mini
+        ep,label_name=services.detect_ai_provider('sk-or-v1-dummytestkey')
+        self.assertEqual(ep,'https://openrouter.ai/api/v1/chat/completions')
+        self.assertEqual(label_name,'OpenRouter')
+        self.assertEqual(services.normalize_ai_model('gpt-4o-mini',ep),'openai/gpt-4o-mini')
+        self.assertEqual(services.normalize_ai_model('deepseek/deepseek-chat',ep),'deepseek/deepseek-chat')
+
+        # Standard OpenAI sk-proj-... key stays on api.openai.com and keeps gpt-4o-mini
+        ep2,label2=services.detect_ai_provider('sk-proj-dummytestkey')
+        self.assertEqual(ep2,'https://api.openai.com/v1/chat/completions')
+        self.assertEqual(label2,'OpenAI')
+        self.assertEqual(services.normalize_ai_model('gpt-4o-mini',ep2),'gpt-4o-mini')
+
+        # Verify call_ai_chat sends OpenRouter headers and parses response cleanly
+        fake_resp=mock.Mock(ok=True,status_code=200)
+        fake_resp.json.return_value={'choices':[{'message':{'content':'CONNECTED'}}]}
+        with mock.patch('requests.post',return_value=fake_resp) as post_mock:
+            reply,prov,mod=services.call_ai_chat('sk-or-v1-dummytestkey','gpt-4o-mini','Hello',max_tokens=16)
+            self.assertEqual((reply,prov,mod),('CONNECTED','OpenRouter','openai/gpt-4o-mini'))
+            called_url=post_mock.call_args[0][0]
+            called_headers=post_mock.call_args[1]['headers']
+            called_json=post_mock.call_args[1]['json']
+            self.assertEqual(called_url,'https://openrouter.ai/api/v1/chat/completions')
+            self.assertIn('HTTP-Referer',called_headers)
+            self.assertEqual(called_json['model'],'openai/gpt-4o-mini')
+
+        # Verify clear provider error extraction on HTTP 401/402
+        err_resp=mock.Mock(ok=False,status_code=401)
+        err_resp.json.return_value={'error':{'message':'No auth credentials found'}}
+        with mock.patch('requests.post',return_value=err_resp):
+            with self.assertRaisesRegex(ValueError,'OpenRouter request failed.*HTTP 401.*No auth credentials found'):
+                services.call_ai_chat('sk-or-v1-dummytestkey','gpt-4o-mini','Hello')
+
 if __name__=='__main__': unittest.main()

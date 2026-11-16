@@ -58,10 +58,12 @@ import cards_renderer
 from cards_ui import show_cards
 import forms_renderer
 from forms_ui import show_forms
+import license_guard
+import license_ui
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.6.0'
+APP_BUILD='0.7.0'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -76,7 +78,7 @@ def entry(parent,placeholder='',**kw): return ctk.CTkEntry(parent,placeholder_te
 class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
-        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
+        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
         preferences=settings_store.load_settings(); self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick)
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
     def note_activity(self,event=None): self.idle.touch()
@@ -130,11 +132,17 @@ class CafeDesk(ctk.CTk):
         with Image.open(root / 'assets' / 'icons' / 'bluetooth.png') as image:
             images['bluetooth_card']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(34,34))
         with Image.open(root / 'assets' / 'icons' / 'bluetooth-nav.png') as image:
-            images['bluetooth_nav']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+            cropped=image.crop(image.getbbox() or (0,0,image.width,image.height))
+            images['bluetooth_nav']=ctk.CTkImage(light_image=cropped.copy(),dark_image=cropped.copy(),size=(13,16))
         with Image.open(root / 'assets' / 'icons' / 'bluetooth-nav-muted.png') as image:
-            images['bluetooth_nav_muted']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+            cropped=image.crop(image.getbbox() or (0,0,image.width,image.height))
+            images['bluetooth_nav_muted']=ctk.CTkImage(light_image=cropped.copy(),dark_image=cropped.copy(),size=(13,16))
         with Image.open(root / 'assets' / 'icons' / 'enlarge.png') as image:
             images['enlarge']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+        with Image.open(root / 'assets' / 'icons' / 'lock-staff.png') as image:
+            images['lock_staff']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(18,18))
+        with Image.open(root / 'assets' / 'icons' / 'unlock-staff.png') as image:
+            images['unlock_staff']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(18,18))
         try:
             with Image.open(settings_store.logo_path()) as image: images['custom']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
         except (OSError,ValueError): images['custom']=images['office']
@@ -203,7 +211,7 @@ class CafeDesk(ctk.CTk):
                     rem_after=settings_store.lockout_remaining()
                     if rem_after>0: self.lockout_until=time.monotonic()+rem_after
                     messagebox.showerror('Staff access','Incorrect PIN. After 5 failed attempts, staff access locks for 60 seconds.',parent=self); return False
-            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.status.set('Staff settings unlocked • lock before leaving the computer'); return True
+            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer'); return True
         except settings_store.CorruptedSettingsError as exc:
             messagebox.showerror('Settings damaged (fail-closed)',str(exc),parent=self); return False
         except (ValueError,OSError) as exc: messagebox.showerror('Staff access',str(exc),parent=self); return False
@@ -226,8 +234,12 @@ class CafeDesk(ctk.CTk):
             if new!=confirm: raise ValueError('PINs do not match.')
             settings_store.set_pin(new); messagebox.showinfo('PIN updated','Staff PIN changed.',parent=self)
         except (ValueError,OSError) as exc: messagebox.showerror('Could not update PIN',str(exc),parent=self)
+    def update_lock_button(self):
+        btn=getattr(self,'lock_staff_btn',None)
+        if btn and btn.winfo_exists():
+            btn.configure(image=self.icon_images['unlock_staff' if self.staff_unlocked else 'lock_staff'])
     def lock_staff(self):
-        self.staff_unlocked=False; self.key.set('')
+        self.staff_unlocked=False; self.key.set(''); self.update_lock_button()
         if self.current in ('Business settings','Price settings','AI settings','Sales reports'): self.show('Home')
         self.status.set('Staff access locked • session API key cleared')
     def _career_snapshot(self):
@@ -363,6 +375,10 @@ class CafeDesk(ctk.CTk):
         button(ocr_btns,'Open Tesseract downloads page  ↗',lambda:open_ocr_url(False),secondary=True,width=235).pack(side='left',padx=(0,8))
         button(ocr_btns,'Copy link',copy_ocr_url,secondary=True,width=95).pack(side='left')
         url_entry=entry(ocr_box);url_entry.insert(0,services.TESSERACT_DOWNLOAD_URL);url_entry.configure(state='readonly');url_entry.pack(fill='x',padx=18,pady=(0,16))
+        usb_box=card(self.body);usb_box.pack(fill='x',pady=(0,10))
+        label(usb_box,'Share Café Desk to other computers via USB',size=15,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(16,4))
+        mode_note='ACTIVE (saving inside CafeDeskData beside the app)' if settings_store.is_portable_data_mode() else 'Per-PC mode (create a "CafeDeskData" folder beside CafeDesk.exe to store prices/settings on USB)'
+        label(usb_box,'1. Build once on Windows by double-clicking packaging\\build-windows.bat (or download CafeDesk-Windows-USB-Portable.zip from GitHub Actions on the repository).\n2. Copy the ENTIRE CafeDesk folder (including _internal) onto a USB flash drive — target Windows 10/11 PCs run CafeDesk.exe directly with NO Python installation needed.\n3. Optional USB Portable Data Mode: '+mode_note+'.\n4. Optional USB OCR: install Tesseract OCR on the target PC or place a Tesseract-OCR folder right inside the USB CafeDesk folder.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,16))
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Privacy, local data folders & file removal',size=15,bold=True).pack(anchor='w',padx=18,pady=(16,4));label(box,'Staff access locks after five minutes without activity. The PIN is basic app-level protection — run Café Desk inside a standard (non-Administrator) Windows/OS kiosk user account on shared PCs.\n\n• Session temp folder (wiped on Next customer & app close): '+str(self.session_temp.name)+'\n• App configuration, sales & recovery folder (protected from public exports): '+str(settings_store.settings_path().parent)+'\n\nNext customer clears in-app workspace data, temporary merge copies and recovery files, and locks staff, without deleting customer-saved PDFs or Downloads/Bluetooth files. A staff member can deliberately remove a selected customer file below.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,12))
         button(box,'Delete a selected customer file',self.delete_selected_file,secondary=True,width=210).pack(anchor='w',padx=18,pady=(0,18))
     def about_screen(self):
@@ -373,7 +389,7 @@ class CafeDesk(ctk.CTk):
         info_col=ctk.CTkFrame(top,fg_color='transparent');info_col.pack(side='left')
         label(info_col,f'{self.business_name.get()}  •  Café Desk Document Studio',size=18,bold=True).pack(anchor='w')
         label(info_col,f'Version {APP_BUILD}  •  Local-first desktop workspace',size=12,bold=True,color=LIME).pack(anchor='w',pady=(2,0))
-        label(hero,'Café Desk helps internet cafés, print shops and walk-in customers handle everyday paperwork locally on one workspace: PDF merge/split/extract, WIA scanning, English OCR, A4 picture sheets, 13-template CVs & cover letters, 13-template business & invitation cards, Bluetooth file shortcuts, price lists, and simple receipts.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,18))
+        label(hero,'Café Desk helps internet cafés, print shops and walk-in customers handle everyday paperwork locally on one workspace: PDF merge/split/extract, WIA scanning, English OCR, A4 picture sheets, 13-template CVs & cover letters, 13-template business & invitation cards, printable & AcroForm-fillable forms, Bluetooth file shortcuts, price lists, and simple receipts.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,18))
 
         def open_link(url,desc):
             try:
@@ -387,6 +403,24 @@ class CafeDesk(ctk.CTk):
             messagebox.showinfo('Copied',f'{desc} copied to clipboard:\n{val}',parent=self)
 
         contact_box=card(self.body);contact_box.pack(fill='x',pady=(0,12))
+        lic_status=license_guard.current_license_status()
+        lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12))
+        lic_box.pack_forget()
+        lic_box.pack(fill='x',pady=(0,12),before=contact_box)
+        label(lic_box,'1-Year Computer License & Machine ID',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
+        mid_val=lic_status.get('machine_id') or license_guard.get_machine_id()
+        if lic_status.get('valid'):
+            days_left=lic_status.get('days_remaining',0)
+            badge_color='#FFB8B0' if days_left<=30 else LIME
+            summary=f'ACTIVE  •  Licensed to: {lic_status["customer"]}  •  Expires: {lic_status["expires_at"]} ({days_left} days remaining)'
+        else:
+            badge_color='#FFDBA2'
+            summary=f'Developer / Unactivated mode  •  {lic_status.get("reason","No per-PC license installed yet.")}'
+        label(lic_box,summary,size=12,bold=True,color=badge_color,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
+        mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,16))
+        m_entry=entry(mrow);m_entry.insert(0,f'Machine ID: {mid_val}');m_entry.configure(state='readonly');m_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
+        button(mrow,'⧉ Copy Machine ID',lambda:copy_val(mid_val,'Machine ID'),secondary=True,width=155,height=34).pack(side='left',padx=(0,8))
+        button(mrow,'🔑 Enter / Renew 1-Year Key',lambda:license_ui.open_renewal_modal(self,on_updated=lambda _info:self.show('About & contact')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=205,height=34).pack(side='left')
         label(contact_box,'Developer & support contacts',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(contact_box,'Have feedback, feature ideas, or need help setting up Café Desk? Reach out directly or visit GitHub.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,14))
 
@@ -546,14 +580,16 @@ class CafeDesk(ctk.CTk):
         info=ctk.CTkFrame(side,fg_color='#273248',corner_radius=12); info.pack(side='bottom',fill='x',padx=15,pady=12)
         label(info,'PRIVATE BY DEFAULT',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=13,pady=(12,3)); label(info,'Files stay on this computer\nunless you choose AI.',size=11,color='#B9C7DC',justify='left').pack(anchor='w',padx=13,pady=(0,12))
         nav=ctk.CTkScrollableFrame(side,fg_color='transparent',corner_radius=0);nav.pack(side='top',fill='both',expand=True,padx=(6,0))
-        for name,icon in [('Home','⌂'),('Projects & recovery','▣'),('Help & privacy','?'),('About & contact','ⓘ'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Forms creator','⊞'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦')]:
-            btn_kw={'image':self.icon_images['bluetooth_nav_muted'],'compound':'left','text':f'  {name}'} if icon is None else {'text':f'{icon}   {name}'}
+        for name,icon in [('Home','⌂'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Forms creator','⊞'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦'),('Projects & recovery','▣'),('About & contact','ⓘ'),('Help & privacy','?')]:
+            btn_kw={'image':self.icon_images['bluetooth_nav_muted'],'compound':'left','text':f' {name}'} if icon is None else {'text':f'{icon}   {name}'}
             b=ctk.CTkButton(nav,height=38,anchor='w',corner_radius=10,fg_color='transparent',hover_color='#303C55',text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=13,weight='bold'),command=lambda n=name:self.show(n),**btn_kw); b.pack(fill='x',padx=(5,4),pady=2); self.nav_buttons[name]=b
         main=ctk.CTkFrame(self,fg_color='transparent'); main.grid(row=0,column=1,sticky='nsew'); main.grid_rowconfigure(1,weight=1); main.grid_columnconfigure(0,weight=1)
         bar=ctk.CTkFrame(main,fg_color=BG,height=67); bar.grid(row=0,column=0,sticky='ew',padx=28); bar.grid_propagate(False)
         self.header_title=label(bar,'Home',size=20,bold=True); self.header_title.pack(side='left')
         button(bar,'Next customer',self.clear_customer,secondary=True,width=130,height=34).pack(side='right',pady=15)
-        button(bar,'Lock staff',self.lock_staff,secondary=True,width=90,height=34).pack(side='right',padx=(0,8),pady=15)
+        self.lock_staff_btn=button(bar,'',self.lock_staff,secondary=True,image=self.icon_images['lock_staff'],width=38,height=34)
+        self.lock_staff_btn.pack(side='right',padx=(0,8),pady=15)
+        self.lock_staff_btn.bind('<Enter>',lambda _e:self.status.set('Click to lock staff access & clear AI key' if self.staff_unlocked else 'Staff access is locked'))
         button(bar,'? Help',self.quick_help,secondary=True,width=75,height=34).pack(side='right',padx=(0,8),pady=15)
         ctk.CTkLabel(bar,textvariable=self.clock,text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=12,weight='bold')).pack(side='right',padx=(0,20))
         self.container=ctk.CTkFrame(main,fg_color='transparent'); self.container.grid(row=1,column=0,sticky='nsew',padx=28,pady=(0,8))
@@ -616,7 +652,7 @@ class CafeDesk(ctk.CTk):
         for widget in self.long_fields.values():
             if widget.winfo_exists(): widget.delete('1.0','end')
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
-        self.key.set(''); self.staff_unlocked=False; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
+        self.key.set(''); self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
         self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
@@ -970,30 +1006,71 @@ class CafeDesk(ctk.CTk):
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.txt',filetypes=[('Text file','*.txt')],initialfile='career-document.txt')
         if out: self.job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self))
     def settings_screen(self):
-        self.heading(self.body,'AI settings','Optional writing help, when you need a little extra polish.')
-        box=card(self.body); box.pack(fill='x'); label(box,'Connect to OpenAI',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5)); label(box,'Use your own API key and an available model. Internet and an active API account are required.\nYour provider may charge for use.',size=12,color=MUTED,justify='left').pack(anchor='w',padx=20,pady=(0,15))
-        label(box,'API key • kept in memory only for this session',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4)); ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
-        label(box,'Model',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4)); ctk.CTkEntry(box,textvariable=self.model,height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,15))
-        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy first',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to OpenAI after confirmation. Get the customer’s consent.\nDo not leave your API key accessible to customers on a shared computer.',size=12,color='#F1D1A5',justify='left').pack(anchor='w',padx=14,pady=(0,12))
+        self.heading(self.body,'AI settings','Optional writing help — supports OpenRouter (sk-or-...), OpenAI, Groq, DeepSeek & compatible APIs.')
+        box=card(self.body); box.pack(fill='x')
+        label(box,'Connect an AI provider',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
+        label(box,'Enter an OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek API key. Auto-detect automatically routes sk-or-... keys to OpenRouter and prefixes model names (e.g. openai/gpt-4o-mini).',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,14))
+
+        label(box,'Provider',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        custom_wrap=ctk.CTkFrame(box,fg_color='transparent')
+        def on_provider_change(_choice=None):
+            if self.ai_provider.get()=='Custom OpenAI-compatible URL':
+                custom_wrap.pack(fill='x',padx=20,pady=(0,12),after=prov_menu)
+            else:
+                custom_wrap.pack_forget()
+        prov_menu=ctk.CTkOptionMenu(box,values=list(services.AI_PROVIDERS.keys()),variable=self.ai_provider,command=on_provider_change,fg_color=GREEN,button_color=GREEN_HOVER,height=36,width=300)
+        prov_menu.pack(anchor='w',padx=20,pady=(0,12))
+        label(custom_wrap,'Custom Chat Completions URL (https://...)',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,4))
+        ctk.CTkEntry(custom_wrap,textvariable=self.ai_custom_url,placeholder_text='https://openrouter.ai/api/v1/chat/completions',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x')
+        on_provider_change()
+
+        label(box,'API key • kept in memory only for this session (cleared when staff locks)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
+
+        label(box,'Model (e.g. openai/gpt-4o-mini, openrouter/auto, or deepseek/deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        ctk.CTkEntry(box,textvariable=self.model,height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
+
+        def test_ai():
+            key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
+            if not key: return messagebox.showinfo('Enter API key','Paste your API key above first.',parent=self)
+            def run_check():
+                return services.call_ai_chat(key,model,'Reply with the single word CONNECTED.',provider_choice=prov,custom_url=curl,system_prompt='Reply only with the single word CONNECTED.',max_tokens=16,timeout=30)
+            def done(res):
+                reply,prov_label,resolved_model=res
+                self.status.set(f'AI connection verified • {prov_label} ({resolved_model})')
+                messagebox.showinfo('AI connection working',f'Connected to {prov_label}!\n\nModel: {resolved_model}\nTest reply: {reply[:80]}',parent=self)
+            self.job('Testing AI connection…',run_check,done)
+
+        btn_row=ctk.CTkFrame(box,fg_color='transparent'); btn_row.pack(fill='x',padx=20,pady=(0,15))
+        button(btn_row,'⚡ Test AI connection',test_ai,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=195).pack(side='left',padx=(0,10))
+        button(btn_row,'Clear key now',lambda:(self.key.set(''),self.status.set('Session AI key cleared')),secondary=True,width=130).pack(side='left')
+
+        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy first',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to your selected AI provider after confirmation. Get the customer’s consent.\nDo not leave your API key accessible to customers on a shared computer.',size=12,color='#F1D1A5',justify='left').pack(anchor='w',padx=14,pady=(0,12))
     def improve(self):
         if not self.require_staff(): return
-        text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip()
+        text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         if not key or not model: return messagebox.showinfo('Set up AI','Add an API key and model in AI settings first.',parent=self)
-        if not messagebox.askyesno('Consent and privacy','Send the complete draft to OpenAI for improvement? This can incur API charges. Please get the customer’s permission first.',parent=self): return
+        try:
+            _,prov_label=services.detect_ai_provider(key,prov,curl)
+        except ValueError as exc:
+            return messagebox.showerror('AI settings',str(exc),parent=self)
+        if not messagebox.askyesno('Consent and privacy',f'Send the complete draft to {prov_label} for improvement? This can incur API charges. Please get the customer’s permission first.',parent=self): return
         def request():
-            try:
-                r=requests.post('https://api.openai.com/v1/chat/completions',headers={'Authorization':'Bearer '+key},json={'model':model,'messages':[{'role':'system','content':'Improve this career document for clarity, grammar and professionalism. Preserve facts and placeholders. Never invent qualifications, dates, employers or achievements. Return only the improved document.'},{'role':'user','content':text}]},timeout=60)
-                if not r.ok: raise ValueError(f'AI request failed (HTTP {r.status_code}). Check the API key, model, account billing and internet connection.')
-                return r.json()['choices'][0]['message']['content']
-            except requests.RequestException: raise ValueError('Could not reach the AI provider. Check your internet connection and try again.')
-        def complete(result):
+            reply,used_prov,used_model=services.call_ai_chat(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)
+            return reply,used_prov,used_model
+        def complete(res):
+            result,used_prov,used_model=res
             current=self.current_text()
             if current!=text and not messagebox.askyesno('Draft changed','The draft changed while the request was running. Replace it with the AI result?',parent=self): return
             self.doc_text=result
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',result)
             self.refresh_doc_preview()
-            messagebox.showinfo('Draft improved','Review the AI result and check all facts before saving.',parent=self)
-        self.job('Improving draft with AI…',request,complete)
+            self.status.set(f'Draft improved via {used_prov} ({used_model})')
+            messagebox.showinfo('Draft improved',f'Improved via {used_prov} ({used_model}).\nReview the AI result and check all facts before saving.',parent=self)
+        self.job(f'Improving draft with {prov_label}…',request,complete)
 
-if __name__=='__main__': CafeDesk().mainloop()
+if __name__=='__main__':
+    if license_ui.ensure_computer_licensed() is not None:
+        CafeDesk().mainloop()
+

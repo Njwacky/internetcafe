@@ -331,16 +331,23 @@ def run_ocr_many(sources):
     return '\n\n'.join(parts)
 
 def run_ocr(source):
-    """OCR an image locally with a separately installed Tesseract, English only."""
+    """OCR an image locally with a separately installed or USB-bundled Tesseract, English only."""
     import subprocess,shutil,os
-    executable=os.environ.get('TESSERACT_CMD') or shutil.which('tesseract')
+    executable=os.environ.get('TESSERACT_CMD')
+    if not executable:
+        bundled_dir=settings_store.app_exe_dir()/'Tesseract-OCR'
+        bundled_exe=bundled_dir/('tesseract.exe' if os.name=='nt' else 'tesseract')
+        if bundled_exe.is_file():
+            executable=str(bundled_exe)
+    if not executable:
+        executable=shutil.which('tesseract')
     if not executable and os.name=='nt':
         for env_key in ('ProgramFiles','ProgramFiles(x86)','LOCALAPPDATA'):
             base=os.environ.get(env_key)
             if not base: continue
             candidate=(Path(base)/'Programs'/'Tesseract-OCR'/'tesseract.exe') if env_key=='LOCALAPPDATA' else (Path(base)/'Tesseract-OCR'/'tesseract.exe')
             if candidate.exists(): executable=str(candidate); break
-    if not executable: raise ValueError('Tesseract OCR was not found. Open Help & privacy and click the direct Tesseract OCR download link to install it (with English language data), then restart the app.')
+    if not executable: raise ValueError('Tesseract OCR was not found. Open Help & privacy and click the direct Tesseract OCR download link to install it (with English language data), or place a Tesseract-OCR folder beside CafeDesk.exe.')
     if Path(source).is_file():
         with open_safe_image(source):
             pass
@@ -365,3 +372,119 @@ def receipt_text(business,currency,items,customer='',timestamp=None,reference=No
         result.append(f"{item['name']}  x {qty}  @ {currency}{price:.2f}  = {currency}{price*qty:.2f}")
     result+=['',f'TOTAL: {currency}{total:.2f}','','Simple receipt • tax not calculated • payment status not tracked']
     return '\n'.join(result)
+
+AI_PROVIDERS={
+    'Auto-detect from API key':'',
+    'OpenRouter (openrouter.ai)':'https://openrouter.ai/api/v1/chat/completions',
+    'OpenAI (api.openai.com)':'https://api.openai.com/v1/chat/completions',
+    'Groq (api.groq.com)':'https://api.groq.com/openai/v1/chat/completions',
+    'DeepSeek (api.deepseek.com)':'https://api.deepseek.com/chat/completions',
+    'Custom OpenAI-compatible URL':'custom',
+}
+
+AI_DEFAULT_MODELS={
+    'https://openrouter.ai/api/v1/chat/completions':'openai/gpt-4o-mini',
+    'https://api.openai.com/v1/chat/completions':'gpt-4o-mini',
+    'https://api.groq.com/openai/v1/chat/completions':'llama-3.3-70b-versatile',
+    'https://api.deepseek.com/chat/completions':'deepseek-chat',
+}
+
+def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API key', custom_url:str='')->tuple[str,str]:
+    """Resolve `(endpoint_url, provider_label)` from key prefix or explicit provider choice."""
+    key=(api_key or '').strip()
+    choice=(provider_choice or 'Auto-detect from API key').strip()
+    if choice=='Custom OpenAI-compatible URL':
+        url=(custom_url or '').strip()
+        if not url.startswith(('https://','http://localhost','http://127.0.0.1')):
+            raise ValueError('Custom AI endpoint must start with https:// (or http://localhost for local Ollama/LM Studio).')
+        if url.rstrip('/').endswith('/v1'):
+            url=url.rstrip('/')+'/chat/completions'
+        return url,'Custom endpoint'
+    mapped=AI_PROVIDERS.get(choice,'')
+    if mapped:
+        label_name=choice.split(' (')[0]
+        return mapped,label_name
+    # Auto-detect by key prefix
+    if key.startswith('sk-or-'):
+        return 'https://openrouter.ai/api/v1/chat/completions','OpenRouter'
+    if key.startswith('gsk_'):
+        return 'https://api.groq.com/openai/v1/chat/completions','Groq'
+    return 'https://api.openai.com/v1/chat/completions','OpenAI'
+
+def normalize_ai_model(model:str, endpoint_url:str)->str:
+    """Adjust bare model names when routed to OpenRouter (e.g. `gpt-4o-mini` -> `openai/gpt-4o-mini`)."""
+    m=(model or '').strip()
+    if not m:
+        return AI_DEFAULT_MODELS.get(endpoint_url,'gpt-4o-mini')
+    if 'openrouter.ai' in endpoint_url and '/' not in m:
+        if m.startswith(('gpt-','o1','o3','o4')):
+            return 'openai/'+m
+        if m.startswith('claude-'):
+            return 'anthropic/'+m
+        if m.startswith('gemini-'):
+            return 'google/'+m
+    return m
+
+def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='Auto-detect from API key', custom_url:str='', system_prompt:str|None=None, max_tokens:int|None=None, timeout:int=60)->tuple[str,str,str]:
+    """Send a chat completion request to OpenRouter / OpenAI / Groq / compatible endpoint.
+
+    Returns `(reply_text, provider_label, resolved_model)`. Never logs or echoes `api_key`.
+    """
+    import requests
+    key=(api_key or '').strip()
+    if not key:
+        raise ValueError('Enter an API key in AI settings first.')
+    if not (user_text or '').strip():
+        raise ValueError('Enter or create a draft first.')
+    endpoint,provider_label=detect_ai_provider(key,provider_choice,custom_url)
+    resolved_model=normalize_ai_model(model,endpoint)
+    headers={
+        'Authorization':f'Bearer {key}',
+        'Content-Type':'application/json',
+    }
+    if 'openrouter.ai' in endpoint:
+        headers['HTTP-Referer']='https://github.com/Njwacky/internetcafe'
+        headers['X-Title']='Cafe Desk Document Studio'
+    sys_msg=system_prompt or (
+        'Improve this career document for clarity, grammar and professionalism. '
+        'Preserve facts and placeholders. Never invent qualifications, dates, employers '
+        'or achievements. Return only the improved document.'
+    )
+    payload:dict={
+        'model':resolved_model,
+        'messages':[
+            {'role':'system','content':sys_msg},
+            {'role':'user','content':user_text},
+        ],
+    }
+    if max_tokens is not None:
+        payload['max_tokens']=int(max_tokens)
+    try:
+        resp=requests.post(endpoint,headers=headers,json=payload,timeout=timeout)
+    except requests.RequestException as exc:
+        raise ValueError(f'Could not reach {provider_label} ({endpoint}). Check your internet connection and try again.') from exc
+
+    try:
+        body=resp.json()
+    except ValueError:
+        body={}
+
+    if not resp.ok:
+        detail=''
+        if isinstance(body,dict):
+            err=body.get('error')
+            if isinstance(err,dict):
+                detail=str(err.get('message') or err.get('code') or '').strip()
+            elif isinstance(err,str):
+                detail=err.strip()
+        hint=f': {detail[:220]}' if detail else '.'
+        raise ValueError(f'{provider_label} request failed (HTTP {resp.status_code}){hint} Check the API key, model ("{resolved_model}"), and account credits.')
+
+    try:
+        content=body['choices'][0]['message']['content']
+    except (KeyError,IndexError,TypeError) as exc:
+        raise ValueError(f'{provider_label} returned an unexpected response format.') from exc
+    if not isinstance(content,str) or not content.strip():
+        raise ValueError(f'{provider_label} returned an empty response. Try another model (for example openai/gpt-4o-mini or openrouter/auto).')
+    return content.strip(),provider_label,resolved_model
+

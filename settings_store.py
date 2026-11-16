@@ -9,7 +9,26 @@ ICONS={'office':'Office','document':'Document','printer':'Printer','scanner':'Sc
 class CorruptedSettingsError(ValueError):
     """Raised when the settings file exists on disk but is unreadable or damaged."""
 
+def app_exe_dir():
+    """Return the directory containing CafeDesk.exe when frozen, or the repo folder in source mode."""
+    if getattr(sys,'frozen',False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+def is_portable_data_mode():
+    """Return True if a portable `CafeDeskData` folder exists beside the executable or CAFE_DESK_PORTABLE_DIR is set."""
+    override=os.environ.get('CAFE_DESK_PORTABLE_DIR','').strip()
+    if override:
+        return True
+    return (app_exe_dir()/'CafeDeskData').is_dir()
+
 def app_data_dir():
+    override=os.environ.get('CAFE_DESK_PORTABLE_DIR','').strip()
+    if override:
+        return Path(override)
+    portable_dir=app_exe_dir()/'CafeDeskData'
+    if portable_dir.is_dir():
+        return portable_dir
     if sys.platform=='win32': root=Path(os.environ.get('APPDATA') or Path.home()/'AppData'/'Roaming')
     elif sys.platform=='darwin': root=Path(os.environ.get('CAFE_DESK_MAC_DIR') or (Path.home()/'Library'/'Application Support'))
     else:
@@ -18,14 +37,26 @@ def app_data_dir():
 def settings_path(): return app_data_dir()/'settings.json'
 def logo_path(): return settings_path().parent/'business-logo.png'
 def is_internal_path(candidate, data_dir=None):
-    """Return True if candidate resolves inside the Café Desk app-data folder."""
-    base=Path(data_dir) if data_dir is not None else settings_path().parent
+    """Return True if candidate resolves inside the Café Desk app-data or per-PC license folder."""
+    roots=[Path(data_dir)] if data_dir is not None else [settings_path().parent]
     try:
-        base_res=base.resolve()
+        import license_guard
+        if data_dir is None:
+            roots.append(license_guard.host_license_dir())
+    except Exception:
+        pass
+    try:
         cand_res=Path(candidate).resolve()
     except OSError:
         return True
-    return cand_res==base_res or cand_res.is_relative_to(base_res)
+    for base in roots:
+        try:
+            base_res=base.resolve()
+        except OSError:
+            return True
+        if cand_res==base_res or cand_res.is_relative_to(base_res):
+            return True
+    return False
 def clean_name(name):
     name=' '.join(str(name).split())
     if not name: raise ValueError('Enter a business name.')
