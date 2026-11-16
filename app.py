@@ -352,8 +352,19 @@ class CafeDesk(ctk.CTk):
             'Business settings':'Change the business name, icon, logo or staff PIN. Settings are local to this computer user.',
             'AI settings':'Enter your own API key for this session. Confirm before the complete draft is sent to OpenAI.'}
         messagebox.showinfo('Quick help • '+self.current,messages.get(self.current,'Open Help & privacy for the full guide.'),parent=self)
+    def open_user_manual(self):
+        root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)); path=root/'cafe-desk-manual.html'
+        try:
+            if not path.exists(): raise FileNotFoundError('The full HTML manual is missing from this installation.')
+            if not webbrowser.open(path.as_uri()): raise RuntimeError('Could not open your browser.')
+            self.status.set('Opened full Café Desk Manual & Sales Guide in your browser')
+        except Exception as exc: messagebox.showerror('Could not open manual',str(exc),parent=self)
     def help_screen(self):
         self.heading(self.body,'Help & privacy','A quick guide for staff and customers.')
+        manual_banner=card(self.body);manual_banner.pack(fill='x',pady=(0,10))
+        label(manual_banner,'Full Printable User Manual, Menu Guide & Sales Handbook',size=15,bold=True,color=LIME).pack(anchor='w',padx=18,pady=(15,4))
+        label(manual_banner,'Open the complete formatted HTML handbook (all 17 sidebar tools, 5-minute shop setup, 30-second pitch & printable A4 handout) locally in your browser.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,10))
+        button(manual_banner,'📖 Open Full Manual & Sales Guide (HTML)  ↗',self.open_user_manual,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=330).pack(anchor='w',padx=18,pady=(0,15))
         sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Add services in Receipts. Saving a receipt PDF does not record a sale. Staff choose Record sale; staff-only Sales reports show recorded totals. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
         for title,description in sections:
             box=card(self.body);box.pack(fill='x',pady=(0,8));label(box,title,size=14,bold=True).pack(anchor='w',padx=18,pady=(14,4));label(box,description,size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,14))
@@ -423,6 +434,14 @@ class CafeDesk(ctk.CTk):
         button(mrow,'🔑 Enter / Renew 1-Year Key',lambda:license_ui.open_renewal_modal(self,on_updated=lambda _info:self.show('About & contact')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=205,height=34).pack(side='left')
         label(contact_box,'Developer & support contacts',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(contact_box,'Have feedback, feature ideas, or need help setting up Café Desk? Reach out directly or visit GitHub.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,14))
+
+        # WhatsApp row
+        wa_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);wa_card.pack(fill='x',padx=20,pady=(0,10))
+        label(wa_card,'WHATSAPP SUPPORT & LICENSING',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
+        wrow=ctk.CTkFrame(wa_card,fg_color='transparent');wrow.pack(fill='x',padx=16,pady=(0,12))
+        w_entry=entry(wrow);w_entry.insert(0,f'{services.DEVELOPER_WHATSAPP_LOCAL}  (+27 72 227 9505)');w_entry.configure(state='readonly');w_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
+        button(wrow,'💬 WhatsApp chat',lambda:open_link(services.whatsapp_chat_url(f'Hi, I am using Cafe Desk (Machine ID: {mid_val}) and need assistance.'),'WhatsApp chat'),fg_color='#25D366',hover_color='#1EBE5D',text_color='#0B1F13',width=150,height=34).pack(side='left',padx=(0,8))
+        button(wrow,'⧉ Copy number',lambda:copy_val('0722279505','WhatsApp number'),secondary=True,width=130,height=34).pack(side='left')
 
         # Email row
         email_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);email_card.pack(fill='x',padx=20,pady=(0,10))

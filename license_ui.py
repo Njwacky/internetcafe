@@ -99,16 +99,26 @@ class ActivationWindow(ctk.CTk):
             self.update_idletasks()
             messagebox.showinfo(
                 'Machine ID copied',
-                f'Copied Machine ID:\n{self.machine_id}\n\nSend this code to {services.DEVELOPER_EMAIL} to receive your 1-year activation key.',
+                f'Copied Machine ID:\n{self.machine_id}\n\nSend this code via WhatsApp ({services.DEVELOPER_WHATSAPP_LOCAL}) or email ({services.DEVELOPER_EMAIL}) to receive your 1-year activation key.',
                 parent=self,
             )
 
-        _btn(mid_row, '⧉ Copy Machine ID', copy_mid, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=165).pack(
+        def whatsapp_mid():
+            msg = f'Hi, please issue a 1-Year Cafe Desk Activation Key for Machine ID: {self.machine_id}'
+            try:
+                services.open_external_url(services.whatsapp_chat_url(msg))
+            except ValueError as exc:
+                messagebox.showerror('Could not open WhatsApp', str(exc), parent=self)
+
+        _btn(mid_row, '⧉ Copy ID', copy_mid, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=120).pack(
+            side='left', padx=(0, 8)
+        )
+        _btn(mid_row, '💬 WhatsApp ID', whatsapp_mid, fg_color='#25D366', hover_color='#1EBE5D', text_color='#0B1F13', width=155).pack(
             side='left'
         )
         _lbl(
             mid_box,
-            f'Owner / Sales contact: {services.DEVELOPER_EMAIL}',
+            f'WhatsApp: {services.DEVELOPER_WHATSAPP_LOCAL}   •   Email: {services.DEVELOPER_EMAIL}',
             size=11, color=MUTED
         ).pack(anchor='w', padx=16, pady=(0, 12))
 
