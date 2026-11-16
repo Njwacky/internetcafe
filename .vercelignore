@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+owner-keys/
+dist/
+build/
+installer-output/
+*.py
+*.pyc
+*.spec
+*.iss
+*.bat
+*.sh
+*.sql
+pyproject.toml
+requirements*.txt
