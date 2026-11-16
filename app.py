@@ -78,7 +78,7 @@ def entry(parent,placeholder='',**kw): return ctk.CTkEntry(parent,placeholder_te
 class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
-        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
+        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
         preferences=settings_store.load_settings(); self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick)
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
     def note_activity(self,event=None): self.idle.touch()
@@ -1006,31 +1006,69 @@ class CafeDesk(ctk.CTk):
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.txt',filetypes=[('Text file','*.txt')],initialfile='career-document.txt')
         if out: self.job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self))
     def settings_screen(self):
-        self.heading(self.body,'AI settings','Optional writing help, when you need a little extra polish.')
-        box=card(self.body); box.pack(fill='x'); label(box,'Connect to OpenAI',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5)); label(box,'Use your own API key and an available model. Internet and an active API account are required.\nYour provider may charge for use.',size=12,color=MUTED,justify='left').pack(anchor='w',padx=20,pady=(0,15))
-        label(box,'API key • kept in memory only for this session',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4)); ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
-        label(box,'Model',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4)); ctk.CTkEntry(box,textvariable=self.model,height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,15))
-        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy first',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to OpenAI after confirmation. Get the customer’s consent.\nDo not leave your API key accessible to customers on a shared computer.',size=12,color='#F1D1A5',justify='left').pack(anchor='w',padx=14,pady=(0,12))
+        self.heading(self.body,'AI settings','Optional writing help — supports OpenRouter (sk-or-...), OpenAI, Groq, DeepSeek & compatible APIs.')
+        box=card(self.body); box.pack(fill='x')
+        label(box,'Connect an AI provider',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
+        label(box,'Enter an OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek API key. Auto-detect automatically routes sk-or-... keys to OpenRouter and prefixes model names (e.g. openai/gpt-4o-mini).',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,14))
+
+        label(box,'Provider',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        custom_wrap=ctk.CTkFrame(box,fg_color='transparent')
+        def on_provider_change(_choice=None):
+            if self.ai_provider.get()=='Custom OpenAI-compatible URL':
+                custom_wrap.pack(fill='x',padx=20,pady=(0,12),after=prov_menu)
+            else:
+                custom_wrap.pack_forget()
+        prov_menu=ctk.CTkOptionMenu(box,values=list(services.AI_PROVIDERS.keys()),variable=self.ai_provider,command=on_provider_change,fg_color=GREEN,button_color=GREEN_HOVER,height=36,width=300)
+        prov_menu.pack(anchor='w',padx=20,pady=(0,12))
+        label(custom_wrap,'Custom Chat Completions URL (https://...)',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,4))
+        ctk.CTkEntry(custom_wrap,textvariable=self.ai_custom_url,placeholder_text='https://openrouter.ai/api/v1/chat/completions',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x')
+        on_provider_change()
+
+        label(box,'API key • kept in memory only for this session (cleared when staff locks)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
+
+        label(box,'Model (e.g. openai/gpt-4o-mini, openrouter/auto, or deepseek/deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        ctk.CTkEntry(box,textvariable=self.model,height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
+
+        def test_ai():
+            key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
+            if not key: return messagebox.showinfo('Enter API key','Paste your API key above first.',parent=self)
+            def run_check():
+                return services.call_ai_chat(key,model,'Reply with the single word CONNECTED.',provider_choice=prov,custom_url=curl,system_prompt='Reply only with the single word CONNECTED.',max_tokens=16,timeout=30)
+            def done(res):
+                reply,prov_label,resolved_model=res
+                self.status.set(f'AI connection verified • {prov_label} ({resolved_model})')
+                messagebox.showinfo('AI connection working',f'Connected to {prov_label}!\n\nModel: {resolved_model}\nTest reply: {reply[:80]}',parent=self)
+            self.job('Testing AI connection…',run_check,done)
+
+        btn_row=ctk.CTkFrame(box,fg_color='transparent'); btn_row.pack(fill='x',padx=20,pady=(0,15))
+        button(btn_row,'⚡ Test AI connection',test_ai,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=195).pack(side='left',padx=(0,10))
+        button(btn_row,'Clear key now',lambda:(self.key.set(''),self.status.set('Session AI key cleared')),secondary=True,width=130).pack(side='left')
+
+        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy first',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to your selected AI provider after confirmation. Get the customer’s consent.\nDo not leave your API key accessible to customers on a shared computer.',size=12,color='#F1D1A5',justify='left').pack(anchor='w',padx=14,pady=(0,12))
     def improve(self):
         if not self.require_staff(): return
-        text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip()
+        text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         if not key or not model: return messagebox.showinfo('Set up AI','Add an API key and model in AI settings first.',parent=self)
-        if not messagebox.askyesno('Consent and privacy','Send the complete draft to OpenAI for improvement? This can incur API charges. Please get the customer’s permission first.',parent=self): return
+        try:
+            _,prov_label=services.detect_ai_provider(key,prov,curl)
+        except ValueError as exc:
+            return messagebox.showerror('AI settings',str(exc),parent=self)
+        if not messagebox.askyesno('Consent and privacy',f'Send the complete draft to {prov_label} for improvement? This can incur API charges. Please get the customer’s permission first.',parent=self): return
         def request():
-            try:
-                r=requests.post('https://api.openai.com/v1/chat/completions',headers={'Authorization':'Bearer '+key},json={'model':model,'messages':[{'role':'system','content':'Improve this career document for clarity, grammar and professionalism. Preserve facts and placeholders. Never invent qualifications, dates, employers or achievements. Return only the improved document.'},{'role':'user','content':text}]},timeout=60)
-                if not r.ok: raise ValueError(f'AI request failed (HTTP {r.status_code}). Check the API key, model, account billing and internet connection.')
-                return r.json()['choices'][0]['message']['content']
-            except requests.RequestException: raise ValueError('Could not reach the AI provider. Check your internet connection and try again.')
-        def complete(result):
+            reply,used_prov,used_model=services.call_ai_chat(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)
+            return reply,used_prov,used_model
+        def complete(res):
+            result,used_prov,used_model=res
             current=self.current_text()
             if current!=text and not messagebox.askyesno('Draft changed','The draft changed while the request was running. Replace it with the AI result?',parent=self): return
             self.doc_text=result
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',result)
             self.refresh_doc_preview()
-            messagebox.showinfo('Draft improved','Review the AI result and check all facts before saving.',parent=self)
-        self.job('Improving draft with AI…',request,complete)
+            self.status.set(f'Draft improved via {used_prov} ({used_model})')
+            messagebox.showinfo('Draft improved',f'Improved via {used_prov} ({used_model}).\nReview the AI result and check all facts before saving.',parent=self)
+        self.job(f'Improving draft with {prov_label}…',request,complete)
 
 if __name__=='__main__':
     if license_ui.ensure_computer_licensed() is not None:

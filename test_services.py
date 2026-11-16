@@ -895,4 +895,39 @@ class DiagnosticRemediationTests(unittest.TestCase):
                 with self.assertRaises(license_guard.LicenseError):
                     license_guard._check_and_update_clock_guard(dt.date(2027,5,1))
 
+    def test_ai_provider_autodetect_openrouter_and_openai(self):
+        from unittest import mock
+        # OpenRouter sk-or-v1-... key auto-detects openrouter.ai and prefixes bare gpt-4o-mini -> openai/gpt-4o-mini
+        ep,label_name=services.detect_ai_provider('sk-or-v1-dummytestkey')
+        self.assertEqual(ep,'https://openrouter.ai/api/v1/chat/completions')
+        self.assertEqual(label_name,'OpenRouter')
+        self.assertEqual(services.normalize_ai_model('gpt-4o-mini',ep),'openai/gpt-4o-mini')
+        self.assertEqual(services.normalize_ai_model('deepseek/deepseek-chat',ep),'deepseek/deepseek-chat')
+
+        # Standard OpenAI sk-proj-... key stays on api.openai.com and keeps gpt-4o-mini
+        ep2,label2=services.detect_ai_provider('sk-proj-dummytestkey')
+        self.assertEqual(ep2,'https://api.openai.com/v1/chat/completions')
+        self.assertEqual(label2,'OpenAI')
+        self.assertEqual(services.normalize_ai_model('gpt-4o-mini',ep2),'gpt-4o-mini')
+
+        # Verify call_ai_chat sends OpenRouter headers and parses response cleanly
+        fake_resp=mock.Mock(ok=True,status_code=200)
+        fake_resp.json.return_value={'choices':[{'message':{'content':'CONNECTED'}}]}
+        with mock.patch('requests.post',return_value=fake_resp) as post_mock:
+            reply,prov,mod=services.call_ai_chat('sk-or-v1-dummytestkey','gpt-4o-mini','Hello',max_tokens=16)
+            self.assertEqual((reply,prov,mod),('CONNECTED','OpenRouter','openai/gpt-4o-mini'))
+            called_url=post_mock.call_args[0][0]
+            called_headers=post_mock.call_args[1]['headers']
+            called_json=post_mock.call_args[1]['json']
+            self.assertEqual(called_url,'https://openrouter.ai/api/v1/chat/completions')
+            self.assertIn('HTTP-Referer',called_headers)
+            self.assertEqual(called_json['model'],'openai/gpt-4o-mini')
+
+        # Verify clear provider error extraction on HTTP 401/402
+        err_resp=mock.Mock(ok=False,status_code=401)
+        err_resp.json.return_value={'error':{'message':'No auth credentials found'}}
+        with mock.patch('requests.post',return_value=err_resp):
+            with self.assertRaisesRegex(ValueError,'OpenRouter request failed.*HTTP 401.*No auth credentials found'):
+                services.call_ai_chat('sk-or-v1-dummytestkey','gpt-4o-mini','Hello')
+
 if __name__=='__main__': unittest.main()
