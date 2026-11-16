@@ -74,7 +74,7 @@ def render(text,destination,index,photo_path=None):
         if is_heading:
             count+=1;story.append(Spacer(1,8));p=Paragraph(escape(trimmed),section_style)
             if design['sections']=='number':
-                number=Paragraph(f'{count:02d}',ParagraphStyle('num',fontName='Helvetica-Bold',fontSize=9,leading=13,textColor=accent))
+                number=Paragraph(f'{count:02d}',ParagraphStyle('num',fontName=sans_bold,fontSize=9,leading=13,textColor=accent))
                 section=Table([[number,p]],colWidths=[30,w-30]);section.setStyle(TableStyle([('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),5),('LINEBELOW',(0,0),(-1,-1),.5,accent)]));section.keepWithNext=True;story.append(section)
             elif design['sections']=='band':
                 section=Table([[p]],colWidths=[w]);section.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),tint),('LINEBEFORE',(0,0),(0,0),3,accent),('LEFTPADDING',(0,0),(-1,-1),9),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]));section.keepWithNext=True;story.append(section)
@@ -88,11 +88,11 @@ def render(text,destination,index,photo_path=None):
         if design['rail']!='none':
             canvas.setFillColor(accent);canvas.rect(0 if design['rail']=='left' else page_w-5,0,5,page_h,fill=1,stroke=0)
         canvas.setStrokeColor(colors.HexColor('#d5dce2'));canvas.setLineWidth(.5);canvas.line(55,39,page_w-55,39)
-        canvas.setFont('Helvetica',8);canvas.setFillColor(colors.HexColor('#6f7a83'))
+        canvas.setFont(sans_reg,8);canvas.setFillColor(colors.HexColor('#6f7a83'))
         # Avoid copying an arbitrarily long name into the page footer.
         canvas.drawString(55,25,'CURRICULUM VITAE');canvas.drawRightString(page_w-55,25,f'Page {doc.page}')
         if doc.page>1:
-            canvas.setFillColor(accent);canvas.setFont('Helvetica-Bold',8);canvas.drawString(55,page_h-28,'CURRICULUM VITAE  |  CONTINUED')
+            canvas.setFillColor(accent);canvas.setFont(sans_bold,8);canvas.drawString(55,page_h-28,'CURRICULUM VITAE  |  CONTINUED')
         canvas.restoreState()
     SimpleDocTemplate(destination,pagesize=A4,leftMargin=55,rightMargin=55,topMargin=50,bottomMargin=55,title='Curriculum vitae').build(story,onFirstPage=page,onLaterPages=page)
 
@@ -147,15 +147,15 @@ def render_sidebar(text,destination,index,photo_path=None):
         if side_skills:
             head=Paragraph('SKILLS',sideheading);_,h=head.wrap(inner,ph);head.drawOn(c,text_x,y-h);y-=h+6
             para=Paragraph('<br/>'.join(escape(line) for line in side_skills),sidetext);_,h=para.wrap(inner,ph);para.drawOn(c,text_x,y-h)
-        c.setFont('Helvetica',8);c.setFillColor(HexColor('#74818C'));c.drawRightString((pw-gutter-20) if right else (pw-45),25,f'Page {doc.page}')
+        c.setFont(sans_reg,8);c.setFillColor(HexColor('#74818C'));c.drawRightString((pw-gutter-20) if right else (pw-45),25,f'Page {doc.page}')
         c.restoreState()
     def later_page(c,doc):
-        c.saveState();c.setStrokeColor(HexColor('#D5DCE2'));c.setLineWidth(.5);c.line(55,39,pw-55,39);c.setFont('Helvetica',8);c.setFillColor(HexColor('#74818C'));c.drawString(55,25,'CURRICULUM VITAE');c.drawRightString(pw-55,25,f'Page {doc.page}');c.setFillColor(accent);c.setFont('Helvetica-Bold',8);c.drawString(55,ph-28,'CURRICULUM VITAE  |  CONTINUED');c.restoreState()
+        c.saveState();c.setStrokeColor(HexColor('#D5DCE2'));c.setLineWidth(.5);c.line(55,39,pw-55,39);c.setFont(sans_reg,8);c.setFillColor(HexColor('#74818C'));c.drawString(55,25,'CURRICULUM VITAE');c.drawRightString(pw-55,25,f'Page {doc.page}');c.setFillColor(accent);c.setFont(sans_bold,8);c.drawString(55,ph-28,'CURRICULUM VITAE  |  CONTINUED');c.restoreState()
     doc=BaseDocTemplate(destination,pagesize=A4,title='Curriculum vitae',leftMargin=55,rightMargin=55,topMargin=48,bottomMargin=55)
     first=Frame(first_x,55,first_width,ph-105,leftPadding=0,rightPadding=0,topPadding=0,bottomPadding=0,id='first')
     later=Frame(common_left,55,common_width,ph-105,leftPadding=0,rightPadding=0,topPadding=0,bottomPadding=0,id='later')
     doc.addPageTemplates([PageTemplate(id='First',frames=[first],onPage=first_page),PageTemplate(id='Later',frames=[later],onPage=later_page)])
-    story=[NextPageTemplate('Later'),Paragraph('CURRICULUM VITAE',ParagraphStyle('side-label',fontName='Helvetica-Bold',fontSize=8,leading=11,textColor=accent,spaceAfter=8)),Paragraph(escape(name),title)]
+    story=[NextPageTemplate('Later'),Paragraph('CURRICULUM VITAE',ParagraphStyle('side-label',fontName=sans_bold,fontSize=8,leading=11,textColor=accent,spaceAfter=8)),Paragraph(escape(name),title)]
     if not use_side_contact and contact.strip():story.append(Paragraph(escape(contact),body))
     story.extend([HRFlowable(width='100%',thickness=1.1,color=accent,spaceBefore=4,spaceAfter=6)])
     for line in bodylines:

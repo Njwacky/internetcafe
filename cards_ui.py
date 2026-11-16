@@ -344,7 +344,7 @@ def show_cards(app, parent, card, label, button, entry):
         if not path:
             return
         try:
-            with Image.open(path) as im:
+            with services.open_safe_image(path) as im:
                 im.verify()
             state['photo'] = path
             photo_lbl.configure(text='Logo / image: ' + Path(path).name)
@@ -410,6 +410,17 @@ def show_cards(app, parent, card, label, button, entry):
     sheet_menu.configure(command=lambda _v: refresh_preview())
     marks_chk.configure(command=refresh_preview)
     mode_seg.configure(command=lambda _v: refresh_preview())
+
+    def sync_cards_state():
+        if not parent.winfo_exists():
+            return
+        state['kind'] = kind_var.get()
+        state['template'] = tpl_var.get()
+        state['sheet'] = sheet_var.get()
+        state['crop_marks'] = bool(marks_var.get())
+        current_fields()
+
+    app._sync_cards_hook = sync_cards_state
 
     build_fields()
     parent.after(60, refresh_preview)

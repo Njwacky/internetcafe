@@ -324,5 +324,11 @@ def show_forms(app, parent, card, label, button, entry):
     button(act_col, 'Save Form PDF', export_pdf, height=38).pack(fill='x', pady=(0, 6))
     button(act_col, 'Add to PDF merge', send_to_merge, secondary=True, height=34).pack(fill='x')
 
+    def sync_forms_state():
+        if inst_box.winfo_exists():
+            sync_state()
+
+    app._sync_forms_hook = sync_forms_state
+
     rebuild_fields_ui()
     refresh_preview()

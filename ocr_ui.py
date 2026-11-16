@@ -293,8 +293,21 @@ def show_ocr(app, parent, card, label, button):
         )
         if not paths:
             return
+        valid = []
+        skipped = []
+        for p in paths:
+            try:
+                with services.open_safe_image(p):
+                    pass
+                valid.append(p)
+            except ValueError as exc:
+                skipped.append(f'{Path(p).name}: {exc}')
+        if skipped:
+            messagebox.showwarning('Some images skipped', '\n'.join(skipped[:5]), parent=app)
+        if not valid:
+            return
         start_idx = len(app.ocr_images)
-        app.ocr_images.extend(paths)
+        app.ocr_images.extend(valid)
         # Ensure scan line starts moving when images are chosen
         state['animating'] = True
         app.ocr_scan_animating = True

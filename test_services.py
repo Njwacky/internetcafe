@@ -944,4 +944,215 @@ class DiagnosticRemediationTests(unittest.TestCase):
         for pkg in ('packaging/build-windows.bat','packaging/build-unix.sh','.github/workflows/build-usb.yml'):
             self.assertIn('cafe-desk-manual.html',(repo/pkg).read_text(encoding='utf-8'))
 
+    def test_settings_quarantine_and_restore_backup(self):
+        import settings_store as ss
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'settings.json'
+            ss.set_pin('987654',p)
+            ss.save_settings('Gauteng Copy Hub','printer',p)
+            bak=Path(d)/'settings.json.bak'
+            self.assertTrue(bak.is_file())
+            # Damage primary settings.json -> quarantined as settings.json.corrupt
+            p.write_text('<<<broken>>>',encoding='utf-8')
+            with self.assertRaises(ss.CorruptedSettingsError):
+                ss.load_settings(p,strict=True)
+            corrupt_copy=Path(d)/'settings.json.corrupt'
+            self.assertTrue(corrupt_copy.is_file())
+            self.assertEqual(corrupt_copy.read_text(encoding='utf-8'),'<<<broken>>>')
+            # Restore from verified settings.json.bak -> PIN and business name recovered
+            restored=ss.restore_backup_settings(p)
+            self.assertEqual(restored['business_name'],'Gauteng Copy Hub')
+            self.assertTrue(ss.verify_pin('987654',p))
+
+    def test_internal_path_read_boundary_blocks_pdf_image_and_ocr_exfiltration(self):
+        import settings_store as ss, pdf_preview
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            fake_data=Path(d)/'CafeDesk'
+            fake_data.mkdir()
+            fake_settings=fake_data/'settings.json'
+            fake_img=fake_data/'business-logo.png'
+            Image.new('RGB',(32,32),'red').save(fake_img)
+            fake_pdf=fake_data/'secret.pdf'
+            services.export_document_pdf('External build',Path(d)/'ext.pdf','Cover letter',0)
+            (Path(d)/'ext.pdf').replace(fake_pdf)
+            with mock.patch.object(ss,'settings_path',return_value=fake_settings):
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    services.assert_safe_user_input(fake_pdf)
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    services.pdf_page_count(fake_pdf)
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    pdf_preview.render_batch(fake_pdf,0)
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    services.open_safe_image(fake_img,allow_internal=False)
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    services.run_ocr(fake_img)
+                # Internal allow_internal=True for sidebar custom logo works cleanly
+                with services.open_safe_image(fake_img,allow_internal=True) as opened:
+                    self.assertEqual(opened.size,(32,32))
+
+    def test_pdf_file_size_and_dimension_bounds_enforced(self):
+        import pdf_preview
+        from unittest import mock
+        from pypdf import PdfWriter
+        with tempfile.TemporaryDirectory() as d:
+            ok_pdf=Path(d)/'normal.pdf'
+            services.export_document_pdf('Page 1 text',ok_pdf,'Cover letter',0)
+            with mock.patch.object(services,'MAX_PDF_FILE_BYTES',10):
+                with self.assertRaisesRegex(ValueError,'PDF size limit'):
+                    services.pdf_page_count(ok_pdf)
+                with self.assertRaisesRegex(ValueError,'PDF size limit'):
+                    pdf_preview.fingerprint(ok_pdf)
+            huge_page_pdf=Path(d)/'huge_dim.pdf'
+            w=PdfWriter()
+            w.add_blank_page(width=20000,height=20000)
+            with open(huge_page_pdf,'wb') as fh:
+                w.write(fh)
+            with self.assertRaisesRegex(ValueError,'invalid or oversized dimensions'):
+                services.pdf_page_count(huge_page_pdf)
+            with self.assertRaisesRegex(ValueError,'Invalid PDF page dimensions'):
+                pdf_preview.render_batch(huge_page_pdf,0)
+
+    def test_bundled_dejavu_fonts_and_no_raw_helvetica_in_renderers(self):
+        import pdf_fonts
+        repo=Path(__file__).resolve().parent
+        fonts_dir=repo/'assets'/'fonts'
+        for fname in ('DejaVuSans.ttf','DejaVuSans-Bold.ttf','DejaVuSerif.ttf','DejaVuSerif-Bold.ttf','LICENSE-DejaVu.txt'):
+            self.assertTrue((fonts_dir/fname).is_file(),f'Missing bundled font file {fname}')
+        reg,bold=pdf_fonts.font_pair('Helvetica')
+        sreg,sbold=pdf_fonts.font_pair('Times-Roman')
+        self.assertNotIn(reg,('Helvetica','Times-Roman'))
+        self.assertNotIn(bold,('Helvetica-Bold','Times-Bold'))
+        self.assertNotIn(sreg,('Helvetica','Times-Roman'))
+        self.assertNotIn(sbold,('Helvetica-Bold','Times-Bold'))
+        # Render multilingual glyphs across CV, Business Card, and Form PDFs
+        with tempfile.TemporaryDirectory() as d:
+            cv_out=Path(d)/'intl_cv.pdf'
+            cv_text='Sipho Ndlovu — Zoë Šimunović — Български — Ελληνικά\nsipho@example.co.za | R 250 / €100\n\nPROFESSIONAL PROFILE\nExperienced administrator in Benoni & Zürich.'
+            services.export_document_pdf(cv_text,cv_out,'Résumé / CV',4)
+            extracted=PdfReader(str(cv_out)).pages[0].extract_text()
+            for token in ('Šimunović','Ελληνικά','Zürich'):
+                self.assertIn(token,extracted)
+            import cards_renderer, forms_renderer
+            card_out=Path(d)/'intl_card.pdf'
+            cfields=cards_renderer.default_fields('Business card')
+            cfields['name']='Zoë Šimunović — Ελληνικά'
+            services.export_card_pdf(card_out,'Business card',0,cfields)
+            self.assertIn('Šimunović',PdfReader(str(card_out)).pages[0].extract_text())
+            form_out=Path(d)/'intl_form.pdf'
+            fspec=forms_renderer.default_form_spec('General Application Form',org_name='Café Zürich — Šimunović')
+            services.export_form_pdf(fspec,form_out)
+            self.assertIn('Zürich',PdfReader(str(form_out)).pages[0].extract_text())
+
+    def test_sales_void_audit_trail_backup_corruption_and_fullwidth_csv(self):
+        import sales_store as st
+        from decimal import Decimal
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/'sales.sqlite3'
+            st.record_sale('ref-1','Desk','R',[{'name':'CV Print','price':'15.00','qty':2}],'2026-11-15T10:00:00+02:00',path=db)
+            st.record_sale('ref-2','Desk','R',[{'name':'Scan','price':'5.00','qty':1}],'2026-11-15T10:05:00+02:00',path=db)
+            rep1=st.report('2026-11-15','2026-11-15',path=db)
+            self.assertEqual(len(rep1['rows']),2)
+            self.assertEqual(rep1['voided_count'],0)
+            self.assertEqual([(t['currency'],t['count'],f"{Decimal(t['cents'])/100:.2f}") for t in rep1['totals']],[('R',2,'35.00')])
+
+            # Void ref-1 with audit reason -> preserved in history, excluded from net active total
+            self.assertTrue(st.void_sale('ref-1','Duplicate click by staff',path=db))
+            self.assertFalse(st.void_sale('ref-1','Second void',path=db))
+            rep2=st.report('2026-11-15','2026-11-15',path=db)
+            self.assertEqual(len(rep2['rows']),2)
+            self.assertEqual(rep2['voided_count'],1)
+            voided_row=next(r for r in rep2['rows'] if r['sale_id']=='ref-1')
+            self.assertIsNotNone(voided_row['voided_at'])
+            self.assertEqual(voided_row['void_reason'],'Duplicate click by staff')
+            self.assertEqual([(t['currency'],t['count'],f"{Decimal(t['cents'])/100:.2f}") for t in rep2['totals']],[('R',1,'5.00')])
+
+            # CSV export includes Status/Void reason columns and blocks fullwidth Unicode formula prefixes
+            csv_file=Path(d)/'report.csv'
+            st.export_csv('2026-11-15','2026-11-15',csv_file,path=db)
+            csv_text=csv_file.read_text(encoding='utf-8-sig')
+            self.assertIn('Status',csv_text)
+            self.assertIn('VOIDED',csv_text)
+            self.assertIn('Duplicate click by staff',csv_text)
+            for fw in ('\uff1d1+1','\uff0bCMD','\uff0d2','\uff20SUM','\u22125'):
+                self.assertTrue(st.sanitize_csv_cell(fw).startswith("'"),f'Fullwidth prefix not escaped: {fw!r}')
+
+            # Online SQLite backup creates verified standalone copy
+            bak_db=Path(d)/'backup_sales.sqlite3'
+            st.backup_database(bak_db,path=db)
+            self.assertTrue(bak_db.is_file())
+            b_rep=st.report('2026-11-15','2026-11-15',path=bak_db)
+            self.assertEqual(len(b_rep['rows']),2)
+            self.assertEqual([(t['currency'],t['count'],f"{Decimal(t['cents'])/100:.2f}") for t in b_rep['totals']],[('R',1,'5.00')])
+
+            # Corrupt SQLite file -> quarantined and raises SalesStoreError cleanly
+            bad_db=Path(d)/'corrupt.sqlite3'
+            bad_db.write_bytes(b'NOT A SQLITE FILE AT ALL' * 8)
+            with self.assertRaises(st.SalesStoreError):
+                st.report('2026-11-15','2026-11-15',path=bad_db)
+            self.assertTrue((Path(d)/'corrupt.sqlite3.corrupt').is_file())
+
+    def test_free_layout_append_preserves_existing_picture_positions(self):
+        import collage
+        existing=[
+            {'path':'a.png','page':0,'x':0.12,'y':0.18,'w':0.25,'h':0.30,'rotation':90,'crop':[0.1,0.1,0.9,0.9]},
+            {'path':'b.png','page':0,'x':0.55,'y':0.42,'w':0.22,'h':0.22,'rotation':0,'crop':[0,0,1,1]},
+        ]
+        combined=collage.free_layout_append(existing,['c.png','d.png'])
+        self.assertEqual(len(combined),4)
+        # First two items retain exact free-form coordinates, sizes, rotations, and crops
+        self.assertEqual(combined[0],existing[0])
+        self.assertEqual(combined[1],existing[1])
+        for added in combined[2:]:
+            self.assertGreaterEqual(added['x'],0.0)
+            self.assertGreaterEqual(added['y'],0.0)
+            self.assertLessEqual(added['x']+added['w'],1.00001)
+            self.assertLessEqual(added['y']+added['h'],1.00001)
+
+    def test_pyproject_requires_python_311_and_simulation_banners_present(self):
+        import tomllib
+        repo=Path(__file__).resolve().parent
+        pyproj=tomllib.loads((repo/'pyproject.toml').read_text(encoding='utf-8'))
+        self.assertEqual(pyproj['project']['requires-python'],'>=3.11')
+        for sim_html in ('desktop-app-preview.html','cv-design-gallery.html','page-selection-preview.html','photos-preview.html','workspace-preview.html'):
+            content=(repo/sim_html).read_text(encoding='utf-8')
+            self.assertTrue('SIMULATION' in content or 'STATIC SAMPLE GALLERY' in content, f'Missing simulation banner in {sim_html}')
+
+    def test_project_save_blocks_internal_asset_exfiltration_and_overwrite(self):
+        import os, settings_store, projects
+        from PIL import Image
+        from templates import CATEGORIES, CV_NAMES, LABELS
+        with tempfile.TemporaryDirectory() as d:
+            internal_dir=Path(d)/'appdata'
+            internal_dir.mkdir(parents=True)
+            old_env=os.environ.get('CAFE_DESK_PORTABLE_DIR')
+            os.environ['CAFE_DESK_PORTABLE_DIR']=str(internal_dir)
+            try:
+                internal_logo=internal_dir/'custom-logo.png'
+                Image.new('RGB',(32,32),(40,80,120)).save(internal_logo)
+                data={
+                    'category':CATEGORIES[0],
+                    'template':CV_NAMES[0],
+                    'fields':{k:'' for k in LABELS},
+                    'draft':'Sample CV text',
+                    'photo':str(internal_logo),
+                }
+                # Public save cannot read an asset inside the internal app-data folder
+                with self.assertRaises(ValueError):
+                    projects.save('career',data,str(Path(d)/'out.cafeproject'),allow_internal=False)
+                # Public save cannot overwrite a file inside the internal app-data folder
+                ext_photo=Path(d)/'user-photo.png'
+                Image.new('RGB',(32,32),(90,90,90)).save(ext_photo)
+                data['photo']=str(ext_photo)
+                with self.assertRaises(ValueError):
+                    projects.save('career',data,str(internal_dir/'settings.json'),allow_internal=False)
+                # Staff recovery save (allow_internal=True) still works inside recovery/
+                rec_file=internal_dir/'recovery'/'career.cafeproject'
+                rec_file.parent.mkdir(parents=True,exist_ok=True)
+                projects.save('career',data,str(rec_file),allow_internal=True)
+                self.assertTrue(rec_file.is_file())
+            finally:
+                if old_env is None: os.environ.pop('CAFE_DESK_PORTABLE_DIR',None)
+                else: os.environ['CAFE_DESK_PORTABLE_DIR']=old_env
+
 if __name__=='__main__': unittest.main()

@@ -59,6 +59,32 @@ def rotate_crop(crop):
     l,t,r,b=validate_crop(crop)
     return [1-b,l,1-t,r]
 
+def free_layout_append(existing_items,new_paths):
+    """Append `new_paths` into `Free layout` without resetting existing items' custom positions or sizes."""
+    out=[{**dict(it),'crop':list(it.get('crop',[0,0,1,1]))} for it in existing_items]
+    start_page=max((it['page'] for it in out),default=0)
+    slots=layout([{'path':p} if not isinstance(p,dict) else p for p in new_paths],'Free layout')
+    for idx,slot in enumerate(slots):
+        # Cascade slightly or place on next page if page is crowded
+        same_page=[x for x in out if x['page']==start_page]
+        if len(same_page)>=9:
+            start_page+=1
+            same_page=[]
+        slot_pos=layout([slot],'Free layout')[0]
+        # Pick the grid cell matching len(same_page) so newly added photos never overlap by default
+        cell=layout([slot]*(len(same_page)+1),'Free layout')[-1]
+        out.append({
+            'path':slot['path'],
+            'page':start_page,
+            'x':cell['x'],
+            'y':cell['y'],
+            'w':cell['w'],
+            'h':cell['h'],
+            'rotation':slot.get('rotation',0),
+            'crop':list(slot.get('crop',[0,0,1,1])),
+        })
+    return out
+
 def resize_frame(item,width_mm,height_mm):
     """Set one A4 frame's dimensions; source photo and other frames are untouched."""
     import math

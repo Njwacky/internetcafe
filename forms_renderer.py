@@ -6,6 +6,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 import pdf_fonts
+import services
 
 FORM_TEMPLATES = {
     'General Application Form': {
@@ -172,6 +173,7 @@ def _safe_acro_name(prefix, idx):
 
 def render_form_pdf(spec, destination):
     """Render an A4 printable (and optionally AcroForm interactive fillable) PDF to `destination`."""
+    services.assert_safe_user_output(destination)
     data = validate_form_spec(spec)
     reg_font, bold_font = pdf_fonts.font_pair('Helvetica')
     pw, ph = A4

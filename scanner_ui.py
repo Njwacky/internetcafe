@@ -52,7 +52,7 @@ def show_scanner(app,parent,card,label,button):
         sel=listing.curselection()
         if not sel:return
         try:
-            with Image.open(app.scanned_pages[sel[0]]) as image:
+            with services.open_safe_image(app.scanned_pages[sel[0]]) as image:
                 image=ImageOps.exif_transpose(image).convert('RGB');image.thumbnail((180,220));photo=ctk.CTkImage(light_image=image,dark_image=image,size=image.size)
             preview.configure(text='',image=photo);preview.image=photo
         except Exception:preview.configure(text='Preview unavailable',image=None);preview.image=None
