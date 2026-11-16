@@ -409,8 +409,12 @@ def receipt_text(business,currency,items,customer='',timestamp=None,reference=No
     result+=['',f'TOTAL: {currency}{total:.2f}','','Simple receipt • tax not calculated • payment status not tracked']
     return '\n'.join(result)
 
+GOOGLE_AI_STUDIO_KEYS_URL='https://aistudio.google.com/api-keys'
+GOOGLE_GEMINI_OPENAI_URL='https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+
 AI_PROVIDERS={
     'Auto-detect from API key':'',
+    'Google Gemini (aistudio.google.com)':'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     'OpenRouter (openrouter.ai)':'https://openrouter.ai/api/v1/chat/completions',
     'OpenAI (api.openai.com)':'https://api.openai.com/v1/chat/completions',
     'Groq (api.groq.com)':'https://api.groq.com/openai/v1/chat/completions',
@@ -419,6 +423,7 @@ AI_PROVIDERS={
 }
 
 AI_DEFAULT_MODELS={
+    'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions':'gemini-2.5-flash',
     'https://openrouter.ai/api/v1/chat/completions':'openai/gpt-4o-mini',
     'https://api.openai.com/v1/chat/completions':'gpt-4o-mini',
     'https://api.groq.com/openai/v1/chat/completions':'llama-3.3-70b-versatile',
@@ -441,6 +446,8 @@ def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API ke
         label_name=choice.split(' (')[0]
         return mapped,label_name
     # Auto-detect by key prefix
+    if key.startswith('AIza'):
+        return GOOGLE_GEMINI_OPENAI_URL,'Google Gemini'
     if key.startswith('sk-or-'):
         return 'https://openrouter.ai/api/v1/chat/completions','OpenRouter'
     if key.startswith('gsk_'):
@@ -448,10 +455,19 @@ def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API ke
     return 'https://api.openai.com/v1/chat/completions','OpenAI'
 
 def normalize_ai_model(model:str, endpoint_url:str)->str:
-    """Adjust bare model names when routed to OpenRouter (e.g. `gpt-4o-mini` -> `openai/gpt-4o-mini`)."""
+    """Adjust model names to match the resolved provider (Gemini, OpenRouter, Groq, DeepSeek, OpenAI)."""
     m=(model or '').strip()
     if not m:
         return AI_DEFAULT_MODELS.get(endpoint_url,'gpt-4o-mini')
+    if 'generativelanguage.googleapis.com' in endpoint_url:
+        if m.startswith('google/'):
+            m=m.split('/',1)[1]
+        if m.startswith('models/'):
+            m=m.split('/',1)[1]
+        # If user left the default OpenAI/Groq/DeepSeek model in the box, auto-map to Gemini
+        if not m.startswith(('gemini-','learnlm-','gemma-')):
+            return AI_DEFAULT_MODELS[GOOGLE_GEMINI_OPENAI_URL]
+        return m
     if 'openrouter.ai' in endpoint_url and '/' not in m:
         if m.startswith(('gpt-','o1','o3','o4')):
             return 'openai/'+m
@@ -461,8 +477,22 @@ def normalize_ai_model(model:str, endpoint_url:str)->str:
             return 'google/'+m
     return m
 
+def _extract_ai_error_detail(body:object)->str:
+    """Extract a readable error message from OpenAI/OpenRouter dict or Google Gemini list-wrapped error JSON."""
+    if isinstance(body,list) and body:
+        body=body[0]
+    if isinstance(body,dict):
+        err=body.get('error')
+        if isinstance(err,dict):
+            return str(err.get('message') or err.get('status') or err.get('code') or '').strip()
+        if isinstance(err,str):
+            return err.strip()
+        if body.get('message'):
+            return str(body['message']).strip()
+    return ''
+
 def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='Auto-detect from API key', custom_url:str='', system_prompt:str|None=None, max_tokens:int|None=None, timeout:int=60)->tuple[str,str,str]:
-    """Send a chat completion request to OpenRouter / OpenAI / Groq / compatible endpoint.
+    """Send a chat completion request to Google Gemini / OpenRouter / OpenAI / Groq / DeepSeek / compatible endpoint.
 
     Returns `(reply_text, provider_label, resolved_model)`. Never logs or echoes `api_key`.
     """
@@ -506,15 +536,9 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
         body={}
 
     if not resp.ok:
-        detail=''
-        if isinstance(body,dict):
-            err=body.get('error')
-            if isinstance(err,dict):
-                detail=str(err.get('message') or err.get('code') or '').strip()
-            elif isinstance(err,str):
-                detail=err.strip()
+        detail=_extract_ai_error_detail(body)
         hint=f': {detail[:220]}' if detail else '.'
-        raise ValueError(f'{provider_label} request failed (HTTP {resp.status_code}){hint} Check the API key, model ("{resolved_model}"), and account credits.')
+        raise ValueError(f'{provider_label} request failed (HTTP {resp.status_code}){hint} Check the API key, model ("{resolved_model}"), and account quota/credits.')
 
     try:
         content=body['choices'][0]['message']['content']

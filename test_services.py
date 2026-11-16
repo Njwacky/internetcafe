@@ -934,6 +934,30 @@ class DiagnosticRemediationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'OpenRouter request failed.*HTTP 401.*No auth credentials found'):
                 services.call_ai_chat('sk-or-v1-dummytestkey','gpt-4o-mini','Hello')
 
+        # Google Gemini (AIza... from aistudio.google.com/api-keys) auto-detects Gemini endpoint and normalizes models
+        self.assertEqual(services.GOOGLE_AI_STUDIO_KEYS_URL,'https://aistudio.google.com/api-keys')
+        gem_ep,gem_label=services.detect_ai_provider('AIzaSyDummyGoogleAIStudioKey123456789')
+        self.assertEqual(gem_ep,'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions')
+        self.assertEqual(gem_label,'Google Gemini')
+        # Leaving 'gpt-4o-mini' in the model field auto-remaps to 'gemini-2.5-flash' for Gemini
+        self.assertEqual(services.normalize_ai_model('gpt-4o-mini',gem_ep),'gemini-2.5-flash')
+        self.assertEqual(services.normalize_ai_model('models/gemini-2.5-pro',gem_ep),'gemini-2.5-pro')
+        self.assertEqual(services.normalize_ai_model('google/gemini-2.0-flash',gem_ep),'gemini-2.0-flash')
+
+        with mock.patch('requests.post',return_value=fake_resp) as gem_post_mock:
+            reply_g,prov_g,mod_g=services.call_ai_chat('AIzaSyDummyGoogleAIStudioKey123456789','gpt-4o-mini','Hello',max_tokens=16)
+            self.assertEqual((reply_g,prov_g,mod_g),('CONNECTED','Google Gemini','gemini-2.5-flash'))
+            self.assertEqual(gem_post_mock.call_args[0][0],gem_ep)
+            self.assertEqual(gem_post_mock.call_args[1]['headers']['Authorization'],'Bearer AIzaSyDummyGoogleAIStudioKey123456789')
+            self.assertEqual(gem_post_mock.call_args[1]['json']['model'],'gemini-2.5-flash')
+
+        # Verify Google Gemini list-wrapped error body (`[{"error": {"message": ...}}]`) is extracted cleanly
+        gem_err=mock.Mock(ok=False,status_code=400)
+        gem_err.json.return_value=[{'error':{'code':400,'message':'API key not valid. Please pass a valid API key.','status':'INVALID_ARGUMENT'}}]
+        with mock.patch('requests.post',return_value=gem_err):
+            with self.assertRaisesRegex(ValueError,'Google Gemini request failed.*HTTP 400.*API key not valid'):
+                services.call_ai_chat('AIzaSyDummyGoogleAIStudioKey123456789','gemini-2.5-flash','Hello')
+
     def test_html_manual_bundled_and_complete(self):
         repo=Path(__file__).resolve().parent
         manual=repo/'cafe-desk-manual.html'

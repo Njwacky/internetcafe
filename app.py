@@ -410,7 +410,7 @@ class CafeDesk(ctk.CTk):
             'Sales reports':'Choose a date range to view locally recorded totals, export a CSV or save a selected sale record. Simple internal service log — payment status, cash/card drawer reconciliation and tax/VAT are NOT calculated.',
             'Price settings':'Enter each business service and price on its own line as service | price. Include units in the service name.',
             'Business settings':'Change the business name, icon, logo or staff PIN. Settings are local to this computer user.',
-            'AI settings':'Enter your session API key (OpenRouter, OpenAI, Groq, DeepSeek or custom URL). Confirm before sending any draft.\n\nShortcuts: F1 = Quick help  •  Ctrl+L = Lock staff  •  Ctrl+Shift+N = Next customer'}
+            'AI settings':'Enter your session API key — Google Gemini (AIza... from aistudio.google.com/api-keys), OpenRouter, OpenAI, Groq, DeepSeek or custom URL. Confirm before sending any draft.\n\nShortcuts: F1 = Quick help  •  Ctrl+L = Lock staff  •  Ctrl+Shift+N = Next customer'}
         messagebox.showinfo('Quick help • '+self.current,messages.get(self.current,'Open Help & privacy for the full guide.'),parent=self)
     def open_user_manual(self):
         root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)); path=root/'cafe-desk-manual.html'
@@ -1144,19 +1144,44 @@ class CafeDesk(ctk.CTk):
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.txt',filetypes=[('Text file','*.txt')],initialfile='career-document.txt')
         if out: self.job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self))
     def settings_screen(self):
-        self.heading(self.body,'AI settings','Optional writing help — supports OpenRouter (sk-or-...), OpenAI, Groq, DeepSeek & compatible APIs.')
+        self.heading(self.body,'AI settings','Optional writing help — supports Google Gemini (AI Studio), OpenRouter, OpenAI, Groq, DeepSeek & compatible APIs.')
         box=card(self.body); box.pack(fill='x')
         label(box,'Connect an AI provider',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
-        label(box,'Enter an OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek API key. Auto-detect automatically routes sk-or-... keys to OpenRouter and prefixes model names (e.g. openai/gpt-4o-mini).',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,14))
+        label(box,'Paste a Google Gemini key (AIza... from aistudio.google.com/api-keys), OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek key. Auto-detect automatically routes AIza... keys to Google Gemini (gemini-2.5-flash) and sk-or-... keys to OpenRouter.',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,12))
+
+        gem_card=ctk.CTkFrame(box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER)
+        gem_card.pack(fill='x',padx=20,pady=(0,14))
+        label(gem_card,'GOOGLE AI STUDIO — GET A GEMINI API KEY (FREE TIER AVAILABLE)',size=10,bold=True,color=LIME).pack(anchor='w',padx=14,pady=(10,3))
+        gem_row=ctk.CTkFrame(gem_card,fg_color='transparent'); gem_row.pack(fill='x',padx=14,pady=(0,10))
+        gem_url_entry=entry(gem_row); gem_url_entry.insert(0,services.GOOGLE_AI_STUDIO_KEYS_URL); gem_url_entry.configure(state='readonly'); gem_url_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
+        def open_gemini_keys():
+            try:
+                services.open_external_url(services.GOOGLE_AI_STUDIO_KEYS_URL)
+                self.status.set('Opened Google AI Studio API keys page in your browser')
+            except ValueError as exc:
+                messagebox.showerror('Could not open link',str(exc),parent=self)
+        def copy_gemini_keys():
+            self.clipboard_clear(); self.clipboard_append(services.GOOGLE_AI_STUDIO_KEYS_URL); self.update_idletasks()
+            self.status.set('Copied Google AI Studio link to clipboard')
+            messagebox.showinfo('Copied',f'Copied link:\n{services.GOOGLE_AI_STUDIO_KEYS_URL}',parent=self)
+        button(gem_row,'↗ Get Gemini API key',open_gemini_keys,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=175,height=34).pack(side='left',padx=(0,8))
+        button(gem_row,'⧉ Copy link',copy_gemini_keys,secondary=True,width=105,height=34).pack(side='left')
 
         label(box,'Provider',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         custom_wrap=ctk.CTkFrame(box,fg_color='transparent')
+        known_defaults=set(services.AI_DEFAULT_MODELS.values())|{'gpt-4o-mini','openai/gpt-4o-mini','openrouter/auto'}
         def on_provider_change(_choice=None):
-            if self.ai_provider.get()=='Custom OpenAI-compatible URL':
+            choice=self.ai_provider.get()
+            if choice=='Custom OpenAI-compatible URL':
                 custom_wrap.pack(fill='x',padx=20,pady=(0,12),after=prov_menu)
             else:
                 custom_wrap.pack_forget()
-        prov_menu=ctk.CTkOptionMenu(box,values=list(services.AI_PROVIDERS.keys()),variable=self.ai_provider,command=on_provider_change,fg_color=GREEN,button_color=GREEN_HOVER,height=36,width=300)
+            mapped_ep=services.AI_PROVIDERS.get(choice,'')
+            if mapped_ep in services.AI_DEFAULT_MODELS:
+                cur_m=self.model.get().strip()
+                if not cur_m or cur_m in known_defaults:
+                    self.model.set(services.AI_DEFAULT_MODELS[mapped_ep])
+        prov_menu=ctk.CTkOptionMenu(box,values=list(services.AI_PROVIDERS.keys()),variable=self.ai_provider,command=on_provider_change,fg_color=GREEN,button_color=GREEN_HOVER,height=36,width=330)
         prov_menu.pack(anchor='w',padx=20,pady=(0,12))
         label(custom_wrap,'Custom Chat Completions URL (https://...)',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,4))
         ctk.CTkEntry(custom_wrap,textvariable=self.ai_custom_url,placeholder_text='https://openrouter.ai/api/v1/chat/completions',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x')
@@ -1165,7 +1190,7 @@ class CafeDesk(ctk.CTk):
         label(box,'API key • kept in memory only for this session (cleared when staff locks)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
 
-        label(box,'Model (e.g. openai/gpt-4o-mini, openrouter/auto, or deepseek/deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        label(box,'Model (e.g. gemini-2.5-flash, gemini-2.5-pro, gpt-4o-mini, openrouter/auto, deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         ctk.CTkEntry(box,textvariable=self.model,height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
 
         def test_ai():
