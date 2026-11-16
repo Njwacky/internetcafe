@@ -63,15 +63,24 @@ def report(start,end,path=None,limit=500):
         totals=conn.execute("SELECT currency,COUNT(*) AS count,COALESCE(SUM(total_cents),0) AS cents FROM sales WHERE substr(created_at,1,10) BETWEEN ? AND ? GROUP BY currency ORDER BY currency",(start,end)).fetchall()
     return {'rows':[dict(r) for r in rows],'totals':[dict(r) for r in totals]}
 
+_CSV_FORMULA_PREFIXES = ('=','+','-','@','\t','\r','\n','\v','\f')
+_CSV_STRIP_CHARS = ' \t\r\n\v\f\x00\u00a0\u200b\ufeff'
+
+def sanitize_csv_cell(value):
+    """Neutralize spreadsheet formula triggers across ASCII/Unicode leading whitespace and newlines."""
+    t = str(value).replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ')
+    stripped = t.lstrip(_CSV_STRIP_CHARS)
+    if stripped.startswith(_CSV_FORMULA_PREFIXES) or t.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + t
+    return t
+
 def export_csv(start,end,destination,path=None):
     start,end=date_range(start,end)
     services._different([path or db_path()],destination)
-    def clean(v):
-        t=str(v);return "'"+t if t.lstrip().startswith(('=','+','-','@','\t','\r')) else t
     def write(tmp):
         with closing(connect(path)) as conn,open(tmp,'w',encoding='utf-8-sig',newline='') as f:
             w=csv.writer(f);w.writerow(['Reference','Date and time','Business','Currency','Total','Services'])
             for ref,when,business,currency,total,payload in conn.execute("SELECT sale_id,created_at,business,currency,total_cents,items_json FROM sales WHERE substr(created_at,1,10) BETWEEN ? AND ? ORDER BY created_at DESC",(start,end)):
                 details='; '.join(f"{x['name']} x{x['qty']} @ {x['price']}" for x in json.loads(payload))
-                w.writerow([clean(ref),clean(when),clean(business),clean(currency),format(Decimal(total)/100,'.2f'),clean(details)])
+                w.writerow([sanitize_csv_cell(ref),sanitize_csv_cell(when),sanitize_csv_cell(business),sanitize_csv_cell(currency),format(Decimal(total)/100,'.2f'),sanitize_csv_cell(details)])
     services._atomic_write(destination,write)

@@ -6,6 +6,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as pdf_canvas
+import pdf_fonts
+import services
 
 CARD_TYPES = ['Business card', 'Invitation card']
 
@@ -119,7 +121,7 @@ def _load_logo_reader(photo_path):
     p = Path(photo_path)
     if not p.is_file():
         return None
-    with Image.open(p) as src:
+    with services.open_safe_image(p) as src:
         im = ImageOps.exif_transpose(src).convert('RGBA')
         bg = Image.new('RGBA', im.size, (255, 255, 255, 255))
         flat = Image.alpha_composite(bg, im).convert('RGB')
@@ -149,9 +151,8 @@ def _draw_business_card(c, x, y, w, h, design, data, logo_reader):
     bg = colors.HexColor(design['bg'])
     ink = colors.HexColor(design['ink'])
     muted = colors.HexColor(design['muted'])
-    reg = 'Times-Roman' if design['font'] == 'Times' else 'Helvetica'
-    bold = 'Times-Bold' if design['font'] == 'Times' else 'Helvetica-Bold'
-    italic = 'Times-Italic' if design['font'] == 'Times' else 'Helvetica-Oblique'
+    reg, bold = pdf_fonts.font_pair(design['font'])
+    italic = reg
     style = design['style']
 
     name = _clean(data.get('name'), 'Your Name')
@@ -417,9 +418,8 @@ def _draw_invitation_card(c, x, y, w, h, design, data, logo_reader):
     bg = colors.HexColor(design['bg'])
     ink = colors.HexColor(design['ink'])
     muted = colors.HexColor(design['muted'])
-    reg = 'Times-Roman' if design['font'] == 'Times' else 'Helvetica'
-    bold = 'Times-Bold' if design['font'] == 'Times' else 'Helvetica-Bold'
-    italic = 'Times-Italic' if design['font'] == 'Times' else 'Helvetica-Oblique'
+    reg, bold = pdf_fonts.font_pair(design['font'])
+    italic = reg
     style = design['style']
     portrait = h > w
 

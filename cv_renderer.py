@@ -7,6 +7,8 @@ from reportlab.lib.enums import TA_LEFT,TA_CENTER,TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Image as PDFImage,HRFlowable,Table,TableStyle
+import pdf_fonts
+import services
 
 # Design decisions vary typography, header, section treatment and page accents.
 DESIGNS=[
@@ -27,7 +29,8 @@ def render(text,destination,index,photo_path=None):
     if index>=10: return render_sidebar(text,destination,min(index,12),photo_path)
     if not text.strip(): raise ValueError('Create or write a CV first.')
     design=DESIGNS[max(0,min(9,index))]; accent=colors.HexColor(design['accent']); dark=colors.HexColor('#24303A'); tint=colors.Color(.94,.96,.97)
-    regular='Times-Roman' if design['font']=='Times' else 'Helvetica'; bold='Times-Bold' if design['font']=='Times' else 'Helvetica-Bold'
+    regular,bold=pdf_fonts.font_pair(design['font'])
+    sans_reg,sans_bold=pdf_fonts.font_pair('Helvetica')
     cvlines=text.splitlines(); name=cvlines[0].strip() if cvlines else ''; contact=cvlines[1].strip() if len(cvlines)>1 else ''; bodylines=cvlines[2:]
     w=A4[0]-110; band=design['header']=='band'; centered=design['header']=='center'
     heading_color=colors.white if band else accent; contact_color=colors.HexColor('#E4EBF2') if band else colors.HexColor('#5F6D78')
@@ -35,10 +38,10 @@ def render(text,destination,index,photo_path=None):
     contact_style=ParagraphStyle('cv-contact',fontName=regular,fontSize=9.5,leading=13,textColor=contact_color,alignment=TA_CENTER if centered else TA_LEFT,spaceAfter=0,splitLongWords=1)
     body_style=ParagraphStyle('cv-body',fontName=regular,fontSize=10.5,leading=15.7,textColor=dark,spaceAfter=4,splitLongWords=1,allowWidows=0,allowOrphans=0)
     section_style=ParagraphStyle('cv-section',fontName=bold,fontSize=10,leading=14,textColor=accent,spaceBefore=0,spaceAfter=0,splitLongWords=1)
-    small_style=ParagraphStyle('cv-label',fontName='Helvetica-Bold',fontSize=8,leading=11,textColor=contact_color,spaceAfter=7)
+    small_style=ParagraphStyle('cv-label',fontName=sans_bold,fontSize=8,leading=11,textColor=contact_color,spaceAfter=7)
     photo=None
     if photo_path:
-        with Image.open(photo_path) as src:
+        with services.open_safe_image(photo_path) as src:
             image=ImageOps.fit(ImageOps.exif_transpose(src).convert('RGB'),(360,360),method=Image.Resampling.LANCZOS); buf=io.BytesIO();image.save(buf,format='PNG');buf.seek(0)
         photo=PDFImage(buf,width=64,height=64)
     story=[]
@@ -120,17 +123,18 @@ def render_sidebar(text,destination,index,photo_path=None):
     gutter=185; margin=45; first_x=margin if right else gutter+24; first_width=pw-gutter-margin-24
     common_left=55; common_width=pw-110
     fs=9.2 if compact else 10.1; leading=12.3 if compact else 15
-    body=ParagraphStyle('sidebody',fontName='Helvetica',fontSize=fs,leading=leading,textColor=HexColor('#26323C'),spaceAfter=2 if compact else 4,splitLongWords=1,allowOrphans=0,allowWidows=0)
-    title=ParagraphStyle('sidename',fontName='Helvetica-Bold',fontSize=20 if compact else 23,leading=25 if compact else 29,textColor=accent,spaceAfter=3,splitLongWords=1)
-    heading=ParagraphStyle('sideheading',fontName='Helvetica-Bold',fontSize=9.4,leading=13,textColor=accent,spaceBefore=7,spaceAfter=4,splitLongWords=1,keepWithNext=True)
-    sideheading=ParagraphStyle('sidebarheading',fontName='Helvetica-Bold',fontSize=8,leading=11,textColor=sidebar_ink,spaceAfter=4)
-    sidetext=ParagraphStyle('sidebartext',fontName='Helvetica',fontSize=9,leading=13,textColor=muted_ink,splitLongWords=1)
+    sans_reg,sans_bold=pdf_fonts.font_pair('Helvetica')
+    body=ParagraphStyle('sidebody',fontName=sans_reg,fontSize=fs,leading=leading,textColor=HexColor('#26323C'),spaceAfter=2 if compact else 4,splitLongWords=1,allowOrphans=0,allowWidows=0)
+    title=ParagraphStyle('sidename',fontName=sans_bold,fontSize=20 if compact else 23,leading=25 if compact else 29,textColor=accent,spaceAfter=3,splitLongWords=1)
+    heading=ParagraphStyle('sideheading',fontName=sans_bold,fontSize=9.4,leading=13,textColor=accent,spaceBefore=7,spaceAfter=4,splitLongWords=1,keepWithNext=True)
+    sideheading=ParagraphStyle('sidebarheading',fontName=sans_bold,fontSize=8,leading=11,textColor=sidebar_ink,spaceAfter=4)
+    sidetext=ParagraphStyle('sidebartext',fontName=sans_reg,fontSize=9,leading=13,textColor=muted_ink,splitLongWords=1)
     # The full contact is shown at the side if it can fit safely. Long contacts
     # remain in the flowing main story and are never truncated.
     use_side_contact=len(contact)<=300
     pic=None
     if photo_path:
-        with Image.open(photo_path) as src:
+        with services.open_safe_image(photo_path) as src:
             image=ImageOps.fit(ImageOps.exif_transpose(src).convert('RGB'),(320,320),method=Image.Resampling.LANCZOS);pic=ImageReader(image)
     def first_page(c,doc):
         c.saveState(); sx=pw-gutter if right else 0; c.setFillColor(sidebar_bg);c.rect(sx,0,gutter,ph,fill=1,stroke=0)

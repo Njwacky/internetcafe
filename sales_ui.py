@@ -9,7 +9,11 @@ import sales_store
 import services
 
 def show_reports(app,parent,card,label,button,entry):
-    app.heading(parent,'Sales reports','Recorded sales, grouped by currency. Payment status and tax are not tracked.')
+    app.heading(parent,'Sales reports','Internal service log grouped by currency. Not a fiscal POS or tax register — payment status, cash drawer reconciliation and VAT/tax are not tracked.')
+    notice=ctk.CTkFrame(parent,fg_color='#382F27',corner_radius=10)
+    notice.pack(fill='x',pady=(0,12))
+    label(notice,'Accounting & POS notice',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(10,2))
+    label(notice,'Use these totals for internal desk tracking only. Issue official tax invoices or fiscal receipts from your registered POS or accounting software where required by law.',size=11,color='#F1D1A5',wraplength=760,justify='left').pack(anchor='w',padx=14,pady=(0,10))
     box=card(parent);box.pack(fill='x',pady=(0,12));label(box,'Choose a date range',size=16,bold=True).pack(anchor='w',padx=20,pady=(17,5))
     label(box,'Dates use the computer’s local date at the time each sale was recorded.',size=12,color='#A2ACC5').pack(anchor='w',padx=20)
     row=ctk.CTkFrame(box,fg_color='transparent');row.pack(fill='x',padx=20,pady=(12,18))
