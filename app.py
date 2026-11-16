@@ -60,10 +60,11 @@ import forms_renderer
 from forms_ui import show_forms
 import license_guard
 import license_ui
+import cloud_sync
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.7.0'
+APP_BUILD='0.8.0'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -78,7 +79,7 @@ def entry(parent,placeholder='',**kw): return ctk.CTkEntry(parent,placeholder_te
 class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
-        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.ai_generation=0; self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
+        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.unlock_pdf_source=''; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.ai_generation=0; self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
         settings_corrupted=False
         try:
             preferences=settings_store.load_settings(strict=True)
@@ -139,6 +140,7 @@ class CafeDesk(ctk.CTk):
             or self.pdf_files
             or self.image_files
             or self.split_source
+            or self.unlock_pdf_source
             or card_dirty
             or form_dirty
         )
@@ -216,6 +218,139 @@ class CafeDesk(ctk.CTk):
         note=ctk.CTkFrame(box,fg_color='#273248',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20))
         label(note,'Shared workspace',size=12,bold=True,color='#B9FF70').pack(anchor='w',padx=14,pady=(11,3))
         label(note,'Business settings are staff PIN-protected. The name and icon are stored for this computer user, not on the USB.',size=12,color='#B9C7DC',justify='left',wraplength=680).pack(anchor='w',padx=14,pady=(0,12))
+
+        # --- Multi-PC Shop & Supabase Cloud Configuration Card ---
+        mp_cfg=settings_store.load_settings()
+        lic_cur=license_guard.current_license_status()
+        mp_box=card(self.body); mp_box.pack(fill='x',pady=(12,12))
+        label(mp_box,'Multi-PC Shop (2+ Computers) & Supabase Cloud Sync',size=16,bold=True,color=LIME).pack(anchor='w',padx=20,pady=(18,4))
+        label(
+            mp_box,
+            'Running 2, 4, or 10+ computers in one shop? Give each PC a clear Station Name (e.g. "Counter 1", "Desk 2") so Sales Reports show which PC recorded each sale. '
+            'Sync prices & sales across PCs offline via a Shop Pack / Shared LAN Folder, or over the internet via Supabase (customer documents are NEVER uploaded).',
+            size=12,color=MUTED,justify='left',wraplength=740,
+        ).pack(anchor='w',padx=20,pady=(0,12))
+
+        grid_mp=ctk.CTkFrame(mp_box,fg_color='transparent'); grid_mp.pack(fill='x',padx=20,pady=(0,10))
+        grid_mp.grid_columnconfigure(0,weight=1); grid_mp.grid_columnconfigure(1,weight=1)
+
+        c_left=ctk.CTkFrame(grid_mp,fg_color='transparent'); c_left.grid(row=0,column=0,sticky='ew',padx=(0,8))
+        label(c_left,'This Computer / Station Name (shown on Sales Reports)',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,4))
+        st_in=entry(c_left,'e.g. Counter PC 1 or Desk 2')
+        st_in.insert(0,mp_cfg.get('station_name') or lic_cur.get('seat_label') or '')
+        st_in.pack(fill='x')
+
+        c_right=ctk.CTkFrame(grid_mp,fg_color='transparent'); c_right.grid(row=0,column=1,sticky='ew',padx=(8,0))
+        label(c_right,'Shop ID (shared by all PCs in your shop, e.g. SHOP-SUNRISE)',size=11,bold=True,color=MUTED).pack(anchor='w',pady=(0,4))
+        sh_in=entry(c_right,'e.g. SHOP-SUNRISE')
+        sh_in.insert(0,mp_cfg.get('shop_id') or lic_cur.get('shop_id') or '')
+        sh_in.pack(fill='x')
+
+        label(mp_box,'Optional Shared LAN / USB Sync Folder (for offline multi-PC sales sync)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        lan_row=ctk.CTkFrame(mp_box,fg_color='transparent'); lan_row.pack(fill='x',padx=20,pady=(0,10))
+        lan_in=entry(lan_row,'e.g. \\\\COUNTER-PC\\CafeDeskSync or D:\\ShopSync')
+        if mp_cfg.get('lan_sync_folder'): lan_in.insert(0,mp_cfg['lan_sync_folder'])
+        lan_in.pack(side='left',fill='x',expand=True,padx=(0,8))
+        def pick_lan_dir():
+            d=filedialog.askdirectory(parent=self,title='Choose Shared LAN / USB Sync Folder')
+            if d: lan_in.delete(0,'end'); lan_in.insert(0,d)
+        button(lan_row,'Browse…',pick_lan_dir,secondary=True,width=105,height=38).pack(side='left')
+
+        label(mp_box,'Optional Supabase Project URL (for remote over-the-internet updates & cloud shop sync)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        sb_url_in=entry(mp_box,'https://your-project.supabase.co')
+        if mp_cfg.get('supabase_url'): sb_url_in.insert(0,mp_cfg['supabase_url'])
+        sb_url_in.pack(fill='x',padx=20,pady=(0,10))
+
+        label(mp_box,'Supabase Public Anon Key (PUBLIC anon key ONLY — NEVER enter service_role key here)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        sb_key_in=entry(mp_box,'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...')
+        if mp_cfg.get('supabase_anon_key'): sb_key_in.insert(0,mp_cfg['supabase_anon_key'])
+        sb_key_in.pack(fill='x',padx=20,pady=(0,14))
+
+        def save_mp():
+            try:
+                saved=settings_store.save_multi_pc_settings(
+                    st_in.get(),
+                    shop_id=sh_in.get(),
+                    lan_sync_folder=lan_in.get(),
+                    supabase_url=sb_url_in.get(),
+                    supabase_anon_key=sb_key_in.get(),
+                )
+                self.status.set(f"Saved Multi-PC station '{saved['station_name']}'" + (f" • Shop {saved['shop_id']}" if saved.get('shop_id') else ''))
+                messagebox.showinfo('Multi-PC & Cloud Settings Saved',f"Saved settings for station: {saved['station_name']}",parent=self)
+            except Exception as exc:
+                messagebox.showerror('Could not save settings',str(exc),parent=self)
+
+        def export_pack():
+            dest=filedialog.asksaveasfilename(
+                parent=self,
+                defaultextension='.cafeshop.json',
+                filetypes=[('Café Desk Shop Pack','*.cafeshop.json'),('JSON','*.json')],
+                initialfile=f"{(sh_in.get().strip() or 'shop').lower()}-prices.cafeshop.json",
+            )
+            if not dest: return
+            try:
+                save_mp()
+                settings_store.export_shop_profile_pack(dest)
+                messagebox.showinfo('Shop Price Pack Exported',f'Saved Shop Pack to:\n{dest}\n\nCopy this file to your other shop PCs and click "Import Shop Pack" there to clone all prices in 1 click.',parent=self)
+            except Exception as exc:
+                messagebox.showerror('Export failed',str(exc),parent=self)
+
+        def import_pack():
+            src=filedialog.askopenfilename(
+                parent=self,
+                title='Select .cafeshop.json Price & Profile Pack',
+                filetypes=[('Café Desk Shop Pack','*.cafeshop.json *.json'),('All files','*.*')],
+            )
+            if not src: return
+            try:
+                updated=settings_store.import_shop_profile_pack(src)
+                self.business_name.set(updated['business_name']); self.title(updated['business_name'])
+                messagebox.showinfo('Shop Pack Imported',f"Imported {len(updated.get('prices',[]))} service price(s) for '{updated['business_name']}' (this PC's Station Name & PIN were preserved).",parent=self)
+                self.show('Business settings')
+            except Exception as exc:
+                messagebox.showerror('Import failed',str(exc),parent=self)
+
+        def cloud_push_prices():
+            try:
+                saved=settings_store.save_multi_pc_settings(st_in.get(),shop_id=sh_in.get(),lan_sync_folder=lan_in.get(),supabase_url=sb_url_in.get(),supabase_anon_key=sb_key_in.get())
+            except Exception as exc:
+                return messagebox.showerror('Check settings',str(exc),parent=self)
+            if not saved.get('shop_id') or not cloud_sync.is_supabase_configured(saved):
+                return messagebox.showinfo('Setup needed','Enter a Shop ID plus your Supabase Project URL and Anon Key above first.',parent=self)
+            sec=simpledialog.askstring('Push Shop Prices to Supabase',f"Set/enter Shop Sync Passcode for {saved['shop_id']} (4+ characters):",show='•',parent=self)
+            if not sec: return
+            self.job('Uploading shop price list to Supabase…',lambda:cloud_sync.push_shop_price_profile(saved,sec),lambda _:messagebox.showinfo('Prices Pushed to Cloud',f"Uploaded {len(saved.get('prices',[]))} price(s) for {saved['shop_id']}. Other PCs in your shop can now click 'Pull Prices from Cloud'.",parent=self))
+
+        def cloud_pull_prices():
+            try:
+                saved=settings_store.save_multi_pc_settings(st_in.get(),shop_id=sh_in.get(),lan_sync_folder=lan_in.get(),supabase_url=sb_url_in.get(),supabase_anon_key=sb_key_in.get())
+            except Exception as exc:
+                return messagebox.showerror('Check settings',str(exc),parent=self)
+            if not saved.get('shop_id') or not cloud_sync.is_supabase_configured(saved):
+                return messagebox.showinfo('Setup needed','Enter your Shop ID plus Supabase URL and Anon Key above first.',parent=self)
+            sec=simpledialog.askstring('Pull Shop Prices from Supabase',f"Enter Shop Sync Passcode for {saved['shop_id']}:",show='•',parent=self)
+            if not sec: return
+            def _do_pull():
+                res=cloud_sync.pull_shop_price_profile(saved,sec)
+                lines='\n'.join(f"{p.get('name','')} | {p.get('price','0.00')}" for p in (res.get('prices') or []) if isinstance(p,dict) and p.get('name'))
+                settings_store.save_prices(str(res.get('currency') or 'R'),lines)
+                settings_store.save_name(str(res.get('business_name') or saved['business_name']))
+                return res
+            def _done_pull(res):
+                bname=str(res.get('business_name') or self.business_name.get())
+                self.business_name.set(bname); self.title(bname)
+                messagebox.showinfo('Prices Synced from Cloud',f"Pulled latest prices for '{bname}' (updated by {res.get('updated_by') or 'shop'}).",parent=self)
+                self.show('Business settings')
+            self.job('Pulling shop price list from Supabase…',_do_pull,_done_pull)
+
+        mp_btns1=ctk.CTkFrame(mp_box,fg_color='transparent'); mp_btns1.pack(fill='x',padx=20,pady=(0,8))
+        button(mp_btns1,'Save Multi-PC & Cloud Settings',save_mp,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=245).pack(side='left',padx=(0,8))
+        button(mp_btns1,'📤 Export Shop Pack (.cafeshop)',export_pack,secondary=True,width=225).pack(side='left',padx=(0,8))
+        button(mp_btns1,'📥 Import Shop Pack',import_pack,secondary=True,width=170).pack(side='left')
+
+        mp_btns2=ctk.CTkFrame(mp_box,fg_color='transparent'); mp_btns2.pack(fill='x',padx=20,pady=(0,18))
+        button(mp_btns2,'☁ Push Prices to Cloud',cloud_push_prices,secondary=True,width=195).pack(side='left',padx=(0,8))
+        button(mp_btns2,'☁ Pull Prices from Cloud',cloud_pull_prices,secondary=True,width=195).pack(side='left')
     def require_staff(self):
         if self.staff_unlocked: return True
         try:
@@ -399,7 +534,7 @@ class CafeDesk(ctk.CTk):
             'Help & privacy':'Read the quick steps below, use the direct link to download Tesseract OCR, or delete a selected customer file (staff).',
             'About & contact':'View Café Desk version details, developer contact email, and GitHub links — click to open or copy.',
             'Price list':'Search the read-only price list. Staff add prices and units in PIN-protected Price settings.',
-            'PDF tools':'Add PDFs, arrange them, then merge and save. You can also extract pages or split each page.',
+            'PDF tools':'Add PDFs, arrange them, then merge and save. Extract or split pages, or unlock password-protected PDFs (paid Machine-ID add-on with owner approval).',
             'Bluetooth files':'On Windows, pair the phone in Bluetooth settings, open the Windows Bluetooth transfer window, and choose Receive files. After saving, select the file to use it in Café Desk.' ,
             'Scan & images':'On Windows, find and select a WIA scanner, then scan each page in the app and save a PDF. Preview selected images and recognise English text with OCR (direct Tesseract download link is in Help & privacy).',
             'A4 picture sheets':'Add images, choose a layout, move and resize in Free layout, then save a PDF or project. Print PDFs at actual size.',
@@ -485,6 +620,96 @@ class CafeDesk(ctk.CTk):
             messagebox.showinfo('Copied',f'{desc} copied to clipboard:\n{val}',parent=self)
 
         contact_box=card(self.body);contact_box.pack(fill='x',pady=(0,12))
+
+        # --- Remote Over-the-Internet App Updater Card ---
+        upd_box=card(self.body); upd_box.pack(fill='x',pady=(0,12),before=contact_box)
+        label(upd_box,'Remote App Updates & Online Key Sync (Over the Internet)',size=16,bold=True,color=LIME).pack(anchor='w',padx=20,pady=(18,4))
+        label(
+            upd_box,
+            f'Current installed version: v{APP_BUILD}. Check for newer Café Desk releases over the internet (SHA-256 verified installer; your license, PIN, price list, and sales history stay untouched).',
+            size=12,color=MUTED,wraplength=740,justify='left',
+        ).pack(anchor='w',padx=20,pady=(0,12))
+
+        def check_updates_click():
+            cfg=settings_store.load_settings()
+            if not cloud_sync.is_supabase_configured(cfg):
+                return messagebox.showinfo(
+                    'Configure Cloud Updates',
+                    'Add your Supabase Project URL and Public Anon Key in Business Settings → Multi-PC Shop & Supabase Cloud Sync to enable 1-click over-the-internet updates.',
+                    parent=self,
+                )
+            def _run_chk():
+                return cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD)
+            def _done_chk(res):
+                if not res.get('ok'):
+                    return messagebox.showerror('Update Check Failed',str(res.get('error') or 'Could not check updates.'),parent=self)
+                if not res.get('update_available'):
+                    self.status.set(f'Up to date • Café Desk v{APP_BUILD}')
+                    return messagebox.showinfo('Up to Date',f"You already have the latest Café Desk version (v{APP_BUILD}).",parent=self)
+                notes=res.get('release_notes') or 'Bug fixes and improvements.'
+                ask_msg=(
+                    f"New version available: Café Desk v{res['latest_version']} (you have v{APP_BUILD})\n\n"
+                    f"What's new:\n{notes}\n\n"
+                    f"Download & verify the official SHA-256 signed update now?\n"
+                    f"(Your computer license, PIN, prices, and sales history are preserved.)"
+                )
+                if not messagebox.askyesno('Update Available!',ask_msg,parent=self):
+                    return
+                dl_dir=Path.home()/'Downloads'
+                if not dl_dir.is_dir(): dl_dir=Path(self.session_temp.name)
+                def _run_dl():
+                    return cloud_sync.download_and_verify_update(
+                        res['download_url'],
+                        res['sha256'],
+                        dl_dir,
+                        version_label=res['latest_version'],
+                    )
+                def _done_dl(saved_installer):
+                    self.status.set(f'Verified update downloaded: {saved_installer.name}')
+                    if sys.platform.startswith('win') and str(saved_installer).lower().endswith('.exe'):
+                        if messagebox.askyesno(
+                            'Update Verified — Launch Installer?',
+                            f'SHA-256 security verification passed!\nSaved to:\n{saved_installer}\n\nClose Café Desk and launch the v{res["latest_version"]} installer now?',
+                            parent=self,
+                        ):
+                            try:
+                                os.startfile(str(saved_installer))
+                                self.close_app()
+                            except Exception as exc:
+                                messagebox.showerror('Could not start installer',str(exc),parent=self)
+                    else:
+                        messagebox.showinfo(
+                            'Update Downloaded & Verified',
+                            f'SHA-256 checksum verified!\nSaved update package to:\n{saved_installer}',
+                            parent=self,
+                        )
+                self.job(f"Downloading & verifying Café Desk v{res['latest_version']}…",_run_dl,_done_dl)
+            self.job('Checking for remote Café Desk updates…',_run_chk,_done_chk)
+
+        def sync_keys_online_click():
+            cfg=settings_store.load_settings()
+            if not cloud_sync.is_supabase_configured(cfg):
+                return messagebox.showinfo(
+                    'Cloud Not Configured',
+                    'Add your Supabase Project URL and Public Anon Key in Business Settings first, or enter keys offline below.',
+                    parent=self,
+                )
+            def _do_k():
+                return cloud_sync.sync_machine_entitlements_from_cloud(cfg)
+            def _done_k(res):
+                act=res.get('activated') or []
+                rev=res.get('revoked') or []
+                msg_lines=[]
+                if act: msg_lines.append('Activated / refreshed:\n• ' + '\n• '.join(act))
+                if rev: msg_lines.append('Remotely revoked:\n• ' + '\n• '.join(rev))
+                if not msg_lines: msg_lines.append(f"Checked Machine ID {res.get('machine_id')}: no new cloud keys waiting.")
+                messagebox.showinfo('Online Key Sync',('\n\n'.join(msg_lines)),parent=self)
+                self.show('About & contact')
+            self.job('Syncing Machine ID approvals from cloud…',_do_k,_done_k)
+
+        urow=ctk.CTkFrame(upd_box,fg_color='transparent'); urow.pack(fill='x',padx=20,pady=(0,18))
+        button(urow,'⬇ Check for App Updates',check_updates_click,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=215,height=36).pack(side='left',padx=(0,10))
+        button(urow,'☁ Sync Approved Keys Online',sync_keys_online_click,secondary=True,width=225,height=36).pack(side='left')
         lic_status=license_guard.current_license_status()
         lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12))
         lic_box.pack_forget()
@@ -494,15 +719,75 @@ class CafeDesk(ctk.CTk):
         if lic_status.get('valid'):
             days_left=lic_status.get('days_remaining',0)
             badge_color='#FFB8B0' if days_left<=30 else LIME
-            summary=f'ACTIVE  •  Licensed to: {lic_status["customer"]}  •  Expires: {lic_status["expires_at"]} ({days_left} days remaining)'
+            seat_badge=''
+            if lic_status.get('seat_no') and lic_status.get('seat_max'):
+                seat_badge=f"  •  Seat {lic_status['seat_no']} of {lic_status['seat_max']}"
+                if lic_status.get('seat_label'):
+                    seat_badge+=f" ({lic_status['seat_label']})"
+            elif lic_status.get('shop_id'):
+                seat_badge=f"  •  Shop {lic_status['shop_id']}"
+            summary=f'ACTIVE  •  Licensed to: {lic_status["customer"]}{seat_badge}  •  Expires: {lic_status["expires_at"]} ({days_left} days remaining)'
         else:
             badge_color='#FFDBA2'
             summary=f'Developer / Unactivated mode  •  {lic_status.get("reason","No per-PC license installed yet.")}'
         label(lic_box,summary,size=12,bold=True,color=badge_color,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
-        mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,16))
+        mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,10))
         m_entry=entry(mrow);m_entry.insert(0,f'Machine ID: {mid_val}');m_entry.configure(state='readonly');m_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
         button(mrow,'⧉ Copy Machine ID',lambda:copy_val(mid_val,'Machine ID'),secondary=True,width=155,height=34).pack(side='left',padx=(0,8))
         button(mrow,'🔑 Enter / Renew 1-Year Key',lambda:license_ui.open_renewal_modal(self,on_updated=lambda _info:self.show('About & contact')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=205,height=34).pack(side='left')
+
+        addon_info=license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK)
+        def view_saved_keys():
+            if not self.require_staff(): return
+            lic_path=license_guard.license_file_path()
+            add_path=license_guard.addon_license_file_path(license_guard.FEATURE_PDF_UNLOCK)
+            dlg=ctk.CTkToplevel(self); dlg.title('Saved Machine ID & Activated Keys on This PC')
+            dlg.geometry('660x430'); dlg.configure(fg_color=BG); dlg.transient(self); dlg.grab_set()
+            wrap=card(dlg); wrap.pack(fill='both',expand=True,padx=20,pady=18)
+            label(wrap,f'This Computer\'s Machine ID:  {mid_val}',size=15,bold=True,color=LIME).pack(anchor='w',padx=18,pady=(16,4))
+            label(wrap,f'Saved locally per-PC inside: {lic_path.parent}\n(Never stored inside the GitHub repo — kept private on this computer)',size=11,color=MUTED,justify='left').pack(anchor='w',padx=18,pady=(0,10))
+
+            label(wrap,'1-Year Computer Key (CDLIC1 • license.json)',size=11,bold=True,color=INK).pack(anchor='w',padx=18,pady=(2,3))
+            b_tok=lic_status.get('token') or 'No active CDLIC1 key saved on this PC.'
+            t1=ctk.CTkTextbox(wrap,height=68,corner_radius=8,border_width=1,border_color=BORDER,fg_color='#0D1320',text_color=INK,font=ctk.CTkFont(family='Consolas',size=11))
+            t1.pack(fill='x',padx=18,pady=(0,10)); t1.insert('1.0',b_tok); t1.configure(state='disabled')
+
+            label(wrap,'Paid PDF Password Remover Key (CDADD1 • addon-pdf_unlock.json)',size=11,bold=True,color=INK).pack(anchor='w',padx=18,pady=(2,3))
+            a_tok=addon_info.get('token') or 'Not activated on this PC yet.'
+            t2=ctk.CTkTextbox(wrap,height=68,corner_radius=8,border_width=1,border_color=BORDER,fg_color='#0D1320',text_color=INK,font=ctk.CTkFont(family='Consolas',size=11))
+            t2.pack(fill='x',padx=18,pady=(0,12)); t2.insert('1.0',a_tok); t2.configure(state='disabled')
+
+            brow=ctk.CTkFrame(wrap,fg_color='transparent'); brow.pack(fill='x',padx=18,pady=(0,14))
+            if lic_status.get('token'):
+                button(brow,'⧉ Copy CDLIC1 Key',lambda:copy_val(lic_status['token'],'CDLIC1 License Key'),secondary=True,width=165,height=34).pack(side='left',padx=(0,8))
+            if addon_info.get('token'):
+                button(brow,'⧉ Copy CDADD1 Key',lambda:copy_val(addon_info['token'],'CDADD1 Add-on Key'),secondary=True,width=165,height=34).pack(side='left',padx=(0,8))
+            def open_lic_dir():
+                lic_path.parent.mkdir(parents=True,exist_ok=True)
+                try:
+                    if sys.platform.startswith('win'): os.startfile(str(lic_path.parent))
+                    elif sys.platform=='darwin': subprocess.Popen(['open',str(lic_path.parent)])
+                    else: subprocess.Popen(['xdg-open',str(lic_path.parent)])
+                except Exception:
+                    messagebox.showinfo('License folder',f'Saved at:\n{lic_path.parent}',parent=dlg)
+            button(brow,'📂 Open License Folder',open_lic_dir,secondary=True,width=185,height=34).pack(side='left')
+            button(brow,'Close',dlg.destroy,secondary=True,width=85,height=34).pack(side='right')
+
+        krow=ctk.CTkFrame(lic_box,fg_color='transparent'); krow.pack(fill='x',padx=20,pady=(0,14))
+        label(krow,f'Local license folder (private per-PC, never uploaded): {license_guard.host_license_dir()}',size=11,color=MUTED).pack(side='left',fill='x',expand=True,anchor='w')
+        button(krow,'👁 Staff: View Saved Keys on This PC',view_saved_keys,secondary=True,width=255,height=32).pack(side='right')
+        addon_bar=ctk.CTkFrame(lic_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER)
+        addon_bar.pack(fill='x',padx=20,pady=(0,18))
+        label(addon_bar,'PAID ADD-ON  •  PDF PASSWORD REMOVER (LOCKED TO THIS MACHINE ID)',size=10,bold=True,color='#FFDBA2').pack(anchor='w',padx=16,pady=(12,3))
+        arow=ctk.CTkFrame(addon_bar,fg_color='transparent'); arow.pack(fill='x',padx=16,pady=(0,12))
+        if addon_info.get('valid'):
+            a_txt=f"ACTIVE  •  Approved until {addon_info['expires_at']} ({addon_info['days_remaining']} days remaining)"
+            a_col=LIME
+        else:
+            a_txt='LOCKED  •  Requires owner approval & Paid Add-on Key (CDADD1...) for this Machine ID'
+            a_col=MUTED
+        label(arow,a_txt,size=12,bold=True,color=a_col).pack(side='left',fill='x',expand=True,anchor='w')
+        button(arow,'🔑 Enter / Renew PDF Unlock Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _info:self.show('About & contact')),secondary=bool(addon_info.get('valid')),fg_color=SOFT if addon_info.get('valid') else LIME,hover_color='#40506D' if addon_info.get('valid') else '#A9EB65',text_color='#E1E8F6' if addon_info.get('valid') else '#142018',width=235,height=34).pack(side='right')
         label(contact_box,'Developer & support contacts',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(contact_box,'Have feedback, feature ideas, or need help setting up Café Desk? Reach out directly or visit GitHub.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,14))
 
@@ -763,7 +1048,7 @@ class CafeDesk(ctk.CTk):
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
         self.key.set(''); self.ai_generation+=1; self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
-        self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
+        self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.unlock_pdf_source=''; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
         self.show('Home'); self.status.set('Current workspace cleared  •  Saved files on disk were not deleted')
     def bluetooth_screen(self):
@@ -883,6 +1168,70 @@ class CafeDesk(ctk.CTk):
             PDFPagePicker(self,source,apply)
         button(controls,'Preview & select pages',preview,secondary=True,width=185).pack(side='left',padx=(0,8));button(controls,'Extract pages',lambda:self.extract(pages.get()),width=130).pack(side='left')
         button(box,'Split every page',self.split_all,secondary=True,width=140).pack(anchor='w',padx=20,pady=(0,19))
+
+        # Paid Add-on: Remove PDF password (Machine-ID owner approval required)
+        addon_st=license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK)
+        mid_now=addon_st.get('machine_id') or license_guard.get_machine_id()
+        ubox=card(self.body); ubox.pack(fill='x',pady=(0,14))
+        uhead=ctk.CTkFrame(ubox,fg_color='transparent'); uhead.pack(fill='x',padx=20,pady=(17,3))
+        label(uhead,'Remove PDF password',size=16,bold=True).pack(side='left')
+        if addon_st.get('valid'):
+            label(uhead,f"✓ PAID ADD-ON ACTIVE  •  Expires {addon_st['expires_at']} ({addon_st['days_remaining']}d left)",size=11,bold=True,color=LIME).pack(side='right')
+            label(ubox,'Choose a password-protected PDF, enter its current password if required to open it, and save a clean unlocked PDF copy (ready for printing, merging or splitting).',size=12,color=MUTED,wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,10))
+            urow1=ctk.CTkFrame(ubox,fg_color='transparent'); urow1.pack(fill='x',padx=20,pady=(0,8))
+            ufile_lbl=label(urow1,Path(self.unlock_pdf_source).name if self.unlock_pdf_source else 'No protected PDF selected',size=12,color=MUTED)
+            ufile_lbl.pack(side='left',fill='x',expand=True,anchor='w')
+            def choose_locked_pdf():
+                p=filedialog.askopenfilename(parent=self,filetypes=[('PDF document','*.pdf')])
+                if p:
+                    try: services.assert_safe_user_input(p)
+                    except ValueError as exc: return messagebox.showerror('Cannot open PDF',str(exc),parent=self)
+                    self.unlock_pdf_source=p; ufile_lbl.configure(text=Path(p).name)
+            button(urow1,'Choose protected PDF',choose_locked_pdf,secondary=True,width=170).pack(side='right')
+
+            urow2=ctk.CTkFrame(ubox,fg_color='transparent'); urow2.pack(fill='x',padx=20,pady=(0,18))
+            pwd_var=ctk.StringVar(); show_pwd=ctk.BooleanVar(value=False)
+            pwd_ent=entry(urow2,'PDF password (leave blank if only print/edit restrictions)',textvariable=pwd_var,show='•')
+            pwd_ent.pack(side='left',fill='x',expand=True,padx=(0,8))
+            def toggle_pwd(): pwd_ent.configure(show='' if show_pwd.get() else '•')
+            ctk.CTkCheckBox(urow2,text='Show',variable=show_pwd,command=toggle_pwd,width=64,fg_color=LIME,checkmark_color='#102006',text_color=MUTED).pack(side='left',padx=(0,8))
+
+            def run_unlock(add_merge=False):
+                src=self.unlock_pdf_source
+                if not src: return messagebox.showinfo('Select a PDF','Choose a password-protected PDF first.',parent=self)
+                pwd_val=pwd_var.get()
+                if add_merge:
+                    dest=str(Path(self.session_temp.name)/(Path(src).stem+'-unlocked-'+uuid.uuid4().hex[:6]+'.pdf'))
+                else:
+                    stem=Path(src).stem
+                    dest=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile=f'{stem}-unlocked.pdf')
+                    if not dest: return
+                def done(res):
+                    pages_n,was_enc=res
+                    pwd_var.set('')
+                    if add_merge:
+                        self.pdf_files.append(dest)
+                        self.show('PDF tools')
+                        messagebox.showinfo('Unlocked & added to merge',f'Removed password from {pages_n} page(s) and added the unlocked copy to Files to merge.',parent=self)
+                    else:
+                        note='Password removed!' if was_enc else 'Note: this PDF had no password encryption; saved a clean copy.'
+                        messagebox.showinfo('PDF unlocked',f'{note}\n{pages_n} page(s) saved to:\n{dest}',parent=self)
+                self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
+
+            button(urow2,'🔓 Unlock & save PDF',lambda:run_unlock(False),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=175,height=36).pack(side='left',padx=(0,8))
+            button(urow2,'＋ Unlock to merge',lambda:run_unlock(True),secondary=True,width=155,height=36).pack(side='left')
+        else:
+            label(uhead,'🔒 PAID ADD-ON  •  OWNER APPROVAL REQUIRED',size=11,bold=True,color='#FFDBA2').pack(side='right')
+            label(ubox,'Disable and strip passwords from customer PDFs (bank statements, payslips, e-statements & restricted PDFs) so they print and merge cleanly.\nThis is a paid add-on locked per computer — send this PC’s Machine ID to the owner for approval and paste your Paid Add-on Key (CDADD1...).',size=12,color=MUTED,wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,12))
+            lock_row=ctk.CTkFrame(ubox,fg_color='#131B2A',corner_radius=10,border_width=1,border_color=BORDER); lock_row.pack(fill='x',padx=20,pady=(0,18))
+            label(lock_row,f'Machine ID:  {mid_now}',size=13,bold=True,color=LIME).pack(side='left',padx=14,pady=12)
+            button(lock_row,'🔑 Activate Paid Add-on Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _i:self.show('PDF tools')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=215,height=34).pack(side='right',padx=12,pady=10)
+            def ask_owner_wa():
+                try:
+                    services.open_external_url(services.whatsapp_chat_url(f'Hi, I would like to pay for and activate the PDF Password Remover add-on for Machine ID: {mid_now}'))
+                except ValueError as exc:
+                    messagebox.showerror('Could not open WhatsApp',str(exc),parent=self)
+            button(lock_row,'💬 Request Owner Approval',ask_owner_wa,fg_color='#25D366',hover_color='#1EBE5D',text_color='#0B1F13',width=205,height=34).pack(side='right',padx=(0,8),pady=10)
     def extract(self,spec):
         src=self.split_source
         if not src: return messagebox.showinfo('Select a PDF','Choose a PDF first.',parent=self)

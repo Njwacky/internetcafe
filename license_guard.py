@@ -40,6 +40,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 TOKEN_PREFIX = 'CDLIC1'
+ADDON_TOKEN_PREFIX = 'CDADD1'
+FEATURE_PDF_UNLOCK = 'pdf_unlock'
+KNOWN_PAID_FEATURES = {FEATURE_PDF_UNLOCK}
 MACHINE_ID_SALT = b'CafeDesk-Hardware-Lock-v1'
 CLOCK_ROLLBACK_GRACE_DAYS = 2
 
@@ -106,6 +109,11 @@ def host_license_dir() -> Path:
 
 def license_file_path() -> Path:
     return host_license_dir() / 'license.json'
+
+
+def addon_license_file_path(feature: str = FEATURE_PDF_UNLOCK) -> Path:
+    safe_feat = re.sub(r'[^a-z0-9_-]', '', str(feature or '').lower()) or 'addon'
+    return host_license_dir() / f'addon-{safe_feat}.json'
 
 
 def clock_guard_path() -> Path:
@@ -330,20 +338,31 @@ def verify_license_token(
     days_left = (expiry_date - now_date).days
     customer = ' '.join(str(payload.get('cust') or 'Licensed Café').split())[:80] or 'Licensed Café'
     license_id = str(payload.get('lid') or '')[:40]
+    shop_id = re.sub(r'[^A-Za-z0-9_-]', '', str(payload.get('shop_id') or ''))[:40]
+    seat_label = ' '.join(str(payload.get('seat_label') or '').split())[:40]
+    seat_no = int(payload['seat_no']) if isinstance(payload.get('seat_no'), int) and payload['seat_no'] > 0 else None
+    seat_max = int(payload['seat_max']) if isinstance(payload.get('seat_max'), int) and payload['seat_max'] > 0 else None
+    raw_feats = payload.get('feat', [])
+    features = [str(f) for f in raw_feats if isinstance(f, str) and f in KNOWN_PAID_FEATURES] if isinstance(raw_feats, list) else []
     return {
         'valid': True,
         'machine_id': token_mid,
         'customer': customer,
+        'shop_id': shop_id,
+        'seat_no': seat_no,
+        'seat_max': seat_max,
+        'seat_label': seat_label,
         'issued_at': issued_date.isoformat(),
         'expires_at': expiry_date.isoformat(),
         'days_remaining': days_left,
         'license_id': license_id,
+        'features': features,
         'token': cleaned,
     }
 
 
 def extract_token_from_text(raw_text: str) -> str:
-    """Accept either a raw `CDLIC1...` string or a `.cafelicense` / `license.json` file body."""
+    """Accept either a raw `CDLIC1...` / `CDADD1...` string or a `.cafelicense` / JSON file body."""
     txt = (raw_text or '').strip()
     if not txt:
         raise LicenseError('Activation file or key is empty.')
@@ -354,10 +373,189 @@ def extract_token_from_text(raw_text: str) -> str:
                 return str(obj['token']).strip()
         except Exception as exc:
             raise LicenseError('Selected license file is damaged.') from exc
-    m = re.search(r'CDLIC1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', re.sub(r'\s+', '', txt))
+    m = re.search(r'(?:CDLIC1|CDADD1)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', re.sub(r'\s+', '', txt))
     if m:
         return m.group(0)
     return txt
+
+
+def verify_addon_token(
+    token: str,
+    feature: str = FEATURE_PDF_UNLOCK,
+    *,
+    expected_machine_id: str | None = None,
+    public_key_b64: str | None = None,
+    today: _dt.date | None = None,
+    enforce_clock_guard: bool = True,
+) -> dict:
+    """Verify a paid add-on token (`CDADD1.<payload>.<sig>` or `CDLIC1...` containing `feat`)."""
+    if feature not in KNOWN_PAID_FEATURES:
+        raise LicenseError(f'Unknown paid feature: {feature}')
+    cleaned = re.sub(r'\s+', '', str(token or ''))
+    if not cleaned:
+        raise LicenseError('Enter an add-on activation key.')
+
+    # Also allow a bundled base license token if the owner explicitly signed `feat: [feature]` into it
+    if cleaned.startswith(TOKEN_PREFIX + '.'):
+        info = verify_license_token(
+            cleaned,
+            expected_machine_id=expected_machine_id,
+            public_key_b64=public_key_b64,
+            today=today,
+            enforce_clock_guard=enforce_clock_guard,
+        )
+        if feature not in info.get('features', []):
+            raise LicenseError(
+                'That key is a standard Café Desk computer license and does not include PDF Password Remover approval. '
+                'Ask the owner for a Paid PDF Unlock Add-on Key (CDADD1...).'
+            )
+        return dict(info, feature=feature)
+
+    parts = cleaned.split('.')
+    if len(parts) != 3 or parts[0] != ADDON_TOKEN_PREFIX:
+        raise LicenseError('Invalid add-on key. Expected a Paid Add-on Key starting with "CDADD1.".')
+
+    payload_bytes = _b64u_decode(parts[1])
+    sig_bytes = _b64u_decode(parts[2])
+    pub_raw = _b64u_decode(public_key_b64 or configured_public_key_b64())
+    if len(pub_raw) != 32:
+        raise LicenseError('Configured owner public key is invalid.')
+
+    pub = Ed25519PublicKey.from_public_bytes(pub_raw)
+    signing_input = f'{parts[0]}.{parts[1]}'.encode('ascii')
+    try:
+        pub.verify(sig_bytes, signing_input)
+    except InvalidSignature as exc:
+        raise LicenseError('Add-on key signature is invalid or was not approved by the owner.') from exc
+
+    try:
+        payload = json.loads(payload_bytes.decode('utf-8'))
+    except Exception as exc:
+        raise LicenseError('Add-on key payload could not be read.') from exc
+    if not isinstance(payload, dict) or payload.get('v') != 1:
+        raise LicenseError('Unsupported add-on key version.')
+
+    raw_feats = payload.get('feat', [])
+    if isinstance(raw_feats, str):
+        raw_feats = [raw_feats]
+    if not isinstance(raw_feats, list) or feature not in raw_feats:
+        raise LicenseError(f'This add-on key does not grant "{feature}".')
+
+    token_mid = normalize_machine_id(payload.get('mid', ''))
+    local_mid = normalize_machine_id(expected_machine_id or get_machine_id())
+    if token_mid != local_mid:
+        raise LicenseError(
+            f'This add-on key belongs to another computer ({token_mid}). '
+            f'This computer\'s Machine ID is {local_mid}. Request owner approval for this Machine ID.'
+        )
+
+    issued_date = _parse_iso_date(payload.get('iat', ''), 'issue date')
+    expiry_date = _parse_iso_date(payload.get('exp', ''), 'expiry date')
+    if expiry_date < issued_date:
+        raise LicenseError('Add-on expiry date precedes its issue date.')
+
+    now_date = today or _today_utc()
+    if enforce_clock_guard and today is None:
+        _check_and_update_clock_guard(now_date)
+
+    if now_date < (issued_date - _dt.timedelta(days=CLOCK_ROLLBACK_GRACE_DAYS)):
+        raise LicenseError(
+            f'This computer\'s date ({now_date.isoformat()}) is earlier than the add-on issue date '
+            f'({issued_date.isoformat()}). Check Windows date & time settings.'
+        )
+    if now_date > expiry_date:
+        raise LicenseError(
+            f'Your PDF Password Remover add-on expired on {expiry_date.isoformat()}. '
+            f'Send Machine ID {local_mid} to the owner to renew.'
+        )
+
+    days_left = (expiry_date - now_date).days
+    customer = ' '.join(str(payload.get('cust') or 'Licensed Café').split())[:80] or 'Licensed Café'
+    license_id = str(payload.get('lid') or '')[:40]
+    shop_id = re.sub(r'[^A-Za-z0-9_-]', '', str(payload.get('shop_id') or ''))[:40]
+    seat_label = ' '.join(str(payload.get('seat_label') or '').split())[:40]
+    seat_no = int(payload['seat_no']) if isinstance(payload.get('seat_no'), int) and payload['seat_no'] > 0 else None
+    seat_max = int(payload['seat_max']) if isinstance(payload.get('seat_max'), int) and payload['seat_max'] > 0 else None
+    return {
+        'valid': True,
+        'feature': feature,
+        'features': [str(f) for f in raw_feats if isinstance(f, str) and f in KNOWN_PAID_FEATURES],
+        'machine_id': token_mid,
+        'customer': customer,
+        'shop_id': shop_id,
+        'seat_no': seat_no,
+        'seat_max': seat_max,
+        'seat_label': seat_label,
+        'issued_at': issued_date.isoformat(),
+        'expires_at': expiry_date.isoformat(),
+        'days_remaining': days_left,
+        'license_id': license_id,
+        'token': cleaned,
+    }
+
+
+def activate_and_save_addon(
+    raw_key_or_json: str,
+    feature: str = FEATURE_PDF_UNLOCK,
+    *,
+    public_key_b64: str | None = None,
+    today: _dt.date | None = None,
+) -> dict:
+    """Verify a paid add-on key for THIS Machine ID and save it per-PC (`addon-<feature>.json`)."""
+    token = extract_token_from_text(raw_key_or_json)
+    info = verify_addon_token(token, feature=feature, public_key_b64=public_key_b64, today=today)
+    target = addon_license_file_path(feature)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        'token': info['token'],
+        'feature': feature,
+        'customer': info['customer'],
+        'machine_id': info['machine_id'],
+        'issued_at': info['issued_at'],
+        'expires_at': info['expires_at'],
+        'license_id': info['license_id'],
+    }
+    tmp = target.with_suffix('.tmp')
+    tmp.write_text(json.dumps(record, indent=2), encoding='utf-8')
+    tmp.replace(target)
+    return info
+
+
+def current_addon_status(
+    feature: str = FEATURE_PDF_UNLOCK,
+    *,
+    public_key_b64: str | None = None,
+    today: _dt.date | None = None,
+) -> dict:
+    """Check whether `feature` is unlocked on THIS computer (ALWAYS enforced, even in source mode!)."""
+    mid = get_machine_id()
+    addon_file = addon_license_file_path(feature)
+    if addon_file.is_file():
+        try:
+            raw = addon_file.read_text(encoding='utf-8')
+            token = extract_token_from_text(raw)
+            return verify_addon_token(
+                token, feature=feature, expected_machine_id=mid, public_key_b64=public_key_b64, today=today
+            )
+        except (OSError, LicenseError) as exc:
+            return {
+                'valid': False,
+                'feature': feature,
+                'machine_id': mid,
+                'reason': str(exc),
+            }
+
+    # Also check if the active base computer license already carries explicit owner approval for `feature`
+    base = current_license_status(public_key_b64=public_key_b64, today=today)
+    if base.get('valid') and feature in base.get('features', []):
+        return dict(base, feature=feature)
+
+    return {
+        'valid': False,
+        'feature': feature,
+        'machine_id': mid,
+        'reason': 'Paid add-on locked — owner approval & add-on activation key required for this Machine ID.',
+    }
 
 
 def activate_and_save_license(raw_key_or_json: str, *, public_key_b64: str | None = None, today: _dt.date | None = None) -> dict:
@@ -369,6 +567,10 @@ def activate_and_save_license(raw_key_or_json: str, *, public_key_b64: str | Non
     record = {
         'token': info['token'],
         'customer': info['customer'],
+        'shop_id': info.get('shop_id', ''),
+        'seat_no': info.get('seat_no'),
+        'seat_max': info.get('seat_max'),
+        'seat_label': info.get('seat_label', ''),
         'machine_id': info['machine_id'],
         'issued_at': info['issued_at'],
         'expires_at': info['expires_at'],

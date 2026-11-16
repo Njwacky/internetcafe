@@ -4,7 +4,7 @@ A local-first desktop application for internet cafés, copy shops, and walk-in s
 
 ## Features
 
-- **PDFs:** merge, visually preview and select pages to extract, extract typed page ranges, and split every page. Password-protected PDFs that cannot be opened without a password are not supported. Existing split-page files are not overwritten.
+- **PDFs:** merge, visually preview and select pages to extract, extract typed page ranges, and split every page. Existing split-page files are not overwritten. Includes an optional **Paid Add-on: Remove PDF password** (`CDADD1...` key signed by the owner for that computer's `Machine ID`) to unlock and save password-free copies of customer PDFs (e.g. bank statements and payslips) once the customer supplies the open password.
 - **Images and scanning:** on Windows, find and select a WIA-compatible scanner and scan one page at a time inside the app; preview pages and save them as a single PDF. You can also launch a separate scanner app and import scans. Convert JPG, PNG, BMP and TIFF images to PDF, including multi-page TIFF.
 - **Bluetooth files (Windows):** a shortcut opens Windows Bluetooth settings and the Bluetooth File Transfer window. After receiving a file in Windows, select it to add a PDF or image to the appropriate app tool. The app does not receive files automatically.
 - **English OCR:** select one or more images, preview them inside the app with an animated scanner-line effect (plus a larger preview option), and extract editable English text using a separately installed Tesseract OCR engine. **Help & privacy** includes a clickable direct link to download Tesseract OCR. Save the result as text. OCR on PDF files is not included. Check the result carefully; OCR makes mistakes.
@@ -210,3 +210,28 @@ The phone scanner preview is a simulation only. It cannot discover or scan physi
 A compatible Bluetooth adapter, working Windows driver and a phone that supports Bluetooth file sharing are needed. Compatible Android devices can usually share files this way; iPhones generally cannot use ordinary Bluetooth file transfer to a Windows PC. Use an appropriate alternative for the phone and file type. The Bluetooth wizard and pairing are controlled by Windows, not by Café Desk. They have not been tested on a real Windows 10/11 device in this environment. On macOS/Linux, these Windows shortcuts are not available; use the operating system's sharing tools.
 
 Only accept expected files from trusted senders and use operating-system malware protection. Received files are saved by Windows, not in the app's temporary session. **Next customer** clears app file lists, but does not delete received files or remove Bluetooth pairings. Handle saved files and pairings according to your privacy policy. The phone preview is simulated and does not communicate over Bluetooth.
+
+## Multi-PC Shops (2+ Computers), Supabase Cloud & Remote Over-the-Internet Updates
+
+Café Desk works **100% offline-first** and also supports shops with **2, 4, or 10+ computers** plus optional **Supabase** cloud features so you never have to visit customer shops physically to deliver updates:
+
+1. **Batch Multi-PC Shop Licensing (`admin_keygen.py` — private owner tool, gitignored):**
+   - Issue hardware-locked keys (`Seat 1 of N`, `Seat 2 of N`, …) for all computers in one shop in a single command:
+     ```bash
+     python admin_keygen.py --machine-ids "CD-1111-2222-3333=Counter PC,CD-4444-5555-6666=Desk 2,CD-7777-8888-9999=Desk 3" \
+       --customer "Sunrise Cyber Café" --shop-id SHOP-SUNRISE --pdf-unlock-seats seat1
+     ```
+   - Saves per-seat `.cafelicense` files + a printable `<SHOP_ID>-ALL-SEATS.txt` handout inside gitignored `owner-keys/issued-files/<SHOP_ID>/`, and groups seats inside `owner-keys/issued-licenses-dashboard.html`.
+2. **Multi-PC Price List & Combined Sales Sync (Offline LAN/USB or Supabase Cloud):**
+   - In **Business settings**, name each computer (`Counter PC 1`, `Desk 2`, …) and use **Export / Import Shop Pack (`.cafeshop.json`)** or **Push / Pull Prices via Cloud** so all PCs share the exact same price list.
+   - In **Sales reports**, every sale records its **Computer / Station**, displays per-computer and combined shop totals, and merges sales across PCs with zero duplicates via **Sync Shared LAN Folder**, **Import Other PC File**, or **Sync via Supabase** (customer documents are **never** uploaded).
+3. **Supabase Setup & Remote Over-the-Internet App Updater (`supabase_schema.sql` + `cloud_sync.py`):**
+   - Paste `supabase_schema.sql` into your Supabase SQL Editor and click **Run**.
+   - On your private computer, save your Supabase URL and `service_role` key inside gitignored `owner-keys/supabase-owner.json`:
+     ```bash
+     python admin_keygen.py --setup-supabase https://YOUR-PROJECT.supabase.co YOUR_SERVICE_ROLE_KEY
+     python admin_keygen.py --sync-supabase
+     python admin_keygen.py --publish-release 0.8.1 https://YOUR-RELEASE-URL/CafeDesk-Setup.exe dist/CafeDesk-Setup.exe --release-notes "Bug fixes & faster OCR"
+     ```
+   - Customer PCs only ever store the **public** Supabase URL + `anon` key and verify an exact **SHA-256 checksum** over HTTPS before running any remote installer (preserving `%APPDATA%\CafeDesk\` licenses, PIN, prices, and sales DB).
+
