@@ -5,17 +5,29 @@ import requests
 
 
 def main():
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
     api_key = os.getenv("GROQ_API_KEY") or getpass.getpass(
         "Enter your Groq API key (input hidden): "
     )
     api_key = api_key.strip()
     if not api_key:
         raise SystemExit("No API key provided.")
+    message = input("Message to send to Groq: ").strip()
+    if not message:
+        raise SystemExit("No message provided.")
 
     try:
-        response = requests.get(
-            "https://api.groq.com/openai/v1/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": message}],
+                "max_completion_tokens": 128,
+            },
             timeout=20,
         )
     except requests.RequestException as exc:
@@ -29,13 +41,13 @@ def main():
         )
 
     try:
-        models = response.json()["data"]
+        reply = response.json()["choices"][0]["message"]["content"]
     except (ValueError, KeyError, TypeError) as exc:
-        raise SystemExit("Groq responded, but the model-list response was unexpected.") from exc
+        raise SystemExit("Groq responded, but the chat-completion response was unexpected.") from exc
 
-    print(f"Groq API key works. Groq returned {len(models)} available models.")
-    for model in models[:10]:
-        print(f"- {model['id']}")
+    if not isinstance(reply, str) or not reply.strip():
+        raise SystemExit("Groq returned an empty reply.")
+    print(f"\nGroq request succeeded ({model}):\n{reply.strip()}")
 
 
 if __name__ == "__main__":
