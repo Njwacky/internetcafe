@@ -422,3 +422,39 @@ create policy "Public can download cafedesk releases"
     using (bucket_id = 'cafedesk-releases');
 
 grant execute on function public.sync_shop_sales(text, text, jsonb, text) to anon, authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 6. OWNER WEB DASHBOARD RLS POLICIES (`owner-dashboard.html` via Supabase Auth)
+-- -----------------------------------------------------------------------------
+create or replace function public.is_cafedesk_owner()
+returns boolean
+language sql
+stable
+as $$
+    select coalesce(lower(auth.jwt() ->> 'email') = 'njwayelodlamini@gmail.com', false);
+$$;
+
+drop policy if exists "Owner full access to issued_machine_keys" on public.issued_machine_keys;
+create policy "Owner full access to issued_machine_keys"
+    on public.issued_machine_keys for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+drop policy if exists "Owner full access to activation_requests" on public.activation_requests;
+create policy "Owner full access to activation_requests"
+    on public.activation_requests for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+drop policy if exists "Owner full access to shops" on public.shops;
+create policy "Owner full access to shops"
+    on public.shops for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+drop policy if exists "Owner write access to app_releases" on public.app_releases;
+create policy "Owner write access to app_releases"
+    on public.app_releases for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+drop policy if exists "Owner upload to cafedesk-releases" on storage.objects;
+create policy "Owner upload to cafedesk-releases"
+    on storage.objects for insert to authenticated
+    with check (bucket_id = 'cafedesk-releases' and public.is_cafedesk_owner());

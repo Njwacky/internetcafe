@@ -233,5 +233,9 @@ Café Desk works **100% offline-first** and also supports shops with **2, 4, or 
      python admin_keygen.py --sync-supabase
      python admin_keygen.py --publish-release 0.8.1 https://YOUR-RELEASE-URL/CafeDesk-Setup.exe dist/CafeDesk-Setup.exe --release-notes "Bug fixes & faster OCR"
      ```
-   - Customer PCs only ever store the **public** Supabase URL + `anon` key and verify an exact **SHA-256 checksum** over HTTPS before running any remote installer (preserving `%APPDATA%\CafeDesk\` licenses, PIN, prices, and sales DB).
+    - Customer PCs only ever store the **public** Supabase URL + `anon` key and verify an exact **SHA-256 checksum** over HTTPS before running any remote installer (preserving `%APPDATA%\CafeDesk\` licenses, PIN, prices, and sales DB).
+4. **Owner Cloud Web Dashboard (`owner-dashboard.html` — Mobile & Laptop Browser):**
+   - Open `owner-dashboard.html` on your phone or laptop (or host on GitHub Pages at `https://njwacky.github.io/internetcafe/owner-dashboard.html`).
+   - Protected by Supabase Auth (`disable_signup = true`, locked strictly to your owner email) + the `owner-admin` Supabase Edge Function, which signs genuine Ed25519 `CDLIC1` / `CDADD1` keys inside Supabase's secret vault so your private signing key never touches the browser or GitHub.
+   - Issue single or Multi-PC shop keys in 1 tap, send keys straight to WhatsApp, approve pending customer requests, remotely revoke keys, and upload + SHA-256 publish new `CafeDesk-Setup.exe` updates from anywhere.
 

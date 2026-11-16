@@ -49,7 +49,7 @@ CLOCK_ROLLBACK_GRACE_DAYS = 2
 # Default embedded Ed25519 public key (32 raw bytes, URL-safe base64).
 # Run `python admin_keygen.py --init-keys` once on YOUR private laptop to generate
 # your own private/public keypair and replace this public key before selling builds!
-DEFAULT_OWNER_PUBLIC_KEY_B64 = '14W-XVzHc9Ju8X-87VLoIt8frfFWHPWvSJPsHijrz3w'
+DEFAULT_OWNER_PUBLIC_KEY_B64 = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
 
 
 class LicenseError(ValueError):
