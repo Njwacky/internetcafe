@@ -755,6 +755,16 @@ class DiagnosticRemediationTests(unittest.TestCase):
         self.assertIsNotNone(nav_items)
         self.assertEqual(nav_items[-3:],['Projects & recovery','About & contact','Help & privacy'])
         self.assertEqual(bt_text,' ')
+        # Verify Lock staff top-bar control uses padlock icon assets with empty button text
+        icons_dir=Path(__file__).resolve().parent/'assets'/'icons'
+        for icon_name in ('lock-staff.png','unlock-staff.png'):
+            p=icons_dir/icon_name
+            self.assertTrue(p.is_file(),f'Missing {icon_name}')
+            with Image.open(p) as im:
+                self.assertEqual(im.size,(36,36))
+                self.assertIsNotNone(im.getchannel('A').getbbox())
+        self.assertIn("self.lock_staff_btn=button(bar,'',self.lock_staff",src)
+        self.assertNotIn("button(bar,'Lock staff'",src)
 
     def test_usb_portable_data_dir_and_packaging_version_sync(self):
         import os,sys

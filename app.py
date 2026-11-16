@@ -139,6 +139,10 @@ class CafeDesk(ctk.CTk):
             images['bluetooth_nav_muted']=ctk.CTkImage(light_image=cropped.copy(),dark_image=cropped.copy(),size=(13,16))
         with Image.open(root / 'assets' / 'icons' / 'enlarge.png') as image:
             images['enlarge']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(16,16))
+        with Image.open(root / 'assets' / 'icons' / 'lock-staff.png') as image:
+            images['lock_staff']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(18,18))
+        with Image.open(root / 'assets' / 'icons' / 'unlock-staff.png') as image:
+            images['unlock_staff']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(18,18))
         try:
             with Image.open(settings_store.logo_path()) as image: images['custom']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
         except (OSError,ValueError): images['custom']=images['office']
@@ -207,7 +211,7 @@ class CafeDesk(ctk.CTk):
                     rem_after=settings_store.lockout_remaining()
                     if rem_after>0: self.lockout_until=time.monotonic()+rem_after
                     messagebox.showerror('Staff access','Incorrect PIN. After 5 failed attempts, staff access locks for 60 seconds.',parent=self); return False
-            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.status.set('Staff settings unlocked • lock before leaving the computer'); return True
+            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer'); return True
         except settings_store.CorruptedSettingsError as exc:
             messagebox.showerror('Settings damaged (fail-closed)',str(exc),parent=self); return False
         except (ValueError,OSError) as exc: messagebox.showerror('Staff access',str(exc),parent=self); return False
@@ -230,8 +234,12 @@ class CafeDesk(ctk.CTk):
             if new!=confirm: raise ValueError('PINs do not match.')
             settings_store.set_pin(new); messagebox.showinfo('PIN updated','Staff PIN changed.',parent=self)
         except (ValueError,OSError) as exc: messagebox.showerror('Could not update PIN',str(exc),parent=self)
+    def update_lock_button(self):
+        btn=getattr(self,'lock_staff_btn',None)
+        if btn and btn.winfo_exists():
+            btn.configure(image=self.icon_images['unlock_staff' if self.staff_unlocked else 'lock_staff'])
     def lock_staff(self):
-        self.staff_unlocked=False; self.key.set('')
+        self.staff_unlocked=False; self.key.set(''); self.update_lock_button()
         if self.current in ('Business settings','Price settings','AI settings','Sales reports'): self.show('Home')
         self.status.set('Staff access locked • session API key cleared')
     def _career_snapshot(self):
@@ -579,7 +587,9 @@ class CafeDesk(ctk.CTk):
         bar=ctk.CTkFrame(main,fg_color=BG,height=67); bar.grid(row=0,column=0,sticky='ew',padx=28); bar.grid_propagate(False)
         self.header_title=label(bar,'Home',size=20,bold=True); self.header_title.pack(side='left')
         button(bar,'Next customer',self.clear_customer,secondary=True,width=130,height=34).pack(side='right',pady=15)
-        button(bar,'Lock staff',self.lock_staff,secondary=True,width=90,height=34).pack(side='right',padx=(0,8),pady=15)
+        self.lock_staff_btn=button(bar,'',self.lock_staff,secondary=True,image=self.icon_images['lock_staff'],width=38,height=34)
+        self.lock_staff_btn.pack(side='right',padx=(0,8),pady=15)
+        self.lock_staff_btn.bind('<Enter>',lambda _e:self.status.set('Click to lock staff access & clear AI key' if self.staff_unlocked else 'Staff access is locked'))
         button(bar,'? Help',self.quick_help,secondary=True,width=75,height=34).pack(side='right',padx=(0,8),pady=15)
         ctk.CTkLabel(bar,textvariable=self.clock,text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=12,weight='bold')).pack(side='right',padx=(0,20))
         self.container=ctk.CTkFrame(main,fg_color='transparent'); self.container.grid(row=1,column=0,sticky='nsew',padx=28,pady=(0,8))
@@ -642,7 +652,7 @@ class CafeDesk(ctk.CTk):
         for widget in self.long_fields.values():
             if widget.winfo_exists(): widget.delete('1.0','end')
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
-        self.key.set(''); self.staff_unlocked=False; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
+        self.key.set(''); self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
         self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
