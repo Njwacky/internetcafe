@@ -261,3 +261,138 @@ def open_renewal_modal(parent, on_updated=None):
     )
     _btn(row, 'Load .cafelicense…', browse_file, secondary=True, width=165).pack(side='left', padx=(0, 8))
     _btn(row, 'Cancel', dlg.destroy, secondary=True, width=95).pack(side='right')
+
+
+def open_addon_modal(
+    parent,
+    feature: str = license_guard.FEATURE_PDF_UNLOCK,
+    feature_title: str = 'PDF Password Remover',
+    on_updated=None,
+):
+    """Modal to request owner approval & enter a Machine-ID-locked Paid Add-on Key (`CDADD1...`)."""
+    dlg = ctk.CTkToplevel(parent)
+    dlg.title(f'Activate Paid Add-on — {feature_title}')
+    dlg.geometry('680x500')
+    dlg.minsize(600, 460)
+    dlg.configure(fg_color=BG)
+    dlg.transient(parent)
+    dlg.grab_set()
+
+    mid = license_guard.get_machine_id()
+    box = ctk.CTkFrame(dlg, fg_color=WHITE, corner_radius=16, border_width=1, border_color=BORDER)
+    box.pack(fill='both', expand=True, padx=22, pady=20)
+
+    _lbl(box, 'PAID ADD-ON  •  OWNER APPROVAL REQUIRED PER COMPUTER', size=10, bold=True, color='#FFDBA2').pack(
+        anchor='w', padx=20, pady=(18, 3)
+    )
+    _lbl(box, f'Unlock {feature_title} on This Computer', size=19, bold=True).pack(
+        anchor='w', padx=20, pady=(0, 5)
+    )
+    _lbl(
+        box,
+        'This paid function requires owner approval and a Paid Add-on Key (CDADD1...) signed specifically '
+        'for this computer\'s Machine ID. A key from another PC will not work.',
+        size=12, color=MUTED, wraplength=600, justify='left',
+    ).pack(anchor='w', padx=20, pady=(0, 12))
+
+    # Step 1: Send Machine ID to Owner for approval & payment
+    step1 = ctk.CTkFrame(box, fg_color='#131B2A', corner_radius=12, border_width=1, border_color=BORDER)
+    step1.pack(fill='x', padx=20, pady=(0, 12))
+    _lbl(step1, 'STEP 1 — REQUEST OWNER APPROVAL WITH THIS MACHINE ID', size=10, bold=True, color=LIME).pack(
+        anchor='w', padx=14, pady=(10, 4)
+    )
+    mid_row = ctk.CTkFrame(step1, fg_color='transparent')
+    mid_row.pack(fill='x', padx=14, pady=(0, 6))
+    mid_entry = ctk.CTkEntry(
+        mid_row, height=36, corner_radius=8, border_color=BORDER, fg_color='#0D1320',
+        text_color=LIME, font=ctk.CTkFont(family='Consolas', size=15, weight='bold'),
+    )
+    mid_entry.insert(0, mid)
+    mid_entry.configure(state='readonly')
+    mid_entry.pack(side='left', fill='x', expand=True, padx=(0, 8))
+
+    def copy_mid():
+        dlg.clipboard_clear()
+        dlg.clipboard_append(mid)
+        dlg.update_idletasks()
+        messagebox.showinfo(
+            'Machine ID copied',
+            f'Copied Machine ID:\n{mid}\n\nSend this ID to the owner via WhatsApp ({services.DEVELOPER_WHATSAPP_LOCAL}) or email ({services.DEVELOPER_EMAIL}) to purchase & activate {feature_title}.',
+            parent=dlg,
+        )
+
+    def request_whatsapp():
+        msg = (
+            f'Hi, I would like to pay for and activate the {feature_title} add-on on my computer. '
+            f'My Machine ID is: {mid}'
+        )
+        try:
+            services.open_external_url(services.whatsapp_chat_url(msg))
+        except ValueError as exc:
+            messagebox.showerror('Could not open WhatsApp', str(exc), parent=dlg)
+
+    _btn(mid_row, '⧉ Copy ID', copy_mid, secondary=True, width=110, height=36).pack(side='left', padx=(0, 8))
+    _btn(
+        mid_row, '💬 Request Approval (WhatsApp)', request_whatsapp,
+        fg_color='#25D366', hover_color='#1EBE5D', text_color='#0B1F13', width=225, height=36,
+    ).pack(side='left')
+    _lbl(
+        step1,
+        f'Owner WhatsApp: {services.DEVELOPER_WHATSAPP_LOCAL}   •   Email: {services.DEVELOPER_EMAIL}',
+        size=11, color=MUTED,
+    ).pack(anchor='w', padx=14, pady=(0, 10))
+
+    # Step 2: Enter Paid Add-on Key
+    step2 = ctk.CTkFrame(box, fg_color='#131B2A', corner_radius=12, border_width=1, border_color=BORDER)
+    step2.pack(fill='x', padx=20, pady=(0, 14))
+    _lbl(step2, 'STEP 2 — PASTE YOUR APPROVED ADD-ON KEY (CDADD1...)', size=10, bold=True, color=LIME).pack(
+        anchor='w', padx=14, pady=(10, 4)
+    )
+    txt = ctk.CTkTextbox(
+        step2, height=82, corner_radius=8, border_width=1, border_color=BORDER,
+        fg_color='#0D1320', text_color=INK, font=ctk.CTkFont(family='Consolas', size=12),
+    )
+    txt.pack(fill='x', padx=14, pady=(0, 12))
+
+    row = ctk.CTkFrame(box, fg_color='transparent')
+    row.pack(fill='x', padx=20, pady=(0, 14))
+
+    def apply_addon():
+        raw = txt.get('1.0', 'end').strip()
+        try:
+            info = license_guard.activate_and_save_addon(raw, feature=feature)
+        except license_guard.LicenseError as exc:
+            messagebox.showerror('Add-on activation failed', str(exc), parent=dlg)
+            return
+        messagebox.showinfo(
+            f'{feature_title} activated!',
+            f'{feature_title} is now unlocked on this computer:\n'
+            f'• Customer: {info["customer"]}\n'
+            f'• Machine ID: {info["machine_id"]}\n'
+            f'• Valid until: {info["expires_at"]} ({info["days_remaining"]} days remaining)',
+            parent=dlg,
+        )
+        dlg.destroy()
+        if callable(on_updated):
+            on_updated(info)
+
+    def browse_addon():
+        chosen = filedialog.askopenfilename(
+            parent=dlg,
+            title='Select .cafeaddon or .cafelicense file',
+            filetypes=[('Café Desk Add-on Key', '*.cafeaddon *.cafelicense *.txt *.json'), ('All files', '*.*')],
+        )
+        if not chosen:
+            return
+        try:
+            txt.delete('1.0', 'end')
+            txt.insert('1.0', Path(chosen).read_text(encoding='utf-8').strip())
+            apply_addon()
+        except OSError as exc:
+            messagebox.showerror('Could not read file', str(exc), parent=dlg)
+
+    _btn(row, '✓ Activate Add-on', apply_addon, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=180).pack(
+        side='left', padx=(0, 8)
+    )
+    _btn(row, 'Load key file…', browse_addon, secondary=True, width=145).pack(side='left', padx=(0, 8))
+    _btn(row, 'Cancel', dlg.destroy, secondary=True, width=95).pack(side='right')

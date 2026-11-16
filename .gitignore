@@ -12,5 +12,9 @@ Thumbs.db
 owner-keys/
 *.private.key
 *.private.pem
+*.cafelicense
+*.cafeaddon
 issued-licenses.jsonl
+issued-licenses.csv
+issued-licenses-dashboard.html
 
