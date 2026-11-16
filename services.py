@@ -288,8 +288,17 @@ def save_custom_logo(source,destination):
 TESSERACT_DOWNLOAD_URL='https://github.com/UB-Mannheim/tesseract/wiki'
 TESSERACT_WINDOWS_INSTALLER_URL='https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe'
 DEVELOPER_EMAIL='njwayelodlamini@gmail.com'
+DEVELOPER_WHATSAPP_LOCAL='072 227 9505'
+DEVELOPER_WHATSAPP_E164='27722279505'
+DEVELOPER_WHATSAPP_URL='https://wa.me/27722279505'
 DEVELOPER_GITHUB_URL='https://github.com/Njwacky'
 DEVELOPER_REPO_URL='https://github.com/Njwacky/internetcafe'
+
+def whatsapp_chat_url(message=''):
+    """Build a direct WhatsApp click-to-chat URL (`https://wa.me/27722279505`) with optional prefilled text."""
+    from urllib.parse import quote
+    msg=(message or '').strip()
+    return f'{DEVELOPER_WHATSAPP_URL}?text={quote(msg)}' if msg else DEVELOPER_WHATSAPP_URL
 
 def open_external_url(url):
     """Open a trusted http/https/mailto link in the user's default browser or mail app."""

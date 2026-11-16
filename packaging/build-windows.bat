@@ -9,7 +9,7 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 .venv\Scripts\python.exe -m pip install -r requirements-build.txt
 if errorlevel 1 exit /b 1
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "README.md;." app.py
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "cafe-desk-manual.html;." --add-data "README.md;." app.py
 if errorlevel 1 exit /b 1
 
 > "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" (

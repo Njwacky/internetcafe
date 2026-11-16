@@ -538,14 +538,18 @@ class CareerUXAndVisualPreviewTests(unittest.TestCase):
     def test_about_and_contact_links_and_validation(self):
         from unittest.mock import patch
         self.assertEqual(services.DEVELOPER_EMAIL,'njwayelodlamini@gmail.com')
+        self.assertEqual(services.DEVELOPER_WHATSAPP_LOCAL,'072 227 9505')
+        self.assertEqual(services.DEVELOPER_WHATSAPP_URL,'https://wa.me/27722279505')
+        self.assertEqual(services.whatsapp_chat_url('Machine ID: CD-1234-5678-90AB'),'https://wa.me/27722279505?text=Machine%20ID%3A%20CD-1234-5678-90AB')
         self.assertEqual(services.DEVELOPER_GITHUB_URL,'https://github.com/Njwacky')
         self.assertEqual(services.DEVELOPER_REPO_URL,'https://github.com/Njwacky/internetcafe')
         opened=[]
         with patch('webbrowser.open',side_effect=lambda u:(opened.append(u),True)[1]):
             self.assertEqual(services.open_external_url('mailto:'+services.DEVELOPER_EMAIL),'mailto:njwayelodlamini@gmail.com')
+            self.assertEqual(services.open_external_url(services.DEVELOPER_WHATSAPP_URL),'https://wa.me/27722279505')
             self.assertEqual(services.open_external_url(services.DEVELOPER_GITHUB_URL),'https://github.com/Njwacky')
             self.assertEqual(services.open_external_url(services.DEVELOPER_REPO_URL),'https://github.com/Njwacky/internetcafe')
-        self.assertEqual(len(opened),3)
+        self.assertEqual(len(opened),4)
         with self.assertRaises(ValueError):
             services.open_external_url('file:///etc/passwd')
         with patch('webbrowser.open',return_value=False):
@@ -929,5 +933,15 @@ class DiagnosticRemediationTests(unittest.TestCase):
         with mock.patch('requests.post',return_value=err_resp):
             with self.assertRaisesRegex(ValueError,'OpenRouter request failed.*HTTP 401.*No auth credentials found'):
                 services.call_ai_chat('sk-or-v1-dummytestkey','gpt-4o-mini','Hello')
+
+    def test_html_manual_bundled_and_complete(self):
+        repo=Path(__file__).resolve().parent
+        manual=repo/'cafe-desk-manual.html'
+        self.assertTrue(manual.is_file())
+        html=manual.read_text(encoding='utf-8')
+        for expected in ('30-Second Sales Pitch','5-Minute Installation','Complete Left Sidebar Menu','17. Help &amp; privacy','@media print'):
+            self.assertIn(expected,html)
+        for pkg in ('packaging/build-windows.bat','packaging/build-unix.sh','.github/workflows/build-usb.yml'):
+            self.assertIn('cafe-desk-manual.html',(repo/pkg).read_text(encoding='utf-8'))
 
 if __name__=='__main__': unittest.main()
