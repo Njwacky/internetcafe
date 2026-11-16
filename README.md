@@ -4,7 +4,7 @@ A local-first desktop application for internet cafés, copy shops, and walk-in s
 
 ## Features
 
-- **PDFs:** merge, visually preview and select pages to extract, extract typed page ranges, and split every page. Password-protected PDFs that cannot be opened without a password are not supported. Existing split-page files are not overwritten.
+- **PDFs:** merge, visually preview and select pages to extract, extract typed page ranges, and split every page. Existing split-page files are not overwritten. Includes an optional **Paid Add-on: Remove PDF password** (`CDADD1...` key signed by the owner for that computer's `Machine ID`) to unlock and save password-free copies of customer PDFs (e.g. bank statements and payslips) once the customer supplies the open password.
 - **Images and scanning:** on Windows, find and select a WIA-compatible scanner and scan one page at a time inside the app; preview pages and save them as a single PDF. You can also launch a separate scanner app and import scans. Convert JPG, PNG, BMP and TIFF images to PDF, including multi-page TIFF.
 - **Bluetooth files (Windows):** a shortcut opens Windows Bluetooth settings and the Bluetooth File Transfer window. After receiving a file in Windows, select it to add a PDF or image to the appropriate app tool. The app does not receive files automatically.
 - **English OCR:** select one or more images, preview them inside the app with an animated scanner-line effect (plus a larger preview option), and extract editable English text using a separately installed Tesseract OCR engine. **Help & privacy** includes a clickable direct link to download Tesseract OCR. Save the result as text. OCR on PDF files is not included. Check the result carefully; OCR makes mistakes.

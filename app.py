@@ -78,7 +78,7 @@ def entry(parent,placeholder='',**kw): return ctk.CTkEntry(parent,placeholder_te
 class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
-        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.ai_generation=0; self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
+        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.unlock_pdf_source=''; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.ai_generation=0; self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
         settings_corrupted=False
         try:
             preferences=settings_store.load_settings(strict=True)
@@ -139,6 +139,7 @@ class CafeDesk(ctk.CTk):
             or self.pdf_files
             or self.image_files
             or self.split_source
+            or self.unlock_pdf_source
             or card_dirty
             or form_dirty
         )
@@ -399,7 +400,7 @@ class CafeDesk(ctk.CTk):
             'Help & privacy':'Read the quick steps below, use the direct link to download Tesseract OCR, or delete a selected customer file (staff).',
             'About & contact':'View Café Desk version details, developer contact email, and GitHub links — click to open or copy.',
             'Price list':'Search the read-only price list. Staff add prices and units in PIN-protected Price settings.',
-            'PDF tools':'Add PDFs, arrange them, then merge and save. You can also extract pages or split each page.',
+            'PDF tools':'Add PDFs, arrange them, then merge and save. Extract or split pages, or unlock password-protected PDFs (paid Machine-ID add-on with owner approval).',
             'Bluetooth files':'On Windows, pair the phone in Bluetooth settings, open the Windows Bluetooth transfer window, and choose Receive files. After saving, select the file to use it in Café Desk.' ,
             'Scan & images':'On Windows, find and select a WIA scanner, then scan each page in the app and save a PDF. Preview selected images and recognise English text with OCR (direct Tesseract download link is in Help & privacy).',
             'A4 picture sheets':'Add images, choose a layout, move and resize in Free layout, then save a PDF or project. Print PDFs at actual size.',
@@ -499,10 +500,63 @@ class CafeDesk(ctk.CTk):
             badge_color='#FFDBA2'
             summary=f'Developer / Unactivated mode  •  {lic_status.get("reason","No per-PC license installed yet.")}'
         label(lic_box,summary,size=12,bold=True,color=badge_color,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
-        mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,16))
+        mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,10))
         m_entry=entry(mrow);m_entry.insert(0,f'Machine ID: {mid_val}');m_entry.configure(state='readonly');m_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
         button(mrow,'⧉ Copy Machine ID',lambda:copy_val(mid_val,'Machine ID'),secondary=True,width=155,height=34).pack(side='left',padx=(0,8))
         button(mrow,'🔑 Enter / Renew 1-Year Key',lambda:license_ui.open_renewal_modal(self,on_updated=lambda _info:self.show('About & contact')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=205,height=34).pack(side='left')
+
+        addon_info=license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK)
+        def view_saved_keys():
+            if not self.require_staff(): return
+            lic_path=license_guard.license_file_path()
+            add_path=license_guard.addon_license_file_path(license_guard.FEATURE_PDF_UNLOCK)
+            dlg=ctk.CTkToplevel(self); dlg.title('Saved Machine ID & Activated Keys on This PC')
+            dlg.geometry('660x430'); dlg.configure(fg_color=BG); dlg.transient(self); dlg.grab_set()
+            wrap=card(dlg); wrap.pack(fill='both',expand=True,padx=20,pady=18)
+            label(wrap,f'This Computer\'s Machine ID:  {mid_val}',size=15,bold=True,color=LIME).pack(anchor='w',padx=18,pady=(16,4))
+            label(wrap,f'Saved locally per-PC inside: {lic_path.parent}\n(Never stored inside the GitHub repo — kept private on this computer)',size=11,color=MUTED,justify='left').pack(anchor='w',padx=18,pady=(0,10))
+
+            label(wrap,'1-Year Computer Key (CDLIC1 • license.json)',size=11,bold=True,color=INK).pack(anchor='w',padx=18,pady=(2,3))
+            b_tok=lic_status.get('token') or 'No active CDLIC1 key saved on this PC.'
+            t1=ctk.CTkTextbox(wrap,height=68,corner_radius=8,border_width=1,border_color=BORDER,fg_color='#0D1320',text_color=INK,font=ctk.CTkFont(family='Consolas',size=11))
+            t1.pack(fill='x',padx=18,pady=(0,10)); t1.insert('1.0',b_tok); t1.configure(state='disabled')
+
+            label(wrap,'Paid PDF Password Remover Key (CDADD1 • addon-pdf_unlock.json)',size=11,bold=True,color=INK).pack(anchor='w',padx=18,pady=(2,3))
+            a_tok=addon_info.get('token') or 'Not activated on this PC yet.'
+            t2=ctk.CTkTextbox(wrap,height=68,corner_radius=8,border_width=1,border_color=BORDER,fg_color='#0D1320',text_color=INK,font=ctk.CTkFont(family='Consolas',size=11))
+            t2.pack(fill='x',padx=18,pady=(0,12)); t2.insert('1.0',a_tok); t2.configure(state='disabled')
+
+            brow=ctk.CTkFrame(wrap,fg_color='transparent'); brow.pack(fill='x',padx=18,pady=(0,14))
+            if lic_status.get('token'):
+                button(brow,'⧉ Copy CDLIC1 Key',lambda:copy_val(lic_status['token'],'CDLIC1 License Key'),secondary=True,width=165,height=34).pack(side='left',padx=(0,8))
+            if addon_info.get('token'):
+                button(brow,'⧉ Copy CDADD1 Key',lambda:copy_val(addon_info['token'],'CDADD1 Add-on Key'),secondary=True,width=165,height=34).pack(side='left',padx=(0,8))
+            def open_lic_dir():
+                lic_path.parent.mkdir(parents=True,exist_ok=True)
+                try:
+                    if sys.platform.startswith('win'): os.startfile(str(lic_path.parent))
+                    elif sys.platform=='darwin': subprocess.Popen(['open',str(lic_path.parent)])
+                    else: subprocess.Popen(['xdg-open',str(lic_path.parent)])
+                except Exception:
+                    messagebox.showinfo('License folder',f'Saved at:\n{lic_path.parent}',parent=dlg)
+            button(brow,'📂 Open License Folder',open_lic_dir,secondary=True,width=185,height=34).pack(side='left')
+            button(brow,'Close',dlg.destroy,secondary=True,width=85,height=34).pack(side='right')
+
+        krow=ctk.CTkFrame(lic_box,fg_color='transparent'); krow.pack(fill='x',padx=20,pady=(0,14))
+        label(krow,f'Local license folder (private per-PC, never uploaded): {license_guard.host_license_dir()}',size=11,color=MUTED).pack(side='left',fill='x',expand=True,anchor='w')
+        button(krow,'👁 Staff: View Saved Keys on This PC',view_saved_keys,secondary=True,width=255,height=32).pack(side='right')
+        addon_bar=ctk.CTkFrame(lic_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER)
+        addon_bar.pack(fill='x',padx=20,pady=(0,18))
+        label(addon_bar,'PAID ADD-ON  •  PDF PASSWORD REMOVER (LOCKED TO THIS MACHINE ID)',size=10,bold=True,color='#FFDBA2').pack(anchor='w',padx=16,pady=(12,3))
+        arow=ctk.CTkFrame(addon_bar,fg_color='transparent'); arow.pack(fill='x',padx=16,pady=(0,12))
+        if addon_info.get('valid'):
+            a_txt=f"ACTIVE  •  Approved until {addon_info['expires_at']} ({addon_info['days_remaining']} days remaining)"
+            a_col=LIME
+        else:
+            a_txt='LOCKED  •  Requires owner approval & Paid Add-on Key (CDADD1...) for this Machine ID'
+            a_col=MUTED
+        label(arow,a_txt,size=12,bold=True,color=a_col).pack(side='left',fill='x',expand=True,anchor='w')
+        button(arow,'🔑 Enter / Renew PDF Unlock Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _info:self.show('About & contact')),secondary=bool(addon_info.get('valid')),fg_color=SOFT if addon_info.get('valid') else LIME,hover_color='#40506D' if addon_info.get('valid') else '#A9EB65',text_color='#E1E8F6' if addon_info.get('valid') else '#142018',width=235,height=34).pack(side='right')
         label(contact_box,'Developer & support contacts',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(contact_box,'Have feedback, feature ideas, or need help setting up Café Desk? Reach out directly or visit GitHub.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,14))
 
@@ -763,7 +817,7 @@ class CafeDesk(ctk.CTk):
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
         self.key.set(''); self.ai_generation+=1; self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
-        self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
+        self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.unlock_pdf_source=''; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
         self.show('Home'); self.status.set('Current workspace cleared  •  Saved files on disk were not deleted')
     def bluetooth_screen(self):
@@ -883,6 +937,70 @@ class CafeDesk(ctk.CTk):
             PDFPagePicker(self,source,apply)
         button(controls,'Preview & select pages',preview,secondary=True,width=185).pack(side='left',padx=(0,8));button(controls,'Extract pages',lambda:self.extract(pages.get()),width=130).pack(side='left')
         button(box,'Split every page',self.split_all,secondary=True,width=140).pack(anchor='w',padx=20,pady=(0,19))
+
+        # Paid Add-on: Remove PDF password (Machine-ID owner approval required)
+        addon_st=license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK)
+        mid_now=addon_st.get('machine_id') or license_guard.get_machine_id()
+        ubox=card(self.body); ubox.pack(fill='x',pady=(0,14))
+        uhead=ctk.CTkFrame(ubox,fg_color='transparent'); uhead.pack(fill='x',padx=20,pady=(17,3))
+        label(uhead,'Remove PDF password',size=16,bold=True).pack(side='left')
+        if addon_st.get('valid'):
+            label(uhead,f"✓ PAID ADD-ON ACTIVE  •  Expires {addon_st['expires_at']} ({addon_st['days_remaining']}d left)",size=11,bold=True,color=LIME).pack(side='right')
+            label(ubox,'Choose a password-protected PDF, enter its current password if required to open it, and save a clean unlocked PDF copy (ready for printing, merging or splitting).',size=12,color=MUTED,wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,10))
+            urow1=ctk.CTkFrame(ubox,fg_color='transparent'); urow1.pack(fill='x',padx=20,pady=(0,8))
+            ufile_lbl=label(urow1,Path(self.unlock_pdf_source).name if self.unlock_pdf_source else 'No protected PDF selected',size=12,color=MUTED)
+            ufile_lbl.pack(side='left',fill='x',expand=True,anchor='w')
+            def choose_locked_pdf():
+                p=filedialog.askopenfilename(parent=self,filetypes=[('PDF document','*.pdf')])
+                if p:
+                    try: services.assert_safe_user_input(p)
+                    except ValueError as exc: return messagebox.showerror('Cannot open PDF',str(exc),parent=self)
+                    self.unlock_pdf_source=p; ufile_lbl.configure(text=Path(p).name)
+            button(urow1,'Choose protected PDF',choose_locked_pdf,secondary=True,width=170).pack(side='right')
+
+            urow2=ctk.CTkFrame(ubox,fg_color='transparent'); urow2.pack(fill='x',padx=20,pady=(0,18))
+            pwd_var=ctk.StringVar(); show_pwd=ctk.BooleanVar(value=False)
+            pwd_ent=entry(urow2,'PDF password (leave blank if only print/edit restrictions)',textvariable=pwd_var,show='•')
+            pwd_ent.pack(side='left',fill='x',expand=True,padx=(0,8))
+            def toggle_pwd(): pwd_ent.configure(show='' if show_pwd.get() else '•')
+            ctk.CTkCheckBox(urow2,text='Show',variable=show_pwd,command=toggle_pwd,width=64,fg_color=LIME,checkmark_color='#102006',text_color=MUTED).pack(side='left',padx=(0,8))
+
+            def run_unlock(add_merge=False):
+                src=self.unlock_pdf_source
+                if not src: return messagebox.showinfo('Select a PDF','Choose a password-protected PDF first.',parent=self)
+                pwd_val=pwd_var.get()
+                if add_merge:
+                    dest=str(Path(self.session_temp.name)/(Path(src).stem+'-unlocked-'+uuid.uuid4().hex[:6]+'.pdf'))
+                else:
+                    stem=Path(src).stem
+                    dest=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile=f'{stem}-unlocked.pdf')
+                    if not dest: return
+                def done(res):
+                    pages_n,was_enc=res
+                    pwd_var.set('')
+                    if add_merge:
+                        self.pdf_files.append(dest)
+                        self.show('PDF tools')
+                        messagebox.showinfo('Unlocked & added to merge',f'Removed password from {pages_n} page(s) and added the unlocked copy to Files to merge.',parent=self)
+                    else:
+                        note='Password removed!' if was_enc else 'Note: this PDF had no password encryption; saved a clean copy.'
+                        messagebox.showinfo('PDF unlocked',f'{note}\n{pages_n} page(s) saved to:\n{dest}',parent=self)
+                self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
+
+            button(urow2,'🔓 Unlock & save PDF',lambda:run_unlock(False),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=175,height=36).pack(side='left',padx=(0,8))
+            button(urow2,'＋ Unlock to merge',lambda:run_unlock(True),secondary=True,width=155,height=36).pack(side='left')
+        else:
+            label(uhead,'🔒 PAID ADD-ON  •  OWNER APPROVAL REQUIRED',size=11,bold=True,color='#FFDBA2').pack(side='right')
+            label(ubox,'Disable and strip passwords from customer PDFs (bank statements, payslips, e-statements & restricted PDFs) so they print and merge cleanly.\nThis is a paid add-on locked per computer — send this PC’s Machine ID to the owner for approval and paste your Paid Add-on Key (CDADD1...).',size=12,color=MUTED,wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,12))
+            lock_row=ctk.CTkFrame(ubox,fg_color='#131B2A',corner_radius=10,border_width=1,border_color=BORDER); lock_row.pack(fill='x',padx=20,pady=(0,18))
+            label(lock_row,f'Machine ID:  {mid_now}',size=13,bold=True,color=LIME).pack(side='left',padx=14,pady=12)
+            button(lock_row,'🔑 Activate Paid Add-on Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _i:self.show('PDF tools')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=215,height=34).pack(side='right',padx=12,pady=10)
+            def ask_owner_wa():
+                try:
+                    services.open_external_url(services.whatsapp_chat_url(f'Hi, I would like to pay for and activate the PDF Password Remover add-on for Machine ID: {mid_now}'))
+                except ValueError as exc:
+                    messagebox.showerror('Could not open WhatsApp',str(exc),parent=self)
+            button(lock_row,'💬 Request Owner Approval',ask_owner_wa,fg_color='#25D366',hover_color='#1EBE5D',text_color='#0B1F13',width=205,height=34).pack(side='right',padx=(0,8),pady=10)
     def extract(self,spec):
         src=self.split_source
         if not src: return messagebox.showinfo('Select a PDF','Choose a PDF first.',parent=self)

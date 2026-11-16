@@ -1194,4 +1194,120 @@ class DiagnosticRemediationTests(unittest.TestCase):
                 if old_env is None: os.environ.pop('CAFE_DESK_PORTABLE_DIR',None)
                 else: os.environ['CAFE_DESK_PORTABLE_DIR']=old_env
 
+    def test_paid_pdf_password_remover_addon_machine_id_lock(self):
+        import datetime as dt, os
+        from unittest import mock
+        from pypdf import PdfReader, PdfWriter
+        import license_guard, admin_keygen
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p=Path(tmp)
+            priv_file=tmp_p/'owner.private.key'
+            pub_file=tmp_p/'owner.public.txt'
+            lic_dir=tmp_p/'pc_license_dir'
+            priv_b64,pub_b64=admin_keygen.generate_owner_keypair(priv_path=priv_file,pub_path=pub_file)
+
+            pc1_mid='CD-AA11-BB22-CC33'
+            pc2_mid='CD-DD44-EE55-FF66'
+            issue_day=dt.date(2026,11,15)
+
+            # Create a real AES-encrypted password-protected PDF
+            raw_pdf=tmp_p/'raw.pdf'
+            services.export_document_pdf('Confidential Bank Statement\nAccount 12345',raw_pdf,'Cover letter',0)
+            locked_pdf=tmp_p/'locked-statement.pdf'
+            r_in=PdfReader(str(raw_pdf))
+            w_enc=PdfWriter()
+            for pg in r_in.pages:
+                w_enc.add_page(pg)
+            w_enc.encrypt(user_password='Secret99!',owner_password='Owner99!')
+            with open(locked_pdf,'wb') as fh:
+                w_enc.write(fh)
+            self.assertTrue(PdfReader(str(locked_pdf)).is_encrypted)
+
+            unlocked_out=tmp_p/'unlocked-statement.pdf'
+            env_pc1={'CAFE_DESK_PUBLIC_KEY':pub_b64,'CAFE_DESK_LICENSE_DIR':str(lic_dir),'CAFE_DESK_TEST_MACHINE_ID':pc1_mid}
+
+            with mock.patch.dict(os.environ,env_pc1,clear=False):
+                # 1. Standard 1-year base license alone does NOT unlock paid PDF Password Remover
+                std_tok,_=admin_keygen.sign_license_token(pc1_mid,customer='Benoni Cafe',days=365,issued_date=issue_day,private_key_b64=priv_b64)
+                license_guard.activate_and_save_license(std_tok,today=issue_day)
+                self.assertTrue(license_guard.current_license_status(today=issue_day)['valid'])
+                self.assertFalse(license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK,today=issue_day)['valid'])
+                with self.assertRaisesRegex(ValueError,'paid add-on and is not activated'):
+                    services.remove_pdf_password(locked_pdf,unlocked_out,'Secret99!')
+
+                # Trying to paste a standard CDLIC1 token into the Add-on box fails clearly
+                with self.assertRaisesRegex(license_guard.LicenseError,'does not include PDF Password Remover'):
+                    license_guard.activate_and_save_addon(std_tok,today=issue_day)
+
+                # 2. Add-on key issued for PC #2 is REJECTED on PC #1 (Machine ID mismatch)
+                pc2_addon,_=admin_keygen.sign_addon_token(pc2_mid,feature=license_guard.FEATURE_PDF_UNLOCK,customer='Other PC',days=365,issued_date=issue_day,private_key_b64=priv_b64)
+                with self.assertRaisesRegex(license_guard.LicenseError,'belongs to another computer'):
+                    license_guard.activate_and_save_addon(pc2_addon,today=issue_day)
+
+                # 3. Owner approves & signs Paid Add-on Key (`CDADD1...`) for PC #1's Machine ID
+                pc1_addon,_=admin_keygen.sign_addon_token(pc1_mid,feature=license_guard.FEATURE_PDF_UNLOCK,customer='Benoni Cafe',days=365,issued_date=issue_day,private_key_b64=priv_b64)
+                self.assertTrue(pc1_addon.startswith('CDADD1.'))
+                addon_info=license_guard.activate_and_save_addon(pc1_addon,today=issue_day)
+                self.assertTrue(addon_info['valid'])
+                self.assertEqual(addon_info['machine_id'],pc1_mid)
+
+                # Wrong PDF open password -> clear error, no output written
+                with mock.patch.object(license_guard,'_today_utc',return_value=issue_day):
+                    with self.assertRaisesRegex(ValueError,'Incorrect PDF password'):
+                        services.remove_pdf_password(locked_pdf,unlocked_out,'WrongPass')
+                    self.assertFalse(unlocked_out.exists())
+
+                    # Correct PDF password -> strips encryption and saves clean unlocked PDF!
+                    pages_n,was_enc=services.remove_pdf_password(locked_pdf,unlocked_out,'Secret99!')
+                    self.assertEqual((pages_n,was_enc),(1,True))
+                    check_reader=PdfReader(str(unlocked_out))
+                    self.assertFalse(check_reader.is_encrypted)
+                    self.assertIn('Confidential Bank Statement',check_reader.pages[0].extract_text())
+
+                    # Now standard merge/extract can read the unlocked PDF without any password!
+                    merged_out=tmp_p/'merged-clean.pdf'
+                    services.merge_pdf([unlocked_out,raw_pdf],merged_out)
+                    self.assertEqual(services.pdf_page_count(merged_out),2)
+
+                # 4. After add-on expiry date -> locked again
+                self.assertFalse(license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK,today=dt.date(2027,11,16))['valid'])
+
+    def test_owner_issued_keys_registry_saved_locally_and_gitignored(self):
+        import datetime as dt, subprocess
+        import admin_keygen, license_guard
+        repo=Path(__file__).resolve().parent
+        gitignore_txt=(repo/'.gitignore').read_text(encoding='utf-8')
+        for pattern in ('owner-keys/','*.cafelicense','*.cafeaddon','issued-licenses.jsonl','issued-licenses.csv','issued-licenses-dashboard.html'):
+            self.assertIn(pattern,gitignore_txt)
+
+        # Verify git check-ignore confirms owner-keys/ artifacts can NEVER be committed to GitHub
+        chk=subprocess.run(
+            ['git','check-ignore','owner-keys/issued-licenses.jsonl','owner-keys/issued-licenses.csv','owner-keys/issued-licenses-dashboard.html','sample.cafelicense','sample.cafeaddon'],
+            cwd=str(repo),capture_output=True,text=True
+        )
+        self.assertEqual(chk.returncode,0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir=Path(tmp)/'owner-keys'
+            priv_b64,_=admin_keygen.generate_owner_keypair(priv_path=tdir/'priv.key',pub_path=tdir/'pub.txt')
+            log_file=tdir/'issued-licenses.jsonl'
+            mid='CD-7788-99AA-BBCC'
+            tok1,pay1=admin_keygen.sign_license_token(mid,customer='Gauteng Print Shop',days=365,issued_date=dt.date(2026,11,15),private_key_b64=priv_b64)
+            tok2,pay2=admin_keygen.sign_addon_token(mid,feature=license_guard.FEATURE_PDF_UNLOCK,customer='Gauteng Print Shop',days=365,issued_date=dt.date(2026,11,15),private_key_b64=priv_b64)
+
+            csv_path,html_path=admin_keygen._record_issued_license(pay1,tok1,log_path=log_file)
+            admin_keygen._record_issued_license(pay2,tok2,log_path=log_file)
+
+            records=admin_keygen.load_issued_records(log_file)
+            self.assertEqual(len(records),2)
+            self.assertEqual(records[0]['mid'],mid)
+            self.assertEqual(records[0]['token'],tok1)
+            self.assertEqual(records[1]['token'],tok2)
+
+            csv_body=csv_path.read_text(encoding='utf-8-sig')
+            html_body=html_path.read_text(encoding='utf-8')
+            for expected in (mid,'Gauteng Print Shop',tok1,tok2):
+                self.assertIn(expected,csv_body)
+                self.assertIn(expected,html_body)
+
 if __name__=='__main__': unittest.main()

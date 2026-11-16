@@ -959,13 +959,14 @@ A4 Photo Sheet | 25.00</pre>
           <article class="menu-card">
             <div class="menu-card-head">
               <div class="menu-title-wrap"><span class="menu-icon">▤</span><h3>3. PDF tools</h3></div>
-              <span class="badge badge-public">Public</span>
+              <span class="badge badge-public">Public + Paid Add-on</span>
             </div>
-            <p>All-in-one local PDF combiner and splitter — no private documents ever uploaded online.</p>
+            <p>All-in-one local PDF combiner, splitter, and optional paid PDF password remover — no private documents ever uploaded online.</p>
             <ul>
               <li><strong>Merge PDFs:</strong> Combine CVs, IDs &amp; certificates in custom order (with Clear all).</li>
               <li><strong>Preview &amp; select pages:</strong> View page thumbnails (6 at a time), zoom in, Select all / Invert, and tick pages to extract.</li>
               <li><strong>Split every page:</strong> Save each page as its own PDF safely.</li>
+              <li><strong>Remove PDF password (Paid Add-on):</strong> Locked per computer (<code>Machine ID</code>) until approved by the owner with a <code>CDADD1...</code> add-on key. Unlocks bank statements &amp; payslips cleanly!</li>
             </ul>
           </article>
 
@@ -1202,7 +1203,7 @@ A4 Photo Sheet | 25.00</pre>
 
           <div class="faq-card">
             <h4>How do I generate keys as the Owner?</h4>
-            <p>Run <code>python admin_keygen.py --init-keys --apply-public-key</code> <strong>once</strong> on your own laptop before building your customer <code>.exe</code>. Never copy <code>admin_keygen.py</code> or <code>owner-keys/</code> onto customer USB sticks!</p>
+            <p>Run <code>python admin_keygen.py --init-keys --apply-public-key</code> <strong>once</strong> on your own laptop before building your customer <code>.exe</code>. To approve the paid <strong>PDF Password Remover</strong> add-on for a customer’s Machine ID, run <code>python admin_keygen.py --addon pdf_unlock -m CD-XXXX-XXXX-XXXX -c "Shop Name"</code> (or choose option <code>[2]</code> in interactive mode). Never copy <code>admin_keygen.py</code> or <code>owner-keys/</code> onto customer USB sticks!</p>
           </div>
         </div>
 

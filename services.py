@@ -135,6 +135,73 @@ def extract_pdf(source,spec,destination):
     _atomic_write(destination,lambda tmp:_write_pdf(writer,tmp))
     return len(pages)
 
+def remove_pdf_password(source, destination, password=''):
+    """Remove open/owner password protection from a PDF after verifying Paid Add-on approval for this Machine ID."""
+    import math, license_guard
+    addon_status = license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK)
+    if not addon_status.get('valid'):
+        mid = addon_status.get('machine_id') or license_guard.get_machine_id()
+        raise ValueError(
+            f'PDF Password Remover is a paid add-on and is not activated on this computer (Machine ID: {mid}). '
+            f'Request owner approval and enter your Paid Add-on Key first.'
+        )
+
+    assert_safe_user_input(source)
+    _different([source], destination)
+    p = Path(source)
+    if not p.is_file():
+        raise ValueError(f'PDF not found: {p.name}')
+    if p.stat().st_size > MAX_PDF_FILE_BYTES:
+        raise ValueError(f'“{p.name}” exceeds the {MAX_PDF_FILE_BYTES // (1024 * 1024)} MB PDF size limit.')
+
+    try:
+        reader = PdfReader(str(p))
+    except Exception as exc:
+        raise ValueError(f'Could not read PDF “{p.name}”. It may be damaged or unsupported.') from exc
+
+    was_encrypted = bool(reader.is_encrypted)
+    if was_encrypted:
+        pwd = str(password or '')
+        unlocked = reader.decrypt(pwd)
+        if unlocked == 0 and pwd:
+            # Also try stripped password in case of accidental trailing space on paste
+            unlocked = reader.decrypt(pwd.strip())
+        if unlocked == 0:
+            if not pwd:
+                raise ValueError(
+                    f'“{p.name}” requires an open password. Enter the PDF\'s current password so Café Desk can unlock and save an unprotected copy.'
+                )
+            raise ValueError(f'Incorrect PDF password for “{p.name}”. Check capitalization and try again.')
+
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise ValueError(f'“{p.name}” has more than {MAX_PDF_PAGES} pages.')
+
+    writer = PdfWriter()
+    for idx, page in enumerate(reader.pages, 1):
+        try:
+            w = float(page.mediabox.width)
+            h = float(page.mediabox.height)
+        except Exception as exc:
+            raise ValueError(f'Page {idx} of “{p.name}” has unreadable dimensions.') from exc
+        if not (math.isfinite(w) and math.isfinite(h) and 0 < w <= MAX_PDF_PAGE_DIM_PT and 0 < h <= MAX_PDF_PAGE_DIM_PT):
+            raise ValueError(f'Page {idx} of “{p.name}” has invalid or oversized dimensions.')
+        writer.add_page(page)
+
+    if reader.metadata:
+        try:
+            clean_meta = {
+                str(k): str(v)
+                for k, v in reader.metadata.items()
+                if isinstance(k, str) and k.startswith('/') and v is not None
+            }
+            if clean_meta:
+                writer.add_metadata(clean_meta)
+        except Exception:
+            pass
+
+    _atomic_write(destination, lambda tmp: _write_pdf(writer, tmp))
+    return len(reader.pages), was_encrypted
+
 def split_each_page(source,folder):
     assert_safe_user_output(folder)
     reader=_reader(source); root=Path(folder); stem=Path(source).stem
