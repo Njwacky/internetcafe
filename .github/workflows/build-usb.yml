@@ -30,7 +30,7 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run unit test suite
-        run: python -m unittest -v test_services
+        run: python .github/run_tests.py
 
   build-windows-usb:
     name: Windows 10/11 USB Portable & Setup.exe
