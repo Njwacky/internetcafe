@@ -459,6 +459,12 @@ def normalize_ai_model(model:str, endpoint_url:str)->str:
     m=(model or '').strip()
     if not m:
         return AI_DEFAULT_MODELS.get(endpoint_url,'gpt-4o-mini')
+    if 'api.groq.com' in endpoint_url:
+        groq_default=AI_DEFAULT_MODELS['https://api.groq.com/openai/v1/chat/completions']
+        other_provider_defaults=set(AI_DEFAULT_MODELS.values())-{groq_default}
+        other_provider_defaults.update({'openai/gpt-4o-mini','openrouter/auto'})
+        if m in other_provider_defaults:
+            return groq_default
     if 'generativelanguage.googleapis.com' in endpoint_url:
         if m.startswith('google/'):
             m=m.split('/',1)[1]

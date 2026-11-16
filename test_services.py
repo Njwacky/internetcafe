@@ -958,6 +958,21 @@ class DiagnosticRemediationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Google Gemini request failed.*HTTP 400.*API key not valid'):
                 services.call_ai_chat('AIzaSyDummyGoogleAIStudioKey123456789','gemini-2.5-flash','Hello')
 
+        # Groq auto-detection must not send the default OpenAI model ID to Groq.
+        groq_ep,groq_label=services.detect_ai_provider('gsk_dummytestkey')
+        groq_default=services.AI_DEFAULT_MODELS[groq_ep]
+        self.assertEqual(groq_label,'Groq')
+        self.assertEqual(services.normalize_ai_model('gpt-4o-mini',groq_ep),groq_default)
+        self.assertEqual(services.normalize_ai_model('openai/gpt-4o-mini',groq_ep),groq_default)
+        self.assertEqual(services.normalize_ai_model('custom-groq-model',groq_ep),'custom-groq-model')
+
+        with mock.patch('requests.post',return_value=fake_resp) as groq_post_mock:
+            reply_gr,prov_gr,mod_gr=services.call_ai_chat('gsk_dummytestkey','gpt-4o-mini','Hello',max_tokens=16)
+            self.assertEqual((reply_gr,prov_gr,mod_gr),('CONNECTED','Groq',groq_default))
+            self.assertEqual(groq_post_mock.call_args[0][0],groq_ep)
+            self.assertEqual(groq_post_mock.call_args[1]['headers']['Authorization'],'Bearer gsk_dummytestkey')
+            self.assertEqual(groq_post_mock.call_args[1]['json']['model'],groq_default)
+
     def test_html_manual_bundled_and_complete(self):
         repo=Path(__file__).resolve().parent
         manual=repo/'cafe-desk-manual.html'

@@ -1147,7 +1147,7 @@ class CafeDesk(ctk.CTk):
         self.heading(self.body,'AI settings','Optional writing help — supports Google Gemini (AI Studio), OpenRouter, OpenAI, Groq, DeepSeek & compatible APIs.')
         box=card(self.body); box.pack(fill='x')
         label(box,'Connect an AI provider',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
-        label(box,'Paste a Google Gemini key (AIza... from aistudio.google.com/api-keys), OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek key. Auto-detect automatically routes AIza... keys to Google Gemini (gemini-2.5-flash) and sk-or-... keys to OpenRouter.',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,12))
+        label(box,'Paste a Google Gemini key (AIza... from aistudio.google.com/api-keys), OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek key. Auto-detect routes AIza... keys to Gemini, sk-or-... keys to OpenRouter, and gsk_... keys to Groq with a compatible default model.',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,12))
 
         gem_card=ctk.CTkFrame(box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER)
         gem_card.pack(fill='x',padx=20,pady=(0,14))
