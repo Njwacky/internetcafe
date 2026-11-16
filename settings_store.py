@@ -111,6 +111,7 @@ def _default_dict():
         'prices':[],
         'station_name':_default_station(),
         'shop_id':'',
+        'city_label':'',
         'lan_sync_folder':'',
         'supabase_url':os.environ.get('CAFE_DESK_SUPABASE_URL',cloud_sync.PUBLIC_PROJECT_SUPABASE_URL).strip(),
         'supabase_anon_key':os.environ.get('CAFE_DESK_SUPABASE_ANON_KEY',cloud_sync.PUBLIC_PROJECT_SUPABASE_ANON_KEY).strip(),
@@ -147,13 +148,14 @@ def _parse_settings_file(target):
         k:v for k,v in obj.items()
         if k in (
             'pin_salt','pin_hash','currency','prices','failed_attempts','lockout_until_epoch',
-            'station_name','shop_id','lan_sync_folder','supabase_url','supabase_anon_key',
+            'station_name','shop_id','city_label','lan_sync_folder','supabase_url','supabase_anon_key',
         )
     })
     default.update(business_name=name,business_icon=icon if icon in ICONS else DEFAULT_ICON)
     if not isinstance(default['prices'],list): default['prices']=[]
     default['station_name']=' '.join(str(default.get('station_name') or '').split())[:40] or _default_station()
     default['shop_id']=''.join(c for c in str(default.get('shop_id') or '').upper() if c.isalnum() or c in ('-','_'))[:40]
+    default['city_label']=' '.join(str(default.get('city_label') or '').split())[:60]
     default['lan_sync_folder']=str(default.get('lan_sync_folder') or '').strip()[:260]
     default['supabase_url']=str(default.get('supabase_url') or '').strip()[:200]
     default['supabase_anon_key']=str(default.get('supabase_anon_key') or '').strip()[:512]
@@ -261,12 +263,13 @@ def save_prices(currency,text,path=None):
     if not currency or len(currency)>8 or any(c in currency for c in '\n\r|'): raise ValueError('Enter a currency symbol or code, up to 8 characters.')
     prices=parse_price_list(text); data=load_settings(path,strict=True); data.update(currency=currency,prices=prices); _write(data,path); return prices
 
-def save_multi_pc_settings(station_name,shop_id='',lan_sync_folder='',supabase_url='',supabase_anon_key='',path=None):
-    """Save Multi-PC station name, Shop ID, optional LAN sync folder, and public Supabase URL + anon key."""
+def save_multi_pc_settings(station_name,shop_id='',lan_sync_folder='',supabase_url='',supabase_anon_key='',city_label='',path=None):
+    """Save Multi-PC station name, Shop ID, city/area label, optional LAN sync folder, and public Supabase URL + anon key."""
     clean_station=' '.join(str(station_name or '').split())[:40]
     if not clean_station:
         raise ValueError('Enter a Computer / Station Name (e.g. Counter PC 1 or Desk 2).')
     clean_shop=''.join(c for c in str(shop_id or '').strip().upper() if c.isalnum() or c in ('-','_'))[:40]
+    clean_city=' '.join(str(city_label or '').split())[:60]
     clean_lan=str(lan_sync_folder or '').strip()[:260]
     clean_url=str(supabase_url or '').strip().rstrip('/')[:200]
     if clean_url and not (clean_url.startswith('https://') or clean_url.startswith('http://127.0.0.1') or clean_url.startswith('http://localhost')):
@@ -278,6 +281,7 @@ def save_multi_pc_settings(station_name,shop_id='',lan_sync_folder='',supabase_u
     data.update(
         station_name=clean_station,
         shop_id=clean_shop,
+        city_label=clean_city,
         lan_sync_folder=clean_lan,
         supabase_url=clean_url,
         supabase_anon_key=clean_anon,

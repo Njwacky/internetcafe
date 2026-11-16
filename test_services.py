@@ -796,13 +796,15 @@ class DiagnosticRemediationTests(unittest.TestCase):
                 self.assertTrue(settings_store.is_internal_path(portable_data/'settings.json'))
 
         # Verify packaging scripts and Inno Setup match APP_BUILD
+        import cloud_sync
         app_src=(repo/'app.py').read_text(encoding='utf-8')
         iss_src=(repo/'packaging'/'windows-installer.iss').read_text(encoding='utf-8')
         bat_src=(repo/'packaging'/'build-windows.bat').read_text(encoding='utf-8')
         unix_src=(repo/'packaging'/'build-unix.sh').read_text(encoding='utf-8')
         wf_src=(repo/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
-        self.assertIn("APP_BUILD='0.8.0'",app_src)
-        self.assertIn('#define MyAppVersion "0.8.0"',iss_src)
+        self.assertIn(f"APP_BUILD='{cloud_sync.APP_VERSION}'",app_src)
+        self.assertIn(f'#define MyAppVersion "{cloud_sync.APP_VERSION}"',iss_src)
+        self.assertTrue(wf_src.count(f'v{cloud_sync.APP_VERSION}')>=1)
         self.assertIn('--exclude-module admin_keygen',bat_src)
         self.assertIn('--exclude-module admin_keygen',unix_src)
         self.assertIn('--exclude-module admin_keygen',wf_src)
@@ -1507,5 +1509,113 @@ class DiagnosticRemediationTests(unittest.TestCase):
         # Ensure customer PyInstaller builds do not bundle owner-dashboard.html
         for script_rel in ('packaging/build-windows.bat','packaging/build-unix.sh','.github/workflows/build-usb.yml'):
             self.assertNotIn('owner-dashboard.html',(repo/script_rel).read_text(encoding='utf-8'))
+
+class WorkspaceTelemetryTests(unittest.TestCase):
+    """v0.8.2 anonymised 'most visited places' telemetry must never leak customer data."""
+
+    def _settings(self,tmp):
+        import settings_store
+        return settings_store.save_multi_pc_settings(
+            'Counter PC 1',
+            shop_id='shop-sunrise',
+            city_label='  Benoni   Gauteng ',
+            path=Path(tmp)/'settings.json',
+        )
+
+    def test_city_label_is_optional_and_sanitised(self):
+        import settings_store
+        with tempfile.TemporaryDirectory() as tmp:
+            saved=self._settings(tmp)
+            self.assertEqual(saved['city_label'],'Benoni Gauteng')
+            self.assertEqual(saved['shop_id'],'SHOP-SUNRISE')
+            plain=settings_store.load_settings(Path(tmp)/'settings.json')
+            self.assertIn('city_label',plain)
+            self.assertEqual(plain['city_label'],'Benoni Gauteng')
+            # City is optional: existing PCs keep working without it.
+            settings_store.save_multi_pc_settings('Desk 2',path=Path(tmp)/'settings.json')
+            self.assertEqual(settings_store.load_settings(Path(tmp)/'settings.json')['city_label'],'')
+
+    def test_telemetry_whitelists_screen_names_and_counts_only(self):
+        import cloud_sync
+        from unittest import mock
+        sent={}
+        def fake_request(url,key,method,path,payload=None,extra_headers=None,timeout=5.0):
+            sent.update(path=path,payload=payload,url=url,key=key)
+            return {'ok':True,'recorded_visits':3}
+        cfg={'supabase_url':'https://demo.supabase.co','supabase_anon_key':'anon-xyz','shop_id':'SHOP-1',
+             'business_name':'Sunrise Café','station_name':'Counter PC 1','city_label':'Benoni'}
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=fake_request):
+            res=cloud_sync.send_workspace_telemetry(
+                cfg,
+                current_screen='PDF tools',
+                screen_counts={'PDF tools':2,'Receipts':'3','../secret.txt':99,'Home':-4,'Bad screen':10,'Help & privacy':100000},
+                machine_id='CD-8F3A-91BC-204E',
+                os_platform='win32',
+            )
+        self.assertTrue(res['ok'])
+        self.assertEqual(sent['path'],'/rest/v1/rpc/record_workspace_telemetry')
+        payload=sent['payload']
+        self.assertEqual(payload['p_machine_id'],'CD-8F3A-91BC-204E')
+        self.assertEqual(payload['p_current_screen'],'PDF tools')
+        self.assertEqual(payload['p_city_label'],'Benoni')
+        self.assertEqual(payload['p_screen_counts'],{'PDF tools':2,'Receipts':3,'Help & privacy':5000})
+        blob=str(payload).lower()
+        for forbidden in ('secret.txt','customer','filename','document text','token'):
+            self.assertNotIn(forbidden,blob)
+
+    def test_telemetry_unknown_screen_falls_back_to_home_and_offline_is_silent(self):
+        import cloud_sync
+        from unittest import mock
+        seen={}
+        def fake_request(url,key,method,path,payload=None,extra_headers=None,timeout=5.0):
+            seen.update(payload)
+            return {'ok':True}
+        cfg={'supabase_url':'https://demo.supabase.co','supabase_anon_key':'anon-xyz'}
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=fake_request):
+            cloud_sync.send_workspace_telemetry(cfg,current_screen='__hack__',screen_counts={'__hack__':5},
+                                                machine_id='CD-1111-2222-3333')
+        self.assertEqual(seen['p_current_screen'],'Home')
+        self.assertEqual(seen['p_screen_counts'],{})
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=OSError('offline')):
+            res=cloud_sync.send_workspace_telemetry(cfg,machine_id='CD-1111-2222-3333',screen_counts={'Home':1})
+        self.assertFalse(res['ok'])
+        # Telemetry failures never raise into the shop UI — even with no settings at all.
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=RuntimeError('boom')):
+            self.assertFalse(cloud_sync.send_workspace_telemetry({'supabase_url':'','supabase_anon_key':''})['ok'])
+        self.assertFalse(cloud_sync.send_workspace_telemetry(None,current_screen='Home')['ok'])
+
+    def test_screen_allowlist_matches_the_17_sidebar_tools(self):
+        import cloud_sync
+        expected={'Home','Price list','PDF tools','Bluetooth files','Scan & images','A4 picture sheets',
+                  'Career documents','Cards & invitations','Forms creator','Receipts','Sales reports',
+                  'Price settings','Business settings','AI settings','Projects & recovery',
+                  'About & contact','Help & privacy'}
+        self.assertEqual(set(cloud_sync.ALLOWED_TELEMETRY_SCREENS),expected)
+        self.assertEqual(len(cloud_sync.ALLOWED_TELEMETRY_SCREENS),17)
+
+    def test_schema_and_dashboard_ship_the_telemetry_migration(self):
+        repo=Path(__file__).resolve().parent
+        schema=(repo/'supabase_schema.sql').read_text(encoding='utf-8')
+        for fragment in ('public.station_heartbeats','public.workspace_tool_visits',
+                         'public.record_workspace_telemetry(','grant execute on function public.record_workspace_telemetry'):
+            self.assertIn(fragment,schema)
+        dash=(repo/'owner-dashboard.html').read_text(encoding='utf-8')
+        for fragment in ('workspace_tool_visits','station_heartbeats','Most visited places',
+                         'CafeDesk-Setup.exe','CafeDesk-Windows-USB-Portable.zip','sync_github_release'):
+            self.assertIn(fragment,dash)
+        self.assertNotIn('service_role',dash)
+
+    def test_app_records_screen_visits_without_blocking_the_ui(self):
+        app_src=(Path(__file__).resolve().parent/'app.py').read_text(encoding='utf-8')
+        for fragment in ('_note_screen_visit','_flush_telemetry_async','threading.Thread(target=_bg,daemon=True)',
+                         'cloud_sync.send_workspace_telemetry','city_in.get()'):
+            self.assertIn(fragment,app_src)
+
+    def test_windows_workflow_publishes_direct_download_release(self):
+        wf=(Path(__file__).resolve().parent/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
+        for fragment in ('permissions:','contents: write','gh release create','gh release upload',
+                         '--clobber','CafeDesk-Release-Checksums.json','installer-output/CafeDesk-Setup.exe'):
+            self.assertIn(fragment,wf)
+
 
 if __name__=='__main__': unittest.main()

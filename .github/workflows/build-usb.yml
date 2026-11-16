@@ -8,6 +8,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows-usb:
     name: Windows 10/11 USB Portable & Setup.exe
@@ -35,7 +38,7 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "cafe-desk-manual.html;." --add-data "README.md;." app.py
           (
             echo ============================================================
-            echo   Cafe Desk v0.7.0 -- 1-Year Licensed USB Edition ^(Windows^)
+            echo   Cafe Desk v0.8.2 -- 1-Year Licensed USB Edition ^(Windows^)
             echo ============================================================
             echo.
             echo 1. COPY TO PC ^& ACTIVATE ^(LOCKED PER COMPUTER^):
@@ -64,6 +67,25 @@ jobs:
         run: |
           iscc "packaging\windows-installer.iss"
 
+      - name: Generate SHA-256 Checksums Manifest
+        shell: pwsh
+        run: |
+          $exeHash = (Get-FileHash "installer-output\CafeDesk-Setup.exe" -Algorithm SHA256).Hash.ToLower()
+          $zipHash = (Get-FileHash "CafeDesk-Windows-USB-Portable.zip" -Algorithm SHA256).Hash.ToLower()
+          $ver = python -c "import cloud_sync; print(cloud_sync.APP_VERSION)"
+          @{
+            version = $ver.Trim()
+            built_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            setup_exe = @{
+              filename = "CafeDesk-Setup.exe"
+              sha256 = $exeHash
+            }
+            usb_zip = @{
+              filename = "CafeDesk-Windows-USB-Portable.zip"
+              sha256 = $zipHash
+            }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Path "CafeDesk-Release-Checksums.json" -Encoding UTF8
+
       - name: Upload Windows USB Portable ZIP & Setup.exe artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -71,4 +93,38 @@ jobs:
           path: |
             CafeDesk-Windows-USB-Portable.zip
             installer-output/CafeDesk-Setup.exe
+            CafeDesk-Release-Checksums.json
           retention-days: 30
+
+      - name: Publish Direct Download Release on GitHub (main & v* tags)
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ver = (python -c "import cloud_sync; print(cloud_sync.APP_VERSION)").Trim()
+          $exeHash = (Get-FileHash "installer-output\CafeDesk-Setup.exe" -Algorithm SHA256).Hash.ToLower()
+          $zipHash = (Get-FileHash "CafeDesk-Windows-USB-Portable.zip" -Algorithm SHA256).Hash.ToLower()
+          $lines = @(
+            "### Cafe Desk v${ver} - Windows 10/11 Official Build",
+            "",
+            "- **1-Click Windows Installer:** CafeDesk-Setup.exe",
+            "  - SHA-256: $exeHash",
+            "- **USB Flash-Drive Portable Edition:** CafeDesk-Windows-USB-Portable.zip",
+            "  - SHA-256: $zipHash",
+            "",
+            "Built automatically from commit ${{ github.sha }}.",
+            "",
+            "CafeDesk-Setup.exe installs Cafe Desk for the current Windows user and creates Desktop / Start Menu shortcuts.",
+            "CafeDesk-Windows-USB-Portable.zip is a no-install folder: unzip it anywhere (USB stick, Desktop) and run CafeDesk.exe."
+          )
+          $notes = $lines -join "`n"
+
+          $tagName = if ("${{ github.ref }}" -like "refs/tags/v*") { "${{ github.ref_name }}" } else { "v$ver" }
+          gh release view $tagName >$null 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tagName "installer-output\CafeDesk-Setup.exe" "CafeDesk-Windows-USB-Portable.zip" "CafeDesk-Release-Checksums.json" --clobber
+            gh release edit $tagName --title "Cafe Desk $tagName (Windows 10/11)" --notes $notes --latest
+          } else {
+            gh release create $tagName "installer-output\CafeDesk-Setup.exe" "CafeDesk-Windows-USB-Portable.zip" "CafeDesk-Release-Checksums.json" --title "Cafe Desk $tagName (Windows 10/11)" --notes $notes --latest
+          }
