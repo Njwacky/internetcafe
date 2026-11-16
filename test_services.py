@@ -1497,4 +1497,15 @@ class DiagnosticRemediationTests(unittest.TestCase):
                     self.assertTrue(license_guard.current_license_status(public_key_b64=pub_b64,today=today)['valid'])
                     self.assertFalse(license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK,public_key_b64=pub_b64,today=today)['valid'])
 
+    def test_owner_web_dashboard_contains_no_private_keys_and_not_bundled_in_exe(self):
+        repo=Path(__file__).resolve().parent
+        dash=(repo/'owner-dashboard.html').read_text(encoding='utf-8')
+        self.assertIn('functions/v1/owner-admin',dash)
+        self.assertIn('signInWithOtp',dash)
+        self.assertNotIn('service_role',dash)
+        self.assertNotIn('CAFEDESK_OWNER_PRIVATE_KEY',dash)
+        # Ensure customer PyInstaller builds do not bundle owner-dashboard.html
+        for script_rel in ('packaging/build-windows.bat','packaging/build-unix.sh','.github/workflows/build-usb.yml'):
+            self.assertNotIn('owner-dashboard.html',(repo/script_rel).read_text(encoding='utf-8'))
+
 if __name__=='__main__': unittest.main()

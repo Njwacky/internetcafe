@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Café Desk — Owner Cloud Control Panel</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0c1220;
+    --panel: #151f33;
+    --panel-alt: #1b2842;
+    --border: #2c3d5e;
+    --ink: #f3f6fc;
+    --muted: #9aabc7;
+    --lime: #b9ff70;
+    --lime-ink: #122116;
+    --amber: #ffd27d;
+    --red: #ff9488;
+    --blue: #7ab3ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.45;
+  }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(12, 18, 32, 0.94);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--lime); box-shadow: 0 0 12px var(--lime);
+  }
+  .brand h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+  .brand span { font-size: 12px; color: var(--lime); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+  .user-pill { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .container { max-width: 1340px; margin: 0 auto; padding: 22px 16px 64px; }
+
+  /* Login Gate */
+  .auth-wrap {
+    max-width: 460px; margin: 54px auto; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 18px; padding: 28px 24px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.45);
+  }
+  .auth-tag { color: var(--lime); font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+  .auth-wrap h2 { margin: 6px 0 8px; font-size: 22px; }
+  .auth-wrap p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; }
+  .tabs-mini { display: flex; gap: 6px; margin-bottom: 16px; background: #0d1424; padding: 4px; border-radius: 10px; }
+  .tabs-mini button {
+    flex: 1; padding: 8px 10px; border: none; border-radius: 8px; cursor: pointer;
+    background: transparent; color: var(--muted); font-weight: 700; font-size: 12.5px;
+  }
+  .tabs-mini button.active { background: var(--panel-alt); color: var(--lime); }
+
+  label { display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin: 12px 0 5px; }
+  input, select, textarea {
+    width: 100%; padding: 11px 12px; border-radius: 10px;
+    border: 1px solid var(--border); background: #0d1424; color: var(--ink);
+    font-size: 14px; font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 78px; font-family: Consolas, monospace; font-size: 13px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--lime); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 16px; border-radius: 10px; border: 1px solid transparent;
+    font-weight: 700; font-size: 13.5px; cursor: pointer; transition: 0.15s;
+    text-decoration: none; white-space: nowrap;
+  }
+  .btn-primary { background: var(--lime); color: var(--lime-ink); }
+  .btn-primary:hover { background: #a8f15c; }
+  .btn-secondary { background: var(--panel-alt); color: var(--ink); border-color: var(--border); }
+  .btn-secondary:hover { background: #263759; }
+  .btn-wa { background: #25D366; color: #092012; }
+  .btn-danger { background: rgba(255,148,136,0.14); color: var(--red); border-color: rgba(255,148,136,0.35); }
+  .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+  .btn-block { width: 100%; margin-top: 16px; padding: 12px; }
+
+  /* Stats Grid */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px; margin-bottom: 20px;
+  }
+  .stat-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px 18px;
+  }
+  .stat-card .k { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+  .stat-card .v { font-size: 28px; font-weight: 800; margin-top: 4px; color: var(--ink); }
+  .stat-card.lime .v { color: var(--lime); }
+  .stat-card.amber .v { color: var(--amber); }
+  .stat-card.blue .v { color: var(--blue); }
+
+  /* Navigation Tabs */
+  .nav-tabs {
+    display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 18px;
+  }
+  .nav-tabs button {
+    padding: 10px 16px; border-radius: 11px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--muted); font-weight: 700; font-size: 13.5px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .nav-tabs button.active {
+    background: var(--lime); color: var(--lime-ink); border-color: var(--lime);
+  }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; padding: 20px; margin-bottom: 18px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 17px; }
+  .card .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+
+  .badge {
+    display: inline-block; padding: 3px 9px; border-radius: 999px;
+    font-size: 11px; font-weight: 800; white-space: nowrap;
+  }
+  .b-ok { background: rgba(185,255,112,0.15); color: var(--lime); border: 1px solid rgba(185,255,112,0.35); }
+  .b-warn { background: rgba(255,210,125,0.15); color: var(--amber); border: 1px solid rgba(255,210,125,0.35); }
+  .b-exp { background: rgba(255,148,136,0.15); color: var(--red); border: 1px solid rgba(255,148,136,0.35); }
+  .b-blue { background: rgba(122,179,255,0.15); color: var(--blue); border: 1px solid rgba(122,179,255,0.35); }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 780px; }
+  th, td { padding: 11px 10px; text-align: left; border-bottom: 1px solid #22314d; font-size: 13px; vertical-align: middle; }
+  th { color: var(--lime); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #111a2c; }
+  .mono { font-family: Consolas, monospace; }
+  .mid-txt { color: var(--lime); font-weight: 700; font-family: Consolas, monospace; white-space: nowrap; }
+
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; z-index: 100;
+    background: #1b2c20; border: 1px solid var(--lime); color: var(--ink);
+    padding: 12px 18px; border-radius: 12px; font-size: 13.5px; font-weight: 600;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.5); display: none; max-width: 380px;
+  }
+  .toast.err { background: #361d22; border-color: var(--red); color: #ffd4cf; }
+
+  .result-box {
+    margin-top: 16px; padding: 16px; border-radius: 12px;
+    background: #0d1526; border: 1px solid var(--lime); display: none;
+  }
+  .hidden { display: none !important; }
+  @media (max-width: 640px) {
+    .topbar { padding: 12px 14px; }
+    .card { padding: 15px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-dot"></div>
+    <div>
+      <h1>Café Desk — Owner Dashboard</h1>
+      <span>Mobile &amp; Laptop Cloud Control Panel</span>
+    </div>
+  </div>
+  <div class="user-pill hidden" id="userBar">
+    <span id="ownerEmailBadge"></span>
+    <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↻ Refresh</button>
+    <button class="btn btn-secondary btn-sm" onclick="openPasswordModal()">🔒 Set Password</button>
+    <button class="btn btn-danger btn-sm" onclick="signOutOwner()">Sign Out</button>
+  </div>
+</header>
+
+<!-- ==================== LOGIN GATE ==================== -->
+<main id="authSection" class="container">
+  <div class="auth-wrap">
+    <div class="auth-tag">Strictly Private • Owner Only</div>
+    <h2>Sign in to Café Desk Cloud</h2>
+    <p>Signups are disabled. Only your verified owner email (<strong>njwayelodlamini@gmail.com</strong>) can unlock this dashboard or sign keys.</p>
+
+    <div class="tabs-mini">
+      <button id="modeOtpBtn" class="active" onclick="switchAuthMode('otp')">Email Code / Magic Link</button>
+      <button id="modePwdBtn" onclick="switchAuthMode('password')">Email + Password</button>
+    </div>
+
+    <label for="loginEmail">Owner Email</label>
+    <input id="loginEmail" type="email" value="njwayelodlamini@gmail.com" autocomplete="email">
+
+    <div id="pwdBox" class="hidden">
+      <label for="loginPassword">Owner Password</label>
+      <input id="loginPassword" type="password" placeholder="Enter your password" autocomplete="current-password">
+      <button class="btn btn-primary btn-block" onclick="signInWithPassword()">Sign In with Password</button>
+    </div>
+
+    <div id="otpBox">
+      <button class="btn btn-primary btn-block" id="sendOtpBtn" onclick="sendEmailOtp()">✉ Send Login Code / Link to My Email</button>
+      <div id="otpVerifyArea" class="hidden" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+        <label for="otpCodeInput">8-Digit Code from Email (or click the link in your email)</label>
+        <input id="otpCodeInput" type="text" placeholder="e.g. 12345678" inputmode="numeric">
+        <button class="btn btn-primary btn-block" onclick="verifyEmailOtp()">✓ Verify Code &amp; Open Dashboard</button>
+      </div>
+    </div>
+    <p id="authMsg" style="margin-top:14px; margin-bottom:0; font-size:13px; color:var(--lime);"></p>
+  </div>
+</main>
+
+<!-- ==================== OWNER DASHBOARD ==================== -->
+<main id="appSection" class="container hidden">
+
+  <!-- KPI Summary Cards -->
+  <div class="stats-grid">
+    <div class="stat-card lime">
+      <div class="k">Active Computers</div>
+      <div class="v" id="statActive">0</div>
+    </div>
+    <div class="stat-card blue">
+      <div class="k">Multi-PC Shops</div>
+      <div class="v" id="statShops">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="k">PDF Unlock Add-ons</div>
+      <div class="v" id="statAddons">0</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="k">Expiring ≤ 30 Days</div>
+      <div class="v" id="statExpiring">0</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="k">Pending Requests</div>
+      <div class="v" id="statPending">0</div>
+    </div>
+  </div>
+
+  <!-- Navigation Tabs -->
+  <nav class="nav-tabs">
+    <button class="active" data-tab="tabIssue" onclick="showTab('tabIssue', this)">⚡ Issue Single / Multi-PC Keys</button>
+    <button data-tab="tabKeys" onclick="showTab('tabKeys', this)">🔑 All Machines &amp; Shops</button>
+    <button data-tab="tabRequests" onclick="showTab('tabRequests', this)">📥 Pending Requests <span id="reqCountBadge"></span></button>
+    <button data-tab="tabReleases" onclick="showTab('tabReleases', this)">🚀 Remote App Updates</button>
+  </nav>
+
+  <!-- TAB 1: ISSUE SINGLE OR MULTI-PC KEYS -->
+  <section id="tabIssue" class="tab-pane">
+    <div class="card">
+      <h3>Generate &amp; Cloud-Activate License or Paid Add-on Keys</h3>
+      <div class="sub">Signs genuine Ed25519 <code>CDLIC1</code> / <code>CDADD1</code> keys on your secure cloud vault and saves them live to Supabase — so the customer can just click <strong>"☁ Check Online Approval"</strong> on their PC (or you can WhatsApp the key in 1 tap).</div>
+
+      <div class="form-grid">
+        <div>
+          <label>Customer / Internet Café Name</label>
+          <input id="genCustomer" type="text" placeholder="e.g. Sunrise Cyber Café">
+        </div>
+        <div>
+          <label>Key / Package Type</label>
+          <select id="genMode">
+            <option value="license">Standard 1-Year License (CDLIC1)</option>
+            <option value="addon">PAID ADD-ON ONLY: PDF Password Remover (CDADD1)</option>
+            <option value="combo">Combo: 1-Year License + PDF Password Remover</option>
+            <option value="multi_seat1">Multi-PC Shop: PDF Unlock on Seat 1 (Cashier) Only</option>
+            <option value="multi_all">Multi-PC Shop: PDF Unlock on ALL Seats</option>
+          </select>
+        </div>
+        <div>
+          <label>Validity (Days)</label>
+          <input id="genDays" type="number" value="365" min="1" max="3650">
+        </div>
+        <div>
+          <label>Optional Shop ID (for 2+ PCs)</label>
+          <input id="genShopId" type="text" placeholder="Auto e.g. SHOP-SUNRISE">
+        </div>
+      </div>
+
+      <label>Machine ID(s) — Enter 1 Machine ID, or paste 2–20 Machine IDs (one per line or comma-separated; optional <code>=Desk Name</code>)</label>
+      <textarea id="genMachines" placeholder="CD-8F3A-91BC-204E=Counter PC 1&#10;CD-4411-8899-AA22=Desk 2"></textarea>
+
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn-primary" id="genSubmitBtn" onclick="issueKeysNow()">⚡ Sign &amp; Activate in Cloud Now</button>
+      </div>
+
+      <div id="issuedResultBox" class="result-box"></div>
+    </div>
+  </section>
+
+  <!-- TAB 2: ALL ISSUED KEYS & SHOPS -->
+  <section id="tabKeys" class="tab-pane hidden">
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+        <div>
+          <h3 style="margin:0;">Issued Machine IDs, Multi-PC Seats &amp; Kill-Switch</h3>
+          <div class="sub" style="margin:2px 0 0;">Search by Shop name, Shop ID, or Machine ID. Click <strong>Revoke</strong> to block a PC remotely, or <strong>WhatsApp</strong> to send renewal reminders.</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="exportCsv()">⬇ Download Excel CSV</button>
+      </div>
+
+      <input id="searchKeys" type="search" placeholder="Search Machine ID (CD-...), Shop name, Shop ID, or License ID..." oninput="renderKeysTable()" style="margin-bottom:14px;">
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Machine ID</th>
+              <th>Shop / Seat</th>
+              <th>Type</th>
+              <th>Expires</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="keysTbody">
+            <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">Loading keys…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 3: PENDING ACTIVATION REQUESTS -->
+  <section id="tabRequests" class="tab-pane hidden">
+    <div class="card">
+      <h3>Customer Online Activation Requests</h3>
+      <div class="sub">When a shop clicks to request activation, their Machine ID and Computer Name land here. Click <strong>✓ Approve &amp; Sign</strong> to unlock their PC immediately over the internet.</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Requested</th>
+              <th>Machine ID</th>
+              <th>Shop &amp; Station</th>
+              <th>Wants</th>
+              <th>Contact</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="reqsTbody">
+            <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No pending requests right now.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 4: PUBLISH REMOTE APP UPDATES -->
+  <section id="tabReleases" class="tab-pane hidden">
+    <div class="card">
+      <h3>Publish Over-the-Internet App Update (Zero Shop Visits)</h3>
+      <div class="sub">Upload a new <code>CafeDesk-Setup.exe</code> (or paste a GitHub Releases HTTPS link). Your browser automatically calculates the <strong>SHA-256 security checksum</strong> and publishes it to all customer PCs.</div>
+
+      <div class="form-grid">
+        <div>
+          <label>New Version Number (must be higher than shop's current version, e.g. 0.8.1)</label>
+          <input id="relVersion" type="text" placeholder="0.8.1">
+        </div>
+        <div>
+          <label>Pick Installer File (.exe / .zip) — Auto-computes SHA-256 &amp; uploads to Supabase Storage</label>
+          <input id="relFile" type="file" accept=".exe,.zip" onchange="handleReleaseFilePicked(this)">
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div>
+          <label>HTTPS Download URL (auto-filled on upload, or paste GitHub Release URL)</label>
+          <input id="relUrl" type="url" placeholder="https://rmtkppzqzxuuuhbeufjy.supabase.co/storage/v1/object/public/cafedesk-releases/...">
+        </div>
+        <div>
+          <label>64-Character SHA-256 Checksum (auto-computed)</label>
+          <input id="relSha" type="text" class="mono" placeholder="Auto-calculated when you choose a file above">
+        </div>
+      </div>
+
+      <label>What's New / Release Notes (shown to shop staff before updating)</label>
+      <textarea id="relNotes" style="min-height:64px; font-family:inherit;" placeholder="e.g. Faster PDF preview, new templates, and bug fixes."></textarea>
+
+      <div style="margin-top:14px;">
+        <button class="btn btn-primary" id="pubRelBtn" onclick="publishReleaseNow()">🚀 Upload &amp; Publish Remote Update</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Published Releases</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Published</th>
+              <th>SHA-256 Checksum</th>
+              <th>Release Notes</th>
+              <th>Download</th>
+            </tr>
+          </thead>
+          <tbody id="releasesTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Set Password Modal -->
+<div id="pwdModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px;">
+  <div class="card" style="max-width:400px;width:100%;margin:0;">
+    <h3>Set / Update Owner Password</h3>
+    <div class="sub">Set a password so next time on your phone or laptop you can log in directly with Email + Password.</div>
+    <label>New Password (8+ characters)</label>
+    <input id="newOwnerPwd" type="password" placeholder="Choose a strong password">
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+      <button class="btn btn-secondary" onclick="document.getElementById('pwdModal').classList.add('hidden')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveOwnerPassword()">Save Password</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+  const SUPABASE_URL = "https://rmtkppzqzxuuuhbeufjy.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtdGtwcHpxenh1dXVoYmV1Zmp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ4NDg5ODksImV4cCI6MjExMDQyNDk4OX0.FES1qZBI3btnS3Z96x17pXh3hCneM37mz-tKW7jU2cc";
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  let allKeys = [];
+  let allReqs = [];
+  let allReleases = [];
+
+  function notify(msg, isErr = false) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.className = isErr ? "toast err" : "toast";
+    el.style.display = "block";
+    clearTimeout(window._toastTimer);
+    window._toastTimer = setTimeout(() => { el.style.display = "none"; }, 4200);
+  }
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s == null ? "" : String(s);
+    return d.innerHTML;
+  }
+
+  function switchAuthMode(mode) {
+    document.getElementById("modeOtpBtn").classList.toggle("active", mode === "otp");
+    document.getElementById("modePwdBtn").classList.toggle("active", mode === "password");
+    document.getElementById("otpBox").classList.toggle("hidden", mode !== "otp");
+    document.getElementById("pwdBox").classList.toggle("hidden", mode !== "password");
+  }
+
+  async function sendEmailOtp() {
+    const email = document.getElementById("loginEmail").value.trim();
+    const btn = document.getElementById("sendOtpBtn");
+    btn.disabled = true;
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false, emailRedirectTo: window.location.href.split("#")[0] },
+    });
+    btn.disabled = false;
+    if (error) return notify(error.message, true);
+    document.getElementById("otpVerifyArea").classList.remove("hidden");
+    document.getElementById("authMsg").textContent = "Check " + email + " for your sign-in link or 8-digit code!";
+    notify("Login code & link sent to " + email);
+  }
+
+  async function verifyEmailOtp() {
+    const email = document.getElementById("loginEmail").value.trim();
+    const token = document.getElementById("otpCodeInput").value.trim();
+    if (!token) return notify("Enter the code from your email.", true);
+    const { error } = await sb.auth.verifyOtp({ email, token, type: "email" });
+    if (error) return notify(error.message, true);
+    notify("Welcome back!");
+  }
+
+  async function signInWithPassword() {
+    const email = document.getElementById("loginEmail").value.trim();
+    const password = document.getElementById("loginPassword").value;
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) return notify(error.message, true);
+    notify("Signed in!");
+  }
+
+  async function signOutOwner() {
+    await sb.auth.signOut();
+  }
+
+  function openPasswordModal() {
+    document.getElementById("pwdModal").classList.remove("hidden");
+  }
+
+  async function saveOwnerPassword() {
+    const pwd = document.getElementById("newOwnerPwd").value;
+    if (!pwd || pwd.length < 8) return notify("Use at least 8 characters.", true);
+    const { error } = await sb.auth.updateUser({ password: pwd });
+    if (error) return notify(error.message, true);
+    document.getElementById("pwdModal").classList.add("hidden");
+    document.getElementById("newOwnerPwd").value = "";
+    notify("Owner password saved! You can now sign in anytime with Email + Password.");
+  }
+
+  function showTab(tabId, btnEl) {
+    document.querySelectorAll(".tab-pane").forEach((p) => p.classList.add("hidden"));
+    document.getElementById(tabId).classList.remove("hidden");
+    document.querySelectorAll(".nav-tabs button").forEach((b) => b.classList.remove("active"));
+    if (btnEl) btnEl.classList.add("active");
+  }
+
+  async function callOwnerAdmin(payload) {
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) throw new Error("Please sign in first.");
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/owner-admin`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const json = await resp.json();
+    if (!resp.ok || !json.ok) throw new Error(json.error || "Owner API request failed.");
+    return json;
+  }
+
+  async function refreshAll() {
+    const [kRes, rRes, aRes] = await Promise.all([
+      sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).limit(1000),
+      sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
+      sb.from("app_releases").select("*").order("published_at", { ascending: false }).limit(30),
+    ]);
+    if (kRes.error) return notify(kRes.error.message, true);
+    allKeys = kRes.data || [];
+    allReqs = rRes.data || [];
+    allReleases = aRes.data || [];
+    updateKpis();
+    renderKeysTable();
+    renderReqsTable();
+    renderReleasesTable();
+  }
+
+  function daysLeftFrom(expStr) {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const exp = new Date(expStr + "T00:00:00Z");
+    return Math.round((exp - today) / 86400000);
+  }
+
+  function updateKpis() {
+    let activeMids = new Set();
+    let shops = new Set();
+    let addons = 0;
+    let expiring = 0;
+    for (const k of allKeys) {
+      const d = daysLeftFrom(k.expires_at);
+      if (!k.revoked && d >= 0) {
+        activeMids.add(k.machine_id);
+        if (k.shop_id) shops.add(k.shop_id);
+        if (k.key_type === "addon" || k.key_type === "combo") addons++;
+        if (d <= 30) expiring++;
+      }
+    }
+    document.getElementById("statActive").textContent = activeMids.size;
+    document.getElementById("statShops").textContent = shops.size;
+    document.getElementById("statAddons").textContent = addons;
+    document.getElementById("statExpiring").textContent = expiring;
+    document.getElementById("statPending").textContent = allReqs.length;
+    document.getElementById("reqCountBadge").textContent = allReqs.length ? `(${allReqs.length})` : "";
+  }
+
+  async function issueKeysNow(prefillReqId = null) {
+    const customer = document.getElementById("genCustomer").value.trim() || "Licensed Café";
+    const mode = document.getElementById("genMode").value;
+    const days = parseInt(document.getElementById("genDays").value || "365", 10);
+    const shop_id = document.getElementById("genShopId").value.trim();
+    const machines = document.getElementById("genMachines").value.trim();
+    if (!machines) return notify("Paste at least one Machine ID (CD-XXXX-XXXX-XXXX).", true);
+
+    const btn = document.getElementById("genSubmitBtn");
+    btn.disabled = true;
+    btn.textContent = "Signing & pushing to cloud…";
+    try {
+      const res = await callOwnerAdmin({ action: "sign_keys", customer, mode, days, shop_id, machines, request_id: prefillReqId });
+      const box = document.getElementById("issuedResultBox");
+      box.style.display = "block";
+      let html = `<div style="font-weight:800;color:var(--lime);margin-bottom:8px;">✓ Signed &amp; Live in Supabase (${res.issued.length} computer key(s)) — Customer can click "☁ Check Online Approval" right now!</div>`;
+      for (const item of res.issued) {
+        const seatTxt = item.seat_no ? ` [Seat ${item.seat_no}/${item.seat_max} • ${esc(item.seat_label)}]` : "";
+        const waMsg = encodeURIComponent(
+          `Hi ${item.customer}! Your Café Desk key for Machine ID ${item.machine_id}${seatTxt} (valid until ${item.expires_at}) is active!\n\n` +
+          `Option 1 (Easiest): Open Café Desk and click "Check Online Approval".\n` +
+          `Option 2 (Offline key):\n${item.token}`
+        );
+        html += `
+          <div style="background:#131f35;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+              <span><strong class="mid-txt">${esc(item.machine_id)}</strong> ${seatTxt} <span class="badge b-blue">${esc(item.key_type)}</span></span>
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${esc(item.token)}');notify('Key copied!')">⧉ Copy Key</button>
+                <a class="btn btn-wa btn-sm" target="_blank" href="https://wa.me/?text=${waMsg}">💬 Send via WhatsApp</a>
+              </div>
+            </div>
+            <input readonly value="${esc(item.token)}" class="mono" style="font-size:11.5px;padding:7px;" onclick="this.select()">
+          </div>`;
+      }
+      box.innerHTML = html;
+      notify(`Issued ${res.issued.length} key(s) for ${customer}!`);
+      await refreshAll();
+    } catch (e) {
+      notify(e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "⚡ Sign & Activate in Cloud Now";
+    }
+  }
+
+  function renderKeysTable() {
+    const q = (document.getElementById("searchKeys").value || "").toLowerCase().trim();
+    const rows = allKeys.filter((k) => {
+      if (!q) return true;
+      return [k.machine_id, k.customer, k.shop_id, k.seat_label, k.key_type, k.license_id]
+        .some((v) => String(v || "").toLowerCase().includes(q));
+    });
+    const tb = document.getElementById("keysTbody");
+    if (!rows.length) {
+      tb.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No matching keys found.</td></tr>`;
+      return;
+    }
+    tb.innerHTML = rows.map((k) => {
+      const d = daysLeftFrom(k.expires_at);
+      let badge = `<span class="badge b-ok">ACTIVE • ${d}d left</span>`;
+      if (k.revoked) badge = `<span class="badge b-exp">REVOKED</span>`;
+      else if (d < 0) badge = `<span class="badge b-exp">EXPIRED • ${Math.abs(d)}d ago</span>`;
+      else if (d <= 30) badge = `<span class="badge b-warn">EXPIRING • ${d}d left</span>`;
+
+      const seatMeta = k.seat_no ? `<div style="font-size:11.5px;color:var(--muted);">${esc(k.shop_id)} • Seat ${k.seat_no}/${k.seat_max} (${esc(k.seat_label)})</div>` : (k.shop_id ? `<div style="font-size:11.5px;color:var(--muted);">${esc(k.shop_id)}</div>` : "");
+      const toggleBtn = k.revoked
+        ? `<button class="btn btn-secondary btn-sm" onclick="toggleRevoke('${esc(k.license_id)}', false)">Restore</button>`
+        : `<button class="btn btn-danger btn-sm" onclick="toggleRevoke('${esc(k.license_id)}', true)">Revoke</button>`;
+
+      return `
+        <tr>
+          <td class="mid-txt">${esc(k.machine_id)}</td>
+          <td><strong>${esc(k.customer)}</strong>${seatMeta}</td>
+          <td><span class="badge b-blue">${esc(k.key_type)}</span></td>
+          <td class="mono">${esc(k.expires_at)}</td>
+          <td>${badge}</td>
+          <td style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${esc(k.token)}');notify('Copied key for ${esc(k.machine_id)}')">Copy Key</button>
+            ${toggleBtn}
+          </td>
+        </tr>`;
+    }).join("");
+  }
+
+  async function toggleRevoke(licenseId, revokeNow) {
+    const verb = revokeNow ? "REVOKE (remotely lock)" : "RESTORE";
+    if (!confirm(`Are you sure you want to ${verb} License ID ${licenseId}?`)) return;
+    try {
+      await callOwnerAdmin({ action: "set_revoked", license_id: licenseId, revoked: revokeNow });
+      notify(revokeNow ? "License remotely revoked!" : "License restored!");
+      await refreshAll();
+    } catch (e) {
+      notify(e.message, true);
+    }
+  }
+
+  function renderReqsTable() {
+    const tb = document.getElementById("reqsTbody");
+    if (!allReqs.length) {
+      tb.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No pending activation requests.</td></tr>`;
+      return;
+    }
+    tb.innerHTML = allReqs.map((r) => `
+      <tr>
+        <td class="mono">${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}</td>
+        <td class="mid-txt">${esc(r.machine_id)}</td>
+        <td><strong>${esc(r.shop_name || "Walk-in Shop")}</strong><div style="font-size:11.5px;color:var(--muted);">${esc(r.shop_id)} ${esc(r.station_name)}</div></td>
+        <td><span class="badge b-warn">${esc(r.requested_kind)}</span></td>
+        <td>${esc(r.contact_phone || "-")}</td>
+        <td style="display:flex;gap:6px;">
+          <button class="btn btn-primary btn-sm" onclick="approveRequest('${esc(r.id)}','${esc(r.machine_id)}','${esc(r.shop_name || "Licensed Café")}','${esc(r.shop_id || "")}','${esc(r.requested_kind)}')">✓ Approve &amp; Sign</button>
+          <button class="btn btn-danger btn-sm" onclick="dismissRequest('${esc(r.id)}')">Dismiss</button>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  async function approveRequest(reqId, mid, shopName, shopId, kind) {
+    document.getElementById("genCustomer").value = shopName;
+    document.getElementById("genShopId").value = shopId;
+    document.getElementById("genMachines").value = mid;
+    document.getElementById("genMode").value = kind === "pdf_unlock" ? "addon" : (kind === "combo" ? "combo" : "license");
+    showTab("tabIssue", document.querySelector('[data-tab="tabIssue"]'));
+    await issueKeysNow(reqId);
+  }
+
+  async function dismissRequest(reqId) {
+    try {
+      await callOwnerAdmin({ action: "update_request_status", request_id: reqId, status: "rejected" });
+      notify("Request dismissed.");
+      await refreshAll();
+    } catch (e) {
+      notify(e.message, true);
+    }
+  }
+
+  async function handleReleaseFilePicked(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    notify("Computing SHA-256 fingerprint…");
+    const buf = await file.arrayBuffer();
+    const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+    const hex = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    document.getElementById("relSha").value = hex;
+    const ver = (document.getElementById("relVersion").value || "latest").trim().replace(/[^a-zA-Z0-9._-]/g, "");
+    const objName = `v${ver}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    document.getElementById("relUrl").value = `${SUPABASE_URL}/storage/v1/object/public/cafedesk-releases/${objName}`;
+    notify("SHA-256 computed! Click Upload & Publish when ready.");
+  }
+
+  async function publishReleaseNow() {
+    const version = document.getElementById("relVersion").value.trim().replace(/^v/i, "");
+    const fileInput = document.getElementById("relFile");
+    const file = fileInput.files && fileInput.files[0];
+    let download_url = document.getElementById("relUrl").value.trim();
+    const sha256 = document.getElementById("relSha").value.trim().toLowerCase();
+    const release_notes = document.getElementById("relNotes").value.trim();
+
+    if (!version) return notify("Enter a version number (e.g. 0.8.1).", true);
+    if (!/^[0-9a-f]{64}$/.test(sha256)) return notify("Valid 64-char SHA-256 checksum required (pick your .exe file above).", true);
+
+    const btn = document.getElementById("pubRelBtn");
+    btn.disabled = true;
+    try {
+      if (file) {
+        btn.textContent = "Uploading installer to Supabase Storage…";
+        const objPath = `v${version}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        const { error: upErr } = await sb.storage.from("cafedesk-releases").upload(objPath, file, { upsert: true });
+        if (upErr) throw new Error("Storage upload failed: " + upErr.message);
+        const { data: pubUrl } = sb.storage.from("cafedesk-releases").getPublicUrl(objPath);
+        download_url = pubUrl.publicUrl;
+        document.getElementById("relUrl").value = download_url;
+      }
+      if (!download_url.startsWith("https://")) throw new Error("Download URL must start with https://");
+
+      btn.textContent = "Publishing release record…";
+      const { error } = await sb.from("app_releases").upsert({
+        version, download_url, sha256, release_notes, mandatory: false, published_at: new Date().toISOString(),
+      });
+      if (error) throw new Error(error.message);
+      notify(`Published Café Desk v${version}! All shops can now update remotely.`);
+      await refreshAll();
+    } catch (e) {
+      notify(e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🚀 Upload & Publish Remote Update";
+    }
+  }
+
+  function renderReleasesTable() {
+    const tb = document.getElementById("releasesTbody");
+    if (!allReleases.length) {
+      tb.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px;">No remote updates published yet.</td></tr>`;
+      return;
+    }
+    tb.innerHTML = allReleases.map((r) => `
+      <tr>
+        <td><strong style="color:var(--lime);">v${esc(r.version)}</strong></td>
+        <td class="mono">${esc(String(r.published_at || "").slice(0, 10))}</td>
+        <td class="mono" style="font-size:11.5px;">${esc(String(r.sha256 || "").slice(0, 16))}…</td>
+        <td>${esc(r.release_notes || "-")}</td>
+        <td><a class="btn btn-secondary btn-sm" target="_blank" href="${esc(r.download_url)}">Download</a></td>
+      </tr>
+    `).join("");
+  }
+
+  function exportCsv() {
+    const header = ["Machine ID", "Customer", "Shop ID", "Seat", "Type", "Issued", "Expires", "Revoked", "License ID", "Token"];
+    const lines = [header.join(",")];
+    for (const k of allKeys) {
+      const seat = k.seat_no ? `Seat ${k.seat_no}/${k.seat_max} (${k.seat_label || ""})` : "";
+      const vals = [k.machine_id, k.customer, k.shop_id, seat, k.key_type, k.issued_at, k.expires_at, k.revoked, k.license_id, k.token]
+        .map((v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`);
+      lines.push(vals.join(","));
+    }
+    const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `cafedesk-cloud-keys-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  sb.auth.onAuthStateChange((_event, session) => {
+    const loggedIn = Boolean(session && session.user);
+    document.getElementById("authSection").classList.toggle("hidden", loggedIn);
+    document.getElementById("appSection").classList.toggle("hidden", !loggedIn);
+    document.getElementById("userBar").classList.toggle("hidden", !loggedIn);
+    if (loggedIn) {
+      document.getElementById("ownerEmailBadge").textContent = session.user.email;
+      refreshAll();
+    }
+  });
+</script>
+</body>
+</html>
