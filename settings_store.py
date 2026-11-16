@@ -93,8 +93,27 @@ def clean_name(name):
     if not name: raise ValueError('Enter a business name.')
     if len(name)>MAX_NAME: raise ValueError(f'Use {MAX_NAME} characters or fewer.')
     return name
+def _default_station():
+    try:
+        import socket
+        h=' '.join(socket.gethostname().split())[:40]
+        if h: return h
+    except Exception:
+        pass
+    return 'Counter PC 1'
+
 def _default_dict():
-    return {'business_name':DEFAULT_NAME,'business_icon':DEFAULT_ICON,'currency':'R','prices':[]}
+    return {
+        'business_name':DEFAULT_NAME,
+        'business_icon':DEFAULT_ICON,
+        'currency':'R',
+        'prices':[],
+        'station_name':_default_station(),
+        'shop_id':'',
+        'lan_sync_folder':'',
+        'supabase_url':os.environ.get('CAFE_DESK_SUPABASE_URL','').strip(),
+        'supabase_anon_key':os.environ.get('CAFE_DESK_SUPABASE_ANON_KEY','').strip(),
+    }
 def _parse_settings_file(target):
     default=_default_dict()
     if not target.exists(): return default
@@ -123,9 +142,20 @@ def _parse_settings_file(target):
     try: name=clean_name(obj.get('business_name',DEFAULT_NAME))
     except ValueError: name=DEFAULT_NAME
     icon=obj.get('business_icon',DEFAULT_ICON)
-    default.update({k:v for k,v in obj.items() if k in ('pin_salt','pin_hash','currency','prices','failed_attempts','lockout_until_epoch')})
+    default.update({
+        k:v for k,v in obj.items()
+        if k in (
+            'pin_salt','pin_hash','currency','prices','failed_attempts','lockout_until_epoch',
+            'station_name','shop_id','lan_sync_folder','supabase_url','supabase_anon_key',
+        )
+    })
     default.update(business_name=name,business_icon=icon if icon in ICONS else DEFAULT_ICON)
     if not isinstance(default['prices'],list): default['prices']=[]
+    default['station_name']=' '.join(str(default.get('station_name') or '').split())[:40] or _default_station()
+    default['shop_id']=''.join(c for c in str(default.get('shop_id') or '').upper() if c.isalnum() or c in ('-','_'))[:40]
+    default['lan_sync_folder']=str(default.get('lan_sync_folder') or '').strip()[:260]
+    default['supabase_url']=str(default.get('supabase_url') or '').strip()[:200]
+    default['supabase_anon_key']=str(default.get('supabase_anon_key') or '').strip()[:512]
     return default
 def load_settings(path=None,strict=False):
     target=Path(path or settings_path())
@@ -229,3 +259,78 @@ def save_prices(currency,text,path=None):
     currency=currency.strip()
     if not currency or len(currency)>8 or any(c in currency for c in '\n\r|'): raise ValueError('Enter a currency symbol or code, up to 8 characters.')
     prices=parse_price_list(text); data=load_settings(path,strict=True); data.update(currency=currency,prices=prices); _write(data,path); return prices
+
+def save_multi_pc_settings(station_name,shop_id='',lan_sync_folder='',supabase_url='',supabase_anon_key='',path=None):
+    """Save Multi-PC station name, Shop ID, optional LAN sync folder, and public Supabase URL + anon key."""
+    clean_station=' '.join(str(station_name or '').split())[:40]
+    if not clean_station:
+        raise ValueError('Enter a Computer / Station Name (e.g. Counter PC 1 or Desk 2).')
+    clean_shop=''.join(c for c in str(shop_id or '').strip().upper() if c.isalnum() or c in ('-','_'))[:40]
+    clean_lan=str(lan_sync_folder or '').strip()[:260]
+    clean_url=str(supabase_url or '').strip().rstrip('/')[:200]
+    if clean_url and not (clean_url.startswith('https://') or clean_url.startswith('http://127.0.0.1') or clean_url.startswith('http://localhost')):
+        raise ValueError('Supabase Project URL must start with https:// (e.g. https://xxxx.supabase.co).')
+    clean_anon=str(supabase_anon_key or '').strip()[:512]
+    if 'service_role' in clean_anon:
+        raise ValueError('Never paste your secret service_role key into a customer PC! Use ONLY the public anon key here.')
+    data=load_settings(path,strict=True)
+    data.update(
+        station_name=clean_station,
+        shop_id=clean_shop,
+        lan_sync_folder=clean_lan,
+        supabase_url=clean_url,
+        supabase_anon_key=clean_anon,
+    )
+    _write(data,path)
+    return data
+
+def export_shop_profile_pack(dest_path,path=None):
+    """Export business name, currency, Shop ID, and price list to a `.cafeshop.json` file for other PCs in the same shop."""
+    dest=Path(dest_path)
+    if is_internal_path(dest):
+        raise ValueError('Choose an export location outside the internal Café Desk data folder (e.g. USB drive or Shared Folder).')
+    d=load_settings(path,strict=True)
+    pack={
+        'format':'cafedesk-shop-pack-v1',
+        'shop_id':d.get('shop_id',''),
+        'business_name':d.get('business_name',DEFAULT_NAME),
+        'currency':d.get('currency','R'),
+        'prices':d.get('prices',[]),
+        'supabase_url':d.get('supabase_url',''),
+        'supabase_anon_key':d.get('supabase_anon_key',''),
+    }
+    dest.parent.mkdir(parents=True,exist_ok=True)
+    dest.write_text(json.dumps(pack,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    return dest
+
+def import_shop_profile_pack(src_path,path=None):
+    """Import business name, currency, Shop ID, and price list onto another PC in the shop (preserving this PC's station_name & PIN)."""
+    src=Path(src_path)
+    raw=json.loads(src.read_text(encoding='utf-8'))
+    if not isinstance(raw,dict) or raw.get('format')!='cafedesk-shop-pack-v1':
+        raise ValueError('Selected file is not a valid Café Desk Shop Pack (.cafeshop.json).')
+    bname=clean_name(raw.get('business_name',DEFAULT_NAME))
+    curr=str(raw.get('currency') or 'R').strip()
+    if not curr or len(curr)>8 or any(c in curr for c in '\n\r|'):
+        raise ValueError('Pack contains an invalid currency symbol.')
+    raw_prices=raw.get('prices')
+    if not isinstance(raw_prices,list):
+        raise ValueError('Pack contains an invalid price list.')
+    lines='\n'.join(f"{p.get('name','')} | {p.get('price','0.00')}" for p in raw_prices if isinstance(p,dict) and p.get('name'))
+    validated_prices=parse_price_list(lines) if lines.strip() else []
+    data=load_settings(path,strict=True)
+    data['business_name']=bname
+    data['currency']=curr
+    data['prices']=validated_prices
+    if raw.get('shop_id'):
+        data['shop_id']=''.join(c for c in str(raw['shop_id']).upper() if c.isalnum() or c in ('-','_'))[:40]
+    if raw.get('supabase_url') and not data.get('supabase_url'):
+        s_url=str(raw['supabase_url']).strip().rstrip('/')
+        if s_url.startswith('https://'):
+            data['supabase_url']=s_url[:200]
+    if raw.get('supabase_anon_key') and not data.get('supabase_anon_key'):
+        s_anon=str(raw['supabase_anon_key']).strip()
+        if 'service_role' not in s_anon:
+            data['supabase_anon_key']=s_anon[:512]
+    _write(data,path)
+    return data

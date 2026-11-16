@@ -40,6 +40,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import cloud_sync
 import license_guard
 
 REPO_DIR = Path(__file__).resolve().parent
@@ -120,12 +121,53 @@ def load_private_key(priv_path: Path = DEFAULT_PRIV_PATH, private_key_b64: str |
     return Ed25519PrivateKey.from_private_bytes(raw)
 
 
+def _make_shop_id(customer: str, explicit_shop_id: str | None = None) -> str:
+    if explicit_shop_id:
+        cleaned = re.sub(r'[^A-Za-z0-9_-]', '', str(explicit_shop_id)).upper()[:36]
+        if cleaned:
+            return cleaned
+    slug = re.sub(r'[^A-Z0-9]+', '-', str(customer or 'CAFE').upper()).strip('-')[:18] or 'CAFE'
+    return f'SHOP-{slug}'
+
+
+def parse_batch_machines(raw_items: list[str] | str) -> list[tuple[str, str]]:
+    """Parse multiple Machine IDs (optionally `CD-XXXX-XXXX-XXXX=Counter 1` or comma/newline separated).
+
+    Returns deduplicated `[(normalized_mid, seat_label), ...]` preserving order.
+    """
+    text = '\n'.join(raw_items) if isinstance(raw_items, list) else str(raw_items or '')
+    chunks = [c.strip() for c in re.split(r'[\n,;]+', text) if c.strip()]
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for idx, chunk in enumerate(chunks, 1):
+        label_part = ''
+        mid_part = chunk
+        for sep in ('=', '|', ':'):
+            if sep in chunk:
+                left, right = chunk.split(sep, 1)
+                mid_part = left.strip()
+                label_part = ' '.join(right.split())[:40]
+                break
+        norm_mid = license_guard.normalize_machine_id(mid_part)
+        if norm_mid in seen:
+            continue
+        seen.add(norm_mid)
+        out.append((norm_mid, label_part or f'PC {len(out) + 1}'))
+    if not out:
+        raise ValueError('Provide at least one Machine ID (e.g. CD-1111-2222-3333, CD-4444-5555-6666).')
+    return out
+
+
 def sign_license_token(
     machine_id: str,
     customer: str = 'Licensed Café',
     days: int = 365,
     *,
     features: list[str] | None = None,
+    shop_id: str | None = None,
+    seat_no: int | None = None,
+    seat_max: int | None = None,
+    seat_label: str | None = None,
     issued_date: _dt.date | None = None,
     private_key_b64: str | None = None,
     priv_path: Path = DEFAULT_PRIV_PATH,
@@ -147,6 +189,14 @@ def sign_license_token(
         'exp': exp.isoformat(),
         'lid': lid,
     }
+    if shop_id or seat_no or seat_max:
+        payload['shop_id'] = _make_shop_id(clean_cust, shop_id)
+    if seat_no is not None and int(seat_no) > 0:
+        payload['seat_no'] = int(seat_no)
+    if seat_max is not None and int(seat_max) > 0:
+        payload['seat_max'] = int(seat_max)
+    if seat_label:
+        payload['seat_label'] = ' '.join(str(seat_label).split())[:40]
     if features:
         valid_feats = sorted({f for f in features if f in license_guard.KNOWN_PAID_FEATURES})
         if valid_feats:
@@ -167,6 +217,10 @@ def sign_addon_token(
     customer: str = 'Licensed Café',
     days: int = 365,
     *,
+    shop_id: str | None = None,
+    seat_no: int | None = None,
+    seat_max: int | None = None,
+    seat_label: str | None = None,
     issued_date: _dt.date | None = None,
     private_key_b64: str | None = None,
     priv_path: Path = DEFAULT_PRIV_PATH,
@@ -182,7 +236,7 @@ def sign_addon_token(
     exp = iat + _dt.timedelta(days=int(days))
     lid = uuid.uuid4().hex[:12].upper()
 
-    payload = {
+    payload: dict = {
         'v': 1,
         'type': 'addon',
         'feat': [feature],
@@ -192,6 +246,14 @@ def sign_addon_token(
         'exp': exp.isoformat(),
         'lid': lid,
     }
+    if shop_id or seat_no or seat_max:
+        payload['shop_id'] = _make_shop_id(clean_cust, shop_id)
+    if seat_no is not None and int(seat_no) > 0:
+        payload['seat_no'] = int(seat_no)
+    if seat_max is not None and int(seat_max) > 0:
+        payload['seat_max'] = int(seat_max)
+    if seat_label:
+        payload['seat_label'] = ' '.join(str(seat_label).split())[:40]
     payload_bytes = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8')
     payload_b64 = _b64u_encode(payload_bytes)
     signing_input = f'{license_guard.ADDON_TOKEN_PREFIX}.{payload_b64}'.encode('ascii')
@@ -200,6 +262,67 @@ def sign_addon_token(
     sig_b64 = _b64u_encode(priv.sign(signing_input))
     token = f'{license_guard.ADDON_TOKEN_PREFIX}.{payload_b64}.{sig_b64}'
     return token, payload
+
+
+def sign_multi_pc_shop_bundle(
+    machines: list[str] | str,
+    customer: str = 'Licensed Café',
+    days: int = 365,
+    *,
+    shop_id: str | None = None,
+    pdf_unlock_mode: str = 'none',
+    issued_date: _dt.date | None = None,
+    private_key_b64: str | None = None,
+    priv_path: Path = DEFAULT_PRIV_PATH,
+) -> dict:
+    """Issue hardware-locked keys for a shop with 2+ computers (`Seat 1 of N`, `Seat 2 of N`, ...).
+
+    `pdf_unlock_mode`:
+      - `'none'`: standard 1-year `CDLIC1` keys only on all seats
+      - `'seat1'`: `Seat 1` (Main Cashier PC) gets PDF Password Remover included; other seats standard
+      - `'all'`: ALL seats in the shop get PDF Password Remover included
+    """
+    if pdf_unlock_mode not in ('none', 'seat1', 'all'):
+        raise ValueError("pdf_unlock_mode must be 'none', 'seat1', or 'all'.")
+    parsed = parse_batch_machines(machines)
+    total_seats = len(parsed)
+    clean_cust = ' '.join(str(customer or 'Licensed Café').split())[:80] or 'Licensed Café'
+    resolved_shop = _make_shop_id(clean_cust, shop_id)
+
+    seats_out: list[dict] = []
+    for idx, (mid, s_label) in enumerate(parsed, 1):
+        inc_pdf = (pdf_unlock_mode == 'all') or (pdf_unlock_mode == 'seat1' and idx == 1)
+        feats = [license_guard.FEATURE_PDF_UNLOCK] if inc_pdf else None
+        tok, pay = sign_license_token(
+            mid,
+            customer=clean_cust,
+            days=days,
+            features=feats,
+            shop_id=resolved_shop,
+            seat_no=idx,
+            seat_max=total_seats,
+            seat_label=s_label,
+            issued_date=issued_date,
+            private_key_b64=private_key_b64,
+            priv_path=priv_path,
+        )
+        seats_out.append({
+            'seat_no': idx,
+            'seat_max': total_seats,
+            'seat_label': s_label,
+            'machine_id': mid,
+            'pdf_unlock': inc_pdf,
+            'token': tok,
+            'payload': pay,
+        })
+
+    return {
+        'shop_id': resolved_shop,
+        'customer': clean_cust,
+        'seat_max': total_seats,
+        'expires_at': seats_out[0]['payload']['exp'],
+        'seats': seats_out,
+    }
 
 
 def _entry_kind_label(entry: dict) -> str:
@@ -254,8 +377,8 @@ def rebuild_owner_exports(
     with open(target_csv, 'w', encoding='utf-8-sig', newline='') as fh:
         writer = csv.writer(fh)
         writer.writerow([
-            'Logged UTC', 'Machine ID', 'Customer / Shop', 'Key Type',
-            'Issued Date', 'Expires Date', 'Status', 'License ID', 'Key (CDLIC1 / CDADD1)',
+            'Logged UTC', 'Machine ID', 'Customer / Shop', 'Shop ID', 'Seat',
+            'Key Type', 'Issued Date', 'Expires Date', 'Status', 'License ID', 'Key (CDLIC1 / CDADD1)',
         ])
         for rec in records:
             exp_str = str(rec.get('exp') or '')
@@ -264,10 +387,19 @@ def rebuild_owner_exports(
                 status_txt = f'ACTIVE ({days_left}d left)' if days_left >= 0 else f'EXPIRED ({abs(days_left)}d ago)'
             except ValueError:
                 status_txt = 'UNKNOWN'
+            seat_txt = ''
+            if rec.get('seat_no') and rec.get('seat_max'):
+                seat_txt = f"Seat {rec['seat_no']}/{rec['seat_max']}"
+                if rec.get('seat_label'):
+                    seat_txt += f" ({rec['seat_label']})"
+            elif rec.get('seat_label'):
+                seat_txt = str(rec['seat_label'])
             writer.writerow([
                 _safe_csv(rec.get('logged_utc', '')[:19].replace('T', ' ')),
                 _safe_csv(rec.get('mid', '')),
                 _safe_csv(rec.get('cust', '')),
+                _safe_csv(rec.get('shop_id', '')),
+                _safe_csv(seat_txt),
                 _safe_csv(_entry_kind_label(rec)),
                 _safe_csv(rec.get('iat', '')),
                 _safe_csv(exp_str),
@@ -291,14 +423,24 @@ def rebuild_owner_exports(
         tok = str(rec.get('token') or '')
         mid = str(rec.get('mid') or '')
         cust = str(rec.get('cust') or '')
+        shop_id = str(rec.get('shop_id') or '')
+        seat_meta = ''
+        if rec.get('seat_no') and rec.get('seat_max'):
+            seat_meta = f"Seat {rec['seat_no']}/{rec['seat_max']}"
+            if rec.get('seat_label'):
+                seat_meta += f" • {rec['seat_label']}"
+        sub_parts = [f'ID: {html.escape(str(rec.get("lid") or ""))}']
+        if shop_id:
+            sub_parts.append(f'Shop: {html.escape(shop_id)}')
+        if seat_meta:
+            sub_parts.append(html.escape(seat_meta))
         ktype = _entry_kind_label(rec)
         iat = str(rec.get('iat') or '')
-        lid = str(rec.get('lid') or '')
         rows_html.append(
             f'<tr class="lic-row">'
             f'<td>{idx}</td>'
             f'<td class="mono mid">{html.escape(mid)}</td>'
-            f'<td><strong>{html.escape(cust)}</strong><div class="sub">ID: {html.escape(lid)}</div></td>'
+            f'<td><strong>{html.escape(cust)}</strong><div class="sub">{" &nbsp;|&nbsp; ".join(sub_parts)}</div></td>'
             f'<td>{html.escape(ktype)}</td>'
             f'<td class="mono">{html.escape(iat)} &rarr; {html.escape(exp_str)}</td>'
             f'<td><span class="badge {badge_cls}">{html.escape(badge_txt)}</span></td>'
@@ -425,6 +567,8 @@ def print_issued_registry(query: str = '', log_path: Path = ISSUED_LOG_PATH) -> 
             r for r in records
             if term in str(r.get('mid', '')).lower()
             or term in str(r.get('cust', '')).lower()
+            or term in str(r.get('shop_id', '')).lower()
+            or term in str(r.get('seat_label', '')).lower()
             or term in _entry_kind_label(r).lower()
             or term in str(r.get('lid', '')).lower()
         ]
@@ -447,7 +591,12 @@ def print_issued_registry(query: str = '', log_path: Path = ISSUED_LOG_PATH) -> 
             st = f'ACTIVE ({dleft}d left)' if dleft >= 0 else f'EXPIRED ({abs(dleft)}d ago)'
         except ValueError:
             st = 'UNKNOWN'
-        print(f'[{idx}] Machine ID : {rec.get("mid")}   |   Status: {st}')
+        seat_info = ''
+        if rec.get('shop_id') or rec.get('seat_no'):
+            s_part = f"Seat {rec.get('seat_no')}/{rec.get('seat_max')}" if rec.get('seat_no') and rec.get('seat_max') else ''
+            l_part = f" ({rec.get('seat_label')})" if rec.get('seat_label') else ''
+            seat_info = f'   |   Shop: {rec.get("shop_id") or "-"} {s_part}{l_part}'.rstrip()
+        print(f'[{idx}] Machine ID : {rec.get("mid")}   |   Status: {st}{seat_info}')
         print(f'    Customer   : {rec.get("cust")}   |   Type: {_entry_kind_label(rec)}')
         print(f'    Validity   : {rec.get("iat")} -> {exp_str}   |   License ID: {rec.get("lid")}')
         print(f'    Key        : {rec.get("token")}')
@@ -455,9 +604,39 @@ def print_issued_registry(query: str = '', log_path: Path = ISSUED_LOG_PATH) -> 
     return 0
 
 
+def _save_and_record_shop_bundle(bundle: dict, *, out_root: Path | None = None, log_path: Path = ISSUED_LOG_PATH) -> tuple[Path, Path, Path]:
+    base_files = (out_root or (DEFAULT_KEY_DIR / 'issued-files')) / bundle['shop_id']
+    base_files.mkdir(parents=True, exist_ok=True)
+    summary_lines = [
+        f"CAFÉ DESK — MULTI-PC SHOP LICENSE PACK ({bundle['seat_max']} COMPUTERS)",
+        f"Shop Name : {bundle['customer']}",
+        f"Shop ID   : {bundle['shop_id']}",
+        f"Expires   : {bundle['expires_at']}",
+        '=' * 74,
+        '',
+    ]
+    csv_file = log_path.parent / 'issued-licenses.csv'
+    html_file = log_path.parent / 'issued-licenses-dashboard.html'
+    for seat in bundle['seats']:
+        mid_compact = seat['machine_id'].replace('-', '')
+        ext = '-combo.cafelicense' if seat['pdf_unlock'] else '.cafelicense'
+        seat_file = base_files / f"Seat{seat['seat_no']}-{mid_compact}-{bundle['expires_at']}{ext}"
+        seat_file.write_text(seat['token'] + '\n', encoding='utf-8')
+        csv_file, html_file = _record_issued_license(seat['payload'], seat['token'], saved_file=seat_file, log_path=log_path)
+        addon_tag = ' + PDF Password Remover' if seat['pdf_unlock'] else ''
+        summary_lines.extend([
+            f"[Seat {seat['seat_no']} of {seat['seat_max']}] {seat['seat_label']}  —  Machine ID: {seat['machine_id']}{addon_tag}",
+            seat['token'],
+            '',
+        ])
+    pack_txt = base_files / f"{bundle['shop_id']}-ALL-SEATS.txt"
+    pack_txt.write_text('\n'.join(summary_lines), encoding='utf-8')
+    return pack_txt, csv_file, html_file
+
+
 def _interactive_cli() -> int:
     print('=' * 70)
-    print('  CAFÉ DESK — OWNER LICENSE & PAID ADD-ON GENERATOR (PRIVATE TOOL)')
+    print('  CAFÉ DESK — OWNER LICENSE, MULTI-PC & CLOUD GENERATOR (PRIVATE TOOL)')
     print('=' * 70)
     if not DEFAULT_PRIV_PATH.is_file():
         ans = input('No owner signing keypair found yet. Generate one now and update license_guard.py? [Y/n]: ').strip().lower()
@@ -471,22 +650,85 @@ def _interactive_cli() -> int:
             return 1
 
     print('\nChoose an action:')
-    print('  [1] Issue Standard 1-Year Computer License (CDLIC1...)')
+    print('  [1] Issue Standard 1-Year Computer License (1 PC — CDLIC1...)')
     print('  [2] Issue PAID ADD-ON ONLY: PDF Password Remover Key (CDADD1...)')
-    print('  [3] Issue Combo 1-Year Computer License + PDF Password Remover included')
-    print('  [4] View / Search all issued Machine IDs & CDLIC1/CDADD1 keys (Terminal)')
-    print('  [5] Open Private Owner License Dashboard in Browser (HTML + CSV)')
-    kind_choice = input('Select option [1-5, default 1]: ').strip() or '1'
-
-    if kind_choice == '4':
-        filt = input('Optional search filter (Machine ID or Shop name, or press Enter for all): ').strip()
-        return print_issued_registry(query=filt)
+    print('  [3] Issue Combo 1-Year Computer License + PDF Password Remover (1 PC)')
+    print('  [4] MULTI-PC SHOP PACK: Issue keys for 2+ computers in one shop at once')
+    print('  [5] View / Search all issued Machine IDs & CDLIC1/CDADD1 keys (Terminal)')
+    print('  [6] Open Private Owner License Dashboard in Browser (HTML + CSV)')
+    print('  [7] Cloud / Remote Updates: Setup Supabase, Sync Keys, or Publish App Update')
+    kind_choice = input('Select option [1-7, default 1]: ').strip() or '1'
 
     if kind_choice == '5':
+        filt = input('Optional search filter (Machine ID, Shop ID, or Shop name; Enter for all): ').strip()
+        return print_issued_registry(query=filt)
+
+    if kind_choice == '6':
         csv_file, html_file = rebuild_owner_exports()
         print(f'\n[OK] Private CSV saved  : {csv_file}')
         print(f'[OK] Private HTML saved : {html_file}')
         webbrowser.open(html_file.as_uri())
+        return 0
+
+    if kind_choice == '7':
+        print('\nSupabase Owner Cloud Actions (saved privately in owner-keys/supabase-owner.json):')
+        print('  [a] Configure Supabase URL + secret service_role key')
+        print('  [b] Push/Backup all issued Machine IDs & keys to Supabase')
+        print('  [c] Publish a new Remote App Update (version + HTTPS installer URL + SHA-256)')
+        print('  [d] Check pending online activation requests from customer PCs')
+        sub = input('Choose [a/b/c/d]: ').strip().lower()
+        if sub == 'a':
+            s_url = input('Supabase Project URL (https://xxxx.supabase.co): ').strip()
+            s_srv = input('Supabase secret service_role key (KEEP PRIVATE): ').strip()
+            s_anon = input('Supabase public anon key (optional): ').strip()
+            cfg_file = cloud_sync.save_owner_supabase_config(s_url, s_srv, s_anon)
+            print(f'\n[OK] Saved private owner cloud config to {cfg_file} (gitignored).')
+            return 0
+        if sub == 'b':
+            recs = load_issued_records()
+            count = cloud_sync.owner_push_issued_records_to_supabase(recs)
+            print(f'\n[OK] Synced {count} issued Machine ID key(s) to Supabase `issued_machine_keys`.')
+            return 0
+        if sub == 'c':
+            ver = input('New App Version (e.g. 0.8.1): ').strip()
+            dl_url = input('HTTPS Installer URL (e.g. GitHub Release or Supabase Storage URL): ').strip()
+            sha_or_path = input('Local .exe/.zip path (to compute SHA-256) OR 64-char SHA-256 hash: ').strip()
+            notes = input('Short release notes for shop staff: ').strip()
+            row = cloud_sync.owner_publish_app_release(ver, dl_url, sha_or_path, release_notes=notes)
+            print(f"\n[OK] Published Café Desk v{row['version']} (SHA-256: {row['sha256']}) to Supabase!")
+            return 0
+        if sub == 'd':
+            reqs = cloud_sync.owner_list_pending_requests()
+            print(f'\nPending Online Activation Requests ({len(reqs)}):')
+            for r in reqs:
+                print(
+                    f"  • {r.get('machine_id')} | Shop: {r.get('shop_name') or r.get('shop_id')} "
+                    f"({r.get('station_name')}) | Wants: {r.get('requested_kind')} | Phone: {r.get('contact_phone')}"
+                )
+            return 0
+        return 0
+
+    if kind_choice == '4':
+        cust = input('Enter Multi-PC Shop / Café name [Sunrise Cyber Café]: ').strip() or 'Sunrise Cyber Café'
+        shop_id = input('Optional Shop ID (Enter to auto-generate, e.g. SHOP-SUNRISE): ').strip()
+        print('Paste all Machine IDs for this shop separated by commas (optional `=Desk Name`, e.g. `CD-1111-2222-3333=Counter, CD-4444-5555-6666=Desk 2`):')
+        raw_mids = input('Machine IDs: ').strip()
+        pdf_opt = input('Include Paid PDF Password Remover? [none / seat1 / all, default none]: ').strip().lower() or 'none'
+        days_raw = input('Validity in days [365 for 1 year]: ').strip()
+        days = int(days_raw) if days_raw else 365
+        bundle = sign_multi_pc_shop_bundle(
+            raw_mids, customer=cust, days=days, shop_id=shop_id or None, pdf_unlock_mode=pdf_opt
+        )
+        pack_txt, csv_file, html_file = _save_and_record_shop_bundle(bundle)
+        print('\n' + '=' * 74)
+        print(f"MULTI-PC SHOP BUNDLE CREATED: {bundle['customer']} ({bundle['shop_id']}) — {bundle['seat_max']} PCs")
+        print(f'All-Seats Handout File : {pack_txt}')
+        print(f'Owner Dashboard HTML   : {html_file}  (gitignored)')
+        print('=' * 74)
+        for s in bundle['seats']:
+            print(f"\n[Seat {s['seat_no']}/{s['seat_max']} — {s['seat_label']}] Machine ID: {s['machine_id']}")
+            print(s['token'])
+        print('\n' + '=' * 74)
         return 0
 
     mid = input('Enter customer Machine ID (e.g. CD-8F3A-91BC-204E): ').strip()
@@ -533,20 +775,64 @@ def _interactive_cli() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='Owner-only Ed25519 license & paid add-on generator for Café Desk.')
+    parser = argparse.ArgumentParser(description='Owner-only Ed25519 license, multi-PC shop & cloud updater tool for Café Desk.')
     parser.add_argument('--init-keys', action='store_true', help='Generate a new Ed25519 private/public keypair in owner-keys/.')
     parser.add_argument('--force', action='store_true', help='Allow overwriting an existing keypair with --init-keys.')
     parser.add_argument('--apply-public-key', action='store_true', help='Write your owner public key into license_guard.py.')
     parser.add_argument('--list', '-l', action='store_true', help='List all issued Machine IDs and CDLIC1/CDADD1 keys saved in owner-keys/.')
-    parser.add_argument('--search', '-s', help='Search issued Machine IDs or customer names in owner-keys/.')
+    parser.add_argument('--search', '-s', help='Search issued Machine IDs, Shop IDs, or customer names in owner-keys/.')
     parser.add_argument('--open-dashboard', action='store_true', help='Build and open the private HTML dashboard of all issued Machine IDs & keys.')
-    parser.add_argument('--machine-id', '-m', help='Target computer Machine ID (CD-XXXX-XXXX-XXXX).')
+    parser.add_argument('--machine-id', '-m', help='Single computer Machine ID (CD-XXXX-XXXX-XXXX).')
+    parser.add_argument(
+        '--machine-ids',
+        help='Multi-PC batch mode: comma-separated Machine IDs for one shop (optional =SeatName, e.g. "CD-1111-2222-3333=Counter,CD-4444-5555-6666=Desk 2").',
+    )
+    parser.add_argument('--shop-id', help='Optional Shop ID tag (e.g. SHOP-SUNRISE) for multi-PC shops.')
+    parser.add_argument('--seat-label', help='Optional computer label (e.g. "Counter PC" or "Desk 2").')
+    parser.add_argument('--pdf-unlock-seats', choices=['none', 'seat1', 'all'], default='none', help='For --machine-ids multi-PC packs: unlock PDF Password Remover on none, seat1 (Cashier PC only), or all seats.')
     parser.add_argument('--customer', '-c', default='Licensed Café', help='Customer / internet café name.')
     parser.add_argument('--days', '-d', type=int, default=365, help='License validity in days (default: 365 = 1 year).')
-    parser.add_argument('--addon', choices=sorted(license_guard.KNOWN_PAID_FEATURES), help='Generate a standalone Paid Add-on Key (e.g. pdf_unlock) for this Machine ID.')
+    parser.add_argument('--addon', choices=sorted(license_guard.KNOWN_PAID_FEATURES), help='Generate a standalone Paid Add-on Key (e.g. pdf_unlock) for --machine-id.')
     parser.add_argument('--include-pdf-unlock', action='store_true', help='Include paid pdf_unlock approval inside a base 1-year CDLIC1 computer license.')
     parser.add_argument('--out', '-o', help='Optional path to write the license/add-on file.')
+    # Supabase owner cloud flags (strictly gitignored config in owner-keys/supabase-owner.json)
+    parser.add_argument('--setup-supabase', nargs=2, metavar=('SUPABASE_URL', 'SERVICE_ROLE_KEY'), help='Save your Supabase URL and secret service_role key into gitignored owner-keys/supabase-owner.json.')
+    parser.add_argument('--sync-supabase', action='store_true', help='Push all issued Machine IDs & keys from owner-keys/ to Supabase so customer PCs can click "Check Online Approval".')
+    parser.add_argument('--publish-release', nargs=3, metavar=('VERSION', 'HTTPS_URL', 'FILE_OR_SHA256'), help='Publish a new Café Desk release to Supabase for remote over-the-internet shop updates.')
+    parser.add_argument('--release-notes', default='', help='Release notes text when using --publish-release.')
+    parser.add_argument('--revoke', metavar='LICENSE_ID', help='Remotely revoke a specific License ID on Supabase.')
+    parser.add_argument('--pending-requests', action='store_true', help='List pending online activation requests submitted from customer PCs.')
     args = parser.parse_args(argv)
+
+    if args.setup_supabase:
+        cfg_file = cloud_sync.save_owner_supabase_config(args.setup_supabase[0], args.setup_supabase[1])
+        print(f'Saved private Supabase owner config: {cfg_file} (gitignored)')
+        return 0
+
+    if args.sync_supabase:
+        count = cloud_sync.owner_push_issued_records_to_supabase(load_issued_records())
+        print(f'Synced {count} issued Machine ID key(s) to Supabase.')
+        return 0
+
+    if args.publish_release:
+        ver, dl_url, file_or_sha = args.publish_release
+        row = cloud_sync.owner_publish_app_release(ver, dl_url, file_or_sha, release_notes=args.release_notes)
+        print(f"Published Café Desk v{row['version']} -> {row['download_url']} (SHA-256: {row['sha256']})")
+        return 0
+
+    if args.revoke:
+        cloud_sync.owner_revoke_license_id(args.revoke)
+        print(f'Remotely revoked License ID {args.revoke} on Supabase.')
+        return 0
+
+    if args.pending_requests:
+        reqs = cloud_sync.owner_list_pending_requests()
+        if not reqs:
+            print('No pending online activation requests.')
+            return 0
+        for r in reqs:
+            print(f"{r.get('machine_id')} | {r.get('shop_name') or r.get('shop_id')} | {r.get('station_name')} | {r.get('requested_kind')} | {r.get('contact_phone')}")
+        return 0
 
     if args.init_keys:
         _, pub_b64 = generate_owner_keypair(overwrite=args.force)
@@ -557,7 +843,7 @@ def main(argv: list[str] | None = None) -> int:
             print('Updated DEFAULT_OWNER_PUBLIC_KEY_B64 in license_guard.py.')
         return 0
 
-    if args.apply_public_key and not args.machine_id:
+    if args.apply_public_key and not args.machine_id and not args.machine_ids:
         if not DEFAULT_PUB_PATH.is_file():
             parser.error(f'{DEFAULT_PUB_PATH} not found. Run with --init-keys first.')
         pub_b64 = DEFAULT_PUB_PATH.read_text(encoding='utf-8').strip()
@@ -575,17 +861,46 @@ def main(argv: list[str] | None = None) -> int:
     if args.list or args.search is not None:
         return print_issued_registry(query=args.search or '')
 
+    if args.machine_ids:
+        pdf_mode = 'all' if (args.include_pdf_unlock and args.pdf_unlock_seats == 'none') else args.pdf_unlock_seats
+        bundle = sign_multi_pc_shop_bundle(
+            args.machine_ids,
+            customer=args.customer,
+            days=args.days,
+            shop_id=args.shop_id,
+            pdf_unlock_mode=pdf_mode,
+        )
+        pack_txt, _, _ = _save_and_record_shop_bundle(bundle)
+        print(f"# Shop: {bundle['customer']} ({bundle['shop_id']}) — {bundle['seat_max']} seats — saved to {pack_txt}")
+        for s in bundle['seats']:
+            print(f"Seat {s['seat_no']}/{s['seat_max']} ({s['seat_label']} | {s['machine_id']}): {s['token']}")
+        return 0
+
     if not args.machine_id:
         return _interactive_cli()
 
     out_dir = DEFAULT_KEY_DIR / 'issued-files'
     out_dir.mkdir(parents=True, exist_ok=True)
     if args.addon:
-        token, payload = sign_addon_token(args.machine_id, feature=args.addon, customer=args.customer, days=args.days)
+        token, payload = sign_addon_token(
+            args.machine_id,
+            feature=args.addon,
+            customer=args.customer,
+            days=args.days,
+            shop_id=args.shop_id,
+            seat_label=args.seat_label,
+        )
         ext_suffix = f'-{args.addon}.cafeaddon'
     else:
         feats = [license_guard.FEATURE_PDF_UNLOCK] if args.include_pdf_unlock else None
-        token, payload = sign_license_token(args.machine_id, customer=args.customer, days=args.days, features=feats)
+        token, payload = sign_license_token(
+            args.machine_id,
+            customer=args.customer,
+            days=args.days,
+            features=feats,
+            shop_id=args.shop_id,
+            seat_label=args.seat_label,
+        )
         ext_suffix = '-combo.cafelicense' if feats else '.cafelicense'
 
     safe_mid = payload['mid'].replace('-', '')

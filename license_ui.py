@@ -6,8 +6,10 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 import customtkinter as ctk
 
+import cloud_sync
 import license_guard
 import services
+import settings_store
 
 BG = '#101522'
 WHITE = '#1B2333'
@@ -145,15 +147,52 @@ class ActivationWindow(ctk.CTk):
                 messagebox.showerror('Activation failed', str(exc), parent=self)
                 return
             self.activated_info = info
+            seat_line = (
+                f'• Shop Seat: Seat {info["seat_no"]} of {info["seat_max"]}'
+                + (f' ({info["seat_label"]})\n' if info.get('seat_label') else '\n')
+                if info.get('seat_no') and info.get('seat_max')
+                else ''
+            )
             messagebox.showinfo(
                 'Computer activated',
                 f'Café Desk is now activated for:\n'
                 f'• Customer: {info["customer"]}\n'
+                f'{seat_line}'
                 f'• Machine ID: {info["machine_id"]}\n'
                 f'• Valid until: {info["expires_at"]} ({info["days_remaining"]} days remaining)',
                 parent=self,
             )
             self.destroy()
+
+        def check_cloud_approval():
+            cfg = settings_store.load_settings()
+            if not cloud_sync.is_supabase_configured(cfg):
+                messagebox.showinfo(
+                    'Cloud Not Configured Yet',
+                    'Online approval pulls keys automatically once Supabase Cloud is configured, or paste your CDLIC1 key directly above.',
+                    parent=self,
+                )
+                return
+            try:
+                res = cloud_sync.sync_machine_entitlements_from_cloud(cfg, machine_id=self.machine_id)
+            except Exception as exc:
+                messagebox.showerror('Online Check Failed', str(exc), parent=self)
+                return
+            status = license_guard.current_license_status()
+            if status.get('valid'):
+                self.activated_info = status
+                messagebox.showinfo(
+                    'Activated Online!',
+                    'Approved key downloaded and activated automatically:\n• ' + '\n• '.join(res.get('activated') or ['Computer activated']),
+                    parent=self,
+                )
+                self.destroy()
+            else:
+                messagebox.showinfo(
+                    'No Approved Key Found Yet',
+                    f'No active online license was found yet for Machine ID {self.machine_id}.\nSend your Machine ID to the owner first, then click Check Online Approval again.',
+                    parent=self,
+                )
 
         def load_file():
             chosen = filedialog.askopenfilename(
@@ -172,11 +211,12 @@ class ActivationWindow(ctk.CTk):
             self.key_text.insert('1.0', raw.strip())
             do_activate()
 
-        _btn(actions, '✓ Activate This Computer', do_activate, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=215).pack(
-            side='left', padx=(0, 10)
+        _btn(actions, '✓ Activate This Computer', do_activate, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=205).pack(
+            side='left', padx=(0, 8)
         )
-        _btn(actions, 'Load .cafelicense file…', load_file, secondary=True, width=190).pack(side='left', padx=(0, 10))
-        _btn(actions, 'Exit', self.destroy, secondary=True, width=90).pack(side='right')
+        _btn(actions, '☁ Check Online Approval', check_cloud_approval, secondary=True, width=185).pack(side='left', padx=(0, 8))
+        _btn(actions, 'Load file…', load_file, secondary=True, width=110).pack(side='left', padx=(0, 8))
+        _btn(actions, 'Exit', self.destroy, secondary=True, width=80).pack(side='right')
 
 
 def ensure_computer_licensed() -> dict | None:
@@ -391,8 +431,40 @@ def open_addon_modal(
         except OSError as exc:
             messagebox.showerror('Could not read file', str(exc), parent=dlg)
 
-    _btn(row, '✓ Activate Add-on', apply_addon, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=180).pack(
+    def check_addon_online():
+        cfg = settings_store.load_settings()
+        if not cloud_sync.is_supabase_configured(cfg):
+            messagebox.showinfo(
+                'Cloud Not Configured Yet',
+                'Configure Supabase Cloud in Business Settings to pull approved keys automatically, or paste your CDADD1 key above.',
+                parent=dlg,
+            )
+            return
+        try:
+            res = cloud_sync.sync_machine_entitlements_from_cloud(cfg, machine_id=mid)
+        except Exception as exc:
+            messagebox.showerror('Online Check Failed', str(exc), parent=dlg)
+            return
+        st = license_guard.current_addon_status(feature)
+        if st.get('valid'):
+            messagebox.showinfo(
+                f'{feature_title} Unlocked Online!',
+                f'{feature_title} was approved by the owner and activated automatically until {st.get("expires_at")}.',
+                parent=dlg,
+            )
+            dlg.destroy()
+            if callable(on_updated):
+                on_updated(st)
+        else:
+            messagebox.showinfo(
+                'Not Approved Online Yet',
+                f'No active online {feature_title} approval was found yet for Machine ID {mid}.',
+                parent=dlg,
+            )
+
+    _btn(row, '✓ Activate Add-on', apply_addon, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=170).pack(
         side='left', padx=(0, 8)
     )
-    _btn(row, 'Load key file…', browse_addon, secondary=True, width=145).pack(side='left', padx=(0, 8))
-    _btn(row, 'Cancel', dlg.destroy, secondary=True, width=95).pack(side='right')
+    _btn(row, '☁ Check Online Approval', check_addon_online, secondary=True, width=185).pack(side='left', padx=(0, 8))
+    _btn(row, 'Load file…', browse_addon, secondary=True, width=115).pack(side='left', padx=(0, 8))
+    _btn(row, 'Cancel', dlg.destroy, secondary=True, width=85).pack(side='right')
