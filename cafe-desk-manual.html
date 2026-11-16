@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Café Desk v0.7.0 — Complete User Manual, Menu Guide &amp; Sales Handbook</title>
+  <style>
+    :root {
+      --bg: #0d121e;
+      --bg-elev: #141c2e;
+      --card: #192338;
+      --card-soft: #1f2b44;
+      --border: #2e3d5c;
+      --ink: #f3f6fc;
+      --muted: #a6b3cc;
+      --lime: #b9ff70;
+      --lime-dark: #132116;
+      --blue: #5c7cfa;
+      --amber: #ffd584;
+      --amber-bg: rgba(255, 213, 132, 0.1);
+      --danger: #ff9c8f;
+      --radius: 16px;
+      --shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      background: radial-gradient(circle at 15% 0%, #1d2945 0%, var(--bg) 48%);
+      color: var(--ink);
+      line-height: 1.65;
+      font-size: 15.5px;
+    }
+
+    a {
+      color: var(--lime);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    /* Layout Shell */
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    /* Sticky Left Table of Contents */
+    .toc {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: rgba(16, 23, 38, 0.94);
+      border-right: 1px solid var(--border);
+      padding: 28px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand-box {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-badge {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--lime), #7ce865);
+      color: var(--lime-dark);
+      font-weight: 900;
+      font-size: 20px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      box-shadow: 0 6px 18px rgba(185, 255, 112, 0.25);
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--lime);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .toc-label {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 0 10px;
+    }
+
+    .toc-links {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .toc-links a {
+      color: #ced8ec;
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 9px 12px;
+      border-radius: 10px;
+      transition: background 0.15s, color 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      text-decoration: none;
+    }
+
+    .toc-links a:hover,
+    .toc-links a.active {
+      background: var(--card-soft);
+      color: #ffffff;
+    }
+
+    .toc-num {
+      display: inline-grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      background: rgba(185, 255, 112, 0.14);
+      color: var(--lime);
+      font-size: 11px;
+      font-weight: 800;
+      flex-shrink: 0;
+    }
+
+    .print-btn {
+      margin-top: auto;
+      background: var(--lime);
+      color: var(--lime-dark);
+      border: none;
+      border-radius: 11px;
+      padding: 12px 16px;
+      font-size: 13.5px;
+      font-weight: 800;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: transform 0.12s, background 0.15s;
+    }
+
+    .print-btn:hover {
+      background: #a7f05d;
+      transform: translateY(-1px);
+    }
+
+    /* Main Content */
+    .content {
+      padding: 40px 48px 80px;
+      max-width: 1040px;
+    }
+
+    /* Hero Header */
+    .hero {
+      background: linear-gradient(135deg, #1f2d4a 0%, #162035 100%);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 36px 38px;
+      box-shadow: var(--shadow);
+      margin-bottom: 36px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -60px;
+      top: -60px;
+      width: 240px;
+      height: 240px;
+      background: radial-gradient(circle, rgba(185, 255, 112, 0.16), transparent 70%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: var(--lime);
+      background: rgba(185, 255, 112, 0.12);
+      border: 1px solid rgba(185, 255, 112, 0.3);
+      padding: 5px 12px;
+      border-radius: 999px;
+      margin-bottom: 14px;
+    }
+
+    .hero h1 {
+      font-size: 32px;
+      line-height: 1.2;
+      font-weight: 800;
+      margin-bottom: 12px;
+      letter-spacing: -0.02em;
+    }
+
+    .hero p {
+      color: #c8d4eb;
+      font-size: 16px;
+      max-width: 760px;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .stat-pill {
+      background: rgba(13, 18, 30, 0.55);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 15px;
+    }
+
+    .stat-pill strong {
+      display: block;
+      color: var(--lime);
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .stat-pill span {
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    /* Sections */
+    .section-block {
+      margin-bottom: 46px;
+      scroll-margin-top: 24px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .part-tag {
+      background: var(--lime);
+      color: var(--lime-dark);
+      font-size: 11.5px;
+      font-weight: 900;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 8px;
+      flex-shrink: 0;
+    }
+
+    .section-header h2 {
+      font-size: 23px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+
+    .section-intro {
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+
+    /* Pitch Quote Box */
+    .pitch-box {
+      background: linear-gradient(180deg, #1c2842 0%, #172136 100%);
+      border-left: 4px solid var(--lime);
+      border-top: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      padding: 24px 28px;
+      box-shadow: var(--shadow);
+    }
+
+    .pitch-box h3 {
+      color: var(--lime);
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .pitch-box p {
+      margin-bottom: 14px;
+      font-size: 16px;
+      color: #eef3fc;
+    }
+
+    .pitch-list {
+      list-style: none;
+      display: grid;
+      gap: 9px;
+      margin: 16px 0;
+    }
+
+    .pitch-list li {
+      position: relative;
+      padding-left: 26px;
+      color: #dce5f7;
+    }
+
+    .pitch-list li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 1px;
+      color: var(--lime);
+      font-weight: 900;
+    }
+
+    /* Cards & Step Timeline */
+    .steps-grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .step-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px 24px;
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .step-circle {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: var(--card-soft);
+      border: 1px solid rgba(185, 255, 112, 0.35);
+      color: var(--lime);
+      font-weight: 800;
+      font-size: 17px;
+      display: grid;
+      place-items: center;
+    }
+
+    .step-card h3 {
+      font-size: 17.5px;
+      margin-bottom: 6px;
+    }
+
+    .step-card p, .step-card li {
+      color: #cad5ea;
+      font-size: 14.8px;
+    }
+
+    .step-card ul, .step-card ol {
+      padding-left: 20px;
+      margin-top: 8px;
+      display: grid;
+      gap: 6px;
+    }
+
+    pre, code {
+      font-family: Consolas, "SFMono-Regular", Menlo, Monaco, monospace;
+    }
+
+    code {
+      background: rgba(10, 15, 26, 0.7);
+      border: 1px solid #2b3a58;
+      color: #ffdba2;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 13.5px;
+    }
+
+    pre {
+      background: #0d1320;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      color: #e6eefc;
+      font-size: 13.5px;
+      line-height: 1.55;
+      margin-top: 10px;
+    }
+
+    /* Top Bar Reference Strip */
+    .topbar-demo {
+      background: #111827;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .topbar-left {
+      font-weight: 800;
+      font-size: 17px;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .mock-chip {
+      background: var(--card-soft);
+      border: 1px solid var(--border);
+      color: var(--ink);
+      padding: 6px 12px;
+      border-radius: 9px;
+      font-size: 13px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Menu Filter Search */
+    .filter-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .search-input {
+      flex: 1;
+      min-width: 240px;
+      background: #101726;
+      border: 1px solid var(--border);
+      color: var(--ink);
+      border-radius: 11px;
+      padding: 11px 15px;
+      font-size: 14.5px;
+      outline: none;
+    }
+
+    .search-input:focus {
+      border-color: var(--lime);
+    }
+
+    /* Sidebar Menu Cards Grid */
+    .category-label {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--lime);
+      margin: 22px 0 12px;
+    }
+
+    .menu-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .menu-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+
+    .menu-card:hover {
+      border-color: #4b618f;
+      transform: translateY(-2px);
+    }
+
+    .menu-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .menu-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .menu-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: var(--card-soft);
+      border: 1px solid var(--border);
+      color: var(--lime);
+      font-size: 17px;
+      font-weight: 800;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+
+    .menu-card h3 {
+      font-size: 16.5px;
+      font-weight: 800;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 800;
+      padding: 3px 9px;
+      border-radius: 999px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .badge-public {
+      background: rgba(185, 255, 112, 0.14);
+      color: var(--lime);
+      border: 1px solid rgba(185, 255, 112, 0.3);
+    }
+
+    .badge-pin {
+      background: var(--amber-bg);
+      color: var(--amber);
+      border: 1px solid rgba(255, 213, 132, 0.35);
+    }
+
+    .menu-card p {
+      color: #c7d3e8;
+      font-size: 14.2px;
+    }
+
+    .menu-card ul {
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13.6px;
+      display: grid;
+      gap: 4px;
+    }
+
+    /* Callout / Notice */
+    .callout {
+      background: var(--amber-bg);
+      border: 1px solid rgba(255, 213, 132, 0.35);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+      margin-top: 18px;
+    }
+
+    .callout strong {
+      color: var(--amber);
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14.5px;
+    }
+
+    .callout p {
+      color: #f3dfc1;
+      font-size: 14px;
+    }
+
+    /* Workflow Flow Table */
+    .workflow-steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+
+    .wf-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      position: relative;
+    }
+
+    .wf-step-tag {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--lime);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+
+    .wf-box h4 {
+      font-size: 15.5px;
+      margin-bottom: 6px;
+    }
+
+    .wf-box p {
+      font-size: 13.8px;
+      color: var(--muted);
+    }
+
+    /* FAQ / Owner Cheat Sheet */
+    .faq-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 16px;
+    }
+
+    .faq-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+    }
+
+    .faq-card h4 {
+      color: var(--lime);
+      font-size: 15.5px;
+      margin-bottom: 8px;
+    }
+
+    .faq-card p {
+      color: #cad5ea;
+      font-size: 14.2px;
+    }
+
+    footer {
+      margin-top: 50px;
+      padding-top: 22px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    /* Responsive & Clean Print Styles */
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .toc {
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .content {
+        padding: 28px 20px 60px;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff !important;
+        color: #111827 !important;
+        font-size: 12pt;
+      }
+      .layout {
+        display: block;
+      }
+      .toc, .filter-bar, .print-btn {
+        display: none !important;
+      }
+      .content {
+        max-width: 100%;
+        padding: 0;
+      }
+      .hero, .pitch-box, .step-card, .menu-card, .wf-box, .faq-card, .topbar-demo, .callout {
+        background: #ffffff !important;
+        color: #111827 !important;
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+      }
+      .hero p, .step-card p, .step-card li, .menu-card p, .menu-card ul, .wf-box p, .faq-card p, .section-intro, .callout p {
+        color: #334155 !important;
+      }
+      .eyebrow, .part-tag, .badge-public, .badge-pin, .wf-step-tag, .faq-card h4, .pitch-box h3, .stat-pill strong {
+        color: #0f172a !important;
+        border-color: #94a3b8 !important;
+      }
+      code, pre {
+        background: #f1f5f9 !important;
+        color: #0f172a !important;
+        border-color: #cbd5e1 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <!-- Left Navigation / TOC -->
+    <aside class="toc">
+      <div class="brand-box">
+        <div class="brand-badge">CD</div>
+        <div>
+          <div class="brand-title">Café Desk</div>
+          <div class="brand-sub">Manual &amp; Sales Guide • v0.7.0</div>
+        </div>
+      </div>
+
+      <div class="toc-label">Guide Sections</div>
+      <nav class="toc-links">
+        <a href="#part-1"><span class="toc-num">1</span> 30-Second Sales Pitch</a>
+        <a href="#part-2"><span class="toc-num">2</span> Installation &amp; Shop Setup</a>
+        <a href="#part-3"><span class="toc-num">3</span> Top Bar &amp; Padlock Guide</a>
+        <a href="#part-4"><span class="toc-num">4</span> Full Sidebar Menu (1–17)</a>
+        <a href="#part-5"><span class="toc-num">5</span> Real Customer Walkthrough</a>
+        <a href="#part-6"><span class="toc-num">6</span> Licensing, RAM &amp; Safety FAQ</a>
+      </nav>
+
+      <button class="print-btn" onclick="window.print()">🖨 Print / Save Guide as PDF</button>
+    </aside>
+
+    <!-- Main Readable Content -->
+    <main class="content">
+      <header class="hero">
+        <span class="eyebrow">Complete Training &amp; Sales Handbook</span>
+        <h1>How Café Desk Works — From First Install to Daily Customer Service</h1>
+        <p>
+          Use this handbook to <strong>explain and pitch Café Desk</strong> to internet café and print-shop owners,
+          <strong>install &amp; activate</strong> their 1-year license in 5 minutes, and <strong>train shop attendants</strong>
+          on every single tool from top to bottom.
+        </p>
+        <div class="hero-stats">
+          <div class="stat-pill">
+            <strong>100% Offline Core</strong>
+            <span>No internet needed for PDFs, CVs, cards, forms, scans or receipts</span>
+          </div>
+          <div class="stat-pill">
+            <strong>~65–130 MB RAM</strong>
+            <span>Lightweight Python desktop app — near 0% idle CPU, zero overheating</span>
+          </div>
+          <div class="stat-pill">
+            <strong>1-Year PC Lock</strong>
+            <span>Hardware Machine-ID activation stops unauthorized USB copying</span>
+          </div>
+          <div class="stat-pill">
+            <strong>17 Built-In Tools</strong>
+            <span>CVs, Cards, Affidavits, PDF Merge/Split, Scan, OCR, Photos &amp; Sales</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- PART 1: SALES PITCH -->
+      <section class="section-block" id="part-1">
+        <div class="section-header">
+          <span class="part-tag">Part 1</span>
+          <h2>How to Explain Café Desk to People (30-Second Sales Pitch)</h2>
+        </div>
+        <p class="section-intro">
+          When speaking to an internet café owner, print shop, typing centre, or stationery business, explain the problem it solves in plain everyday language:
+        </p>
+
+        <div class="pitch-box">
+          <h3>What to Say to a Shop Owner</h3>
+          <p>
+            “Most internet cafés lose time jumping between 6 different websites and programs — Word for CVs, free websites to merge PDFs, Paint to resize ID photos, scanner apps, and paper books for receipts — and online PDF websites upload private customer IDs to the internet.
+          </p>
+          <p><strong>Café Desk puts your entire front counter inside ONE fast, offline desktop program:</strong></p>
+          <ul class="pitch-list">
+            <li><strong>13-Design CVs &amp; Cover Letters</strong> with live side-by-side A4 PDF preview, optional profile photo, and optional AI grammar polish.</li>
+            <li><strong>Business Cards &amp; Invitation Cards</strong> laid out on A4 sheets with crop/cut marks across 13 professional styles.</li>
+            <li><strong>Printable &amp; Digitally Fillable Forms</strong> including Affidavits / Sworn Declarations, Consent Forms, Walk-in Intake Forms, and Custom Forms.</li>
+            <li><strong>A4 Picture Sheets &amp; Custom Millimetre Photo Sizing</strong> (crop, rotate, drag, and size ID/passport frames in exact mm).</li>
+            <li><strong>Direct Windows Scanning, Images-to-PDF, Visual PDF Merge/Split, Bluetooth File Receive &amp; English OCR</strong> (image-to-text).</li>
+            <li><strong>Shop Price List, Customer Receipts &amp; Staff PIN Sales Reports</strong> — plus a one-click <strong>Next Customer</strong> button that wipes the previous customer’s private work clean in 1 second.”</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- PART 2: WHERE TO START (INSTALL & SETUP) -->
+      <section class="section-block" id="part-2">
+        <div class="section-header">
+          <span class="part-tag">Part 2</span>
+          <h2>Where to Start — 5-Minute Installation &amp; First-Time Shop Setup</h2>
+        </div>
+        <p class="section-intro">
+          Follow these 4 steps in exact order whenever you install Café Desk on a new client computer via USB:
+        </p>
+
+        <div class="steps-grid">
+          <div class="step-card">
+            <div class="step-circle">1</div>
+            <div>
+              <h3>Copy from USB to the Shop Computer</h3>
+              <p>Plug in your USB stick and either:</p>
+              <ul>
+                <li>Run <code>CafeDesk-Setup.exe</code> to install Desktop &amp; Start Menu shortcuts automatically, <strong>OR</strong></li>
+                <li>Copy the entire <code>CafeDesk</code> folder (including <code>_internal</code>) onto the PC (for example <code>C:\CafeDesk</code>) and send a shortcut of <code>CafeDesk.exe</code> to the Desktop. <em>(Copying onto the PC’s drive makes startup much faster than running off a USB stick.)</em></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="step-card">
+            <div class="step-circle">2</div>
+            <div>
+              <h3>Activate the 1-Year Computer License</h3>
+              <ul>
+                <li>Open <code>CafeDesk.exe</code>. The <strong>Activate Café Desk</strong> window opens showing that computer’s unique hardware <strong>Machine ID</strong> (for example: <code>CD-8F3A-91BC-204E</code>).</li>
+                <li>On <strong>your own private laptop</strong>, generate their 365-day activation key:
+                  <pre>python admin_keygen.py -m CD-8F3A-91BC-204E -c "Sunrise Cyber Cafe" -d 365</pre>
+                </li>
+                <li>Paste the <code>CDLIC1...</code> key (or load the <code>.cafelicense</code> file) into Step 2 on the customer’s screen and click <strong>✓ Activate This Computer</strong>.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="step-card">
+            <div class="step-circle">3</div>
+            <div>
+              <h3>Create the Shop’s Staff PIN &amp; Branding</h3>
+              <ul>
+                <li>Click <strong>⚙ Business settings</strong> on the left sidebar.</li>
+                <li>Because no PIN is set yet, Café Desk prompts the shop owner to choose a <strong>6–12 digit Staff PIN</strong>. Have the owner type and confirm their secret PIN.</li>
+                <li>Type their <strong>Business Name</strong> (up to 48 characters), pick one of the 10 icons or click <strong>Upload logo</strong> to add their shop logo, and click <strong>Save business settings</strong>.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="step-card">
+            <div class="step-circle">4</div>
+            <div>
+              <h3>Enter the Shop’s Service Price List (&amp; Optional OCR)</h3>
+              <ul>
+                <li>Click <strong>≡ Price settings</strong>, enter their currency symbol (e.g. <code>R</code>), and type one service per line using <code>Service Name | Price</code>:
+<pre>Black &amp; White Printing per page | 3.00
+Colour Printing per page | 8.00
+Scanning to PDF per page | 5.00
+Full CV Typing | 50.00
+Cover Letter | 25.00
+Affidavit / Form Typing | 20.00
+A4 Photo Sheet | 25.00</pre>
+                </li>
+                <li>Click <strong>Save prices</strong>. Everyone can now search prices in <strong>Price list</strong> and build receipts in <strong>Receipts</strong>!</li>
+                <li><em>Optional for OCR:</em> Open <strong>? Help &amp; privacy</strong> and click <strong>Download Tesseract OCR (Windows .exe)</strong> (keep English language data ticked during setup).</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PART 3: TOP BAR CONTROLS -->
+      <section class="section-block" id="part-3">
+        <div class="section-header">
+          <span class="part-tag">Part 3</span>
+          <h2>Top Header Bar Controls (Always Visible)</h2>
+        </div>
+        <p class="section-intro">
+          At the top of every screen, four controls help staff manage time, instant help, PIN security, and customer privacy:
+        </p>
+
+        <div class="topbar-demo">
+          <div class="topbar-left">Career documents</div>
+          <div class="topbar-right">
+            <span class="mock-chip">Sun, 15 Nov &nbsp;14:30:05</span>
+            <span class="mock-chip">? Help</span>
+            <span class="mock-chip" title="Padlock icon button">🔒 / 🔓</span>
+            <span class="mock-chip" style="border-color: rgba(185,255,112,0.45); color: var(--lime);">Next customer</span>
+          </div>
+        </div>
+
+        <div class="faq-grid">
+          <div class="faq-card">
+            <h4>? Help Button</h4>
+            <p>Opens a quick pop-up tip explaining how to use the exact screen you are currently viewing without losing your place.</p>
+          </div>
+          <div class="faq-card">
+            <h4>🔒 / 🔓 Padlock Icon Button (Lock Staff)</h4>
+            <p>Shows a <strong>white closed padlock</strong> when staff settings are locked, and a <strong>lime-green open padlock</strong> when unlocked. Click it before stepping away to lock Staff mode and wipe any session AI key immediately (also auto-locks after 5 minutes idle).</p>
+          </div>
+          <div class="faq-card">
+            <h4>Next customer Button</h4>
+            <p><strong>Click between every walk-in customer!</strong> Clears current drafts, CV photos, picture sheets, cards, forms, scanned pages, OCR text, temporary merge PDFs, and recovery copies, and locks Staff access — while keeping saved PDFs on disk untouched.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- PART 4: FULL SIDEBAR MENU (1 TO 17) -->
+      <section class="section-block" id="part-4">
+        <div class="section-header">
+          <span class="part-tag">Part 4</span>
+          <h2>Complete Left Sidebar Menu — All 17 Screens Explained</h2>
+        </div>
+        <p class="section-intro">
+          Every button on the left navigation bar, in the exact top-to-bottom order shown inside Café Desk. Type below to filter tools quickly:
+        </p>
+
+        <div class="filter-bar">
+          <input type="search" id="menuSearch" class="search-input" placeholder="🔍 Search any menu item or feature (e.g. CV, Bluetooth, affidavit, crop, PIN, receipt)..." oninput="filterCards(this.value)">
+        </div>
+
+        <div class="category-label">A. Daily Customer &amp; Document Tools (1 – 10)</div>
+        <div class="menu-grid">
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">⌂</span><h3>1. Home</h3></div>
+              <span class="badge badge-public">Public</span>
+            </div>
+            <p>Welcome dashboard with one-click shortcut cards to every major document, scanning, photo, card, form, and pricing tool.</p>
+            <ul>
+              <li>Shows a banner if unsaved crash-recovery copies exist.</li>
+              <li>Best starting screen for walk-in customers.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">≡</span><h3>2. Price list</h3></div>
+              <span class="badge badge-public">Public</span>
+            </div>
+            <p>Clean, read-only display of all shop services and prices so customers don’t have to ask basic pricing questions.</p>
+            <ul>
+              <li>Live search box to filter services instantly.</li>
+              <li><strong>Save full list as PDF</strong> to print a wall price poster.</li>
+              <li>Quick button to jump to <strong>Receipts</strong> or <strong>Staff: edit prices</strong>.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">▤</span><h3>3. PDF tools</h3></div>
+              <span class="badge badge-public">Public</span>
+            </div>
+            <p>All-in-one local PDF combiner and splitter — no private documents ever uploaded online.</p>
+            <ul>
+              <li><strong>Merge PDFs:</strong> Combine CVs, IDs &amp; certificates in custom order.</li>
+              <li><strong>Preview &amp; select pages:</strong> View page thumbnails (6 at a time), zoom in, and tick pages to extract.</li>
+              <li><strong>Split every page:</strong> Save each page as its own PDF safely.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">ᛒ</span><h3>4. Bluetooth files</h3></div>
+              <span class="badge badge-public">Windows</span>
+            </div>
+            <p>Fast bridge for customers sending photos or PDFs from their phone via Bluetooth.</p>
+            <ul>
+              <li>Opens <strong>Windows Bluetooth Settings</strong> for pairing.</li>
+              <li>Launches <strong>Bluetooth File Transfer Wizard</strong> (<code>fsquirt.exe</code>) to receive files.</li>
+              <li>Routes received PDFs/images straight into PDF merge, Picture sheets, or OCR.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">▧</span><h3>5. Scan &amp; images</h3></div>
+              <span class="badge badge-public">Public</span>
+            </div>
+            <p>Scan physical paper, convert phone photos to PDF, and turn pictures of text into editable English text.</p>
+            <ul>
+              <li><strong>WIA Scanner (Windows):</strong> Scan page-by-page inside the app &amp; save as one PDF.</li>
+              <li><strong>Images to PDF:</strong> Convert JPG, PNG, BMP &amp; multi-page TIFF to PDF.</li>
+              <li><strong>English OCR:</strong> Animated scan preview + Tesseract text extraction to <code>.txt</code>.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">▦</span><h3>6. A4 picture sheets</h3></div>
+              <span class="badge badge-public">Public</span>
+            </div>
+            <p>Interactive A4 photo layout studio for printing photo collages, ID/passport-sized frames, and custom photo prints.</p>
+            <ul>
+              <li>Presets: <strong>2, 4, 6, 9 per A4 page</strong>, <strong>Free layout</strong>, or <strong>Custom mm grid</strong> (e.g. <code>35 × 45 mm</code>).</li>
+              <li>Drag any photo, drag lime corners to resize one photo, <strong>Crop</strong>, <strong>Rotate 90°</strong>, Brightness &amp; B&amp;W.</li>
+              <li>Exports multi-page A4 PDF ready to print at <strong>100% / Actual size</strong>.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">✎</span><h3>7. Career documents</h3></div>
+              <span class="badge badge-public">Public + Staff AI</span>
+            </div>
+            <p>Builds multi-page CVs, Cover Letters, Professional Summaries, and Self-Introductions in minutes.</p>
+            <ul>
+              <li><strong>13 CV templates</strong> (including sidebar &amp; executive layouts) + local sample gallery.</li>
+              <li>Optional square-cropped <strong>CV Profile Photo</strong> on page 1.</li>
+              <li>Side-by-side <strong>Live A4 PDF Preview</strong> with full-screen enlarge button.</li>
+              <li><strong>Add to PDF merge</strong> or polish wording with <strong>Improve with AI</strong> (Staff PIN).</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">▭</span><h3>8. Cards &amp; invitations</h3></div>
+              <span class="badge badge-public">Public</span>
+            </div>
+            <p>Design print-ready Business Cards and Event Invitations across all 13 visual templates.</p>
+            <ul>
+              <li><strong>Business cards:</strong> 10 per A4 (<code>85×55 mm</code>), 8 per A4 (<code>90×50 mm</code>), or single proof.</li>
+              <li><strong>Invitations:</strong> 2 per A4 (A5), 4 per A4 (A6), or full A4 poster/invite.</li>
+              <li>Optional logo/photo, optional <strong>crop/trim marks</strong> for cutting, live preview &amp; PDF export.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">⊞</span><h3>9. Forms creator</h3></div>
+              <span class="badge badge-public">Public</span>
+            </div>
+            <p>Generates clean, printable and digitally fillable <strong>AcroForm</strong> A4 PDFs for everyday walk-in paperwork.</p>
+            <ul>
+              <li>Presets: <strong>Affidavit / Sworn Declaration</strong>, <strong>General Application</strong>, <strong>Consent / Authorization</strong>, <strong>Walk-in Intake</strong>, or <strong>Custom Form</strong>.</li>
+              <li>Add custom Text, Multiline, Checkbox, Date &amp; Signature fields + live A4 preview.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">▣</span><h3>10. Receipts</h3></div>
+              <span class="badge badge-public">Public + Staff Log</span>
+            </div>
+            <p>Fast service calculator and PDF receipt generator powered by your saved Price list.</p>
+            <ul>
+              <li>Pick services &amp; quantities (1–999) and click <strong>Save receipt PDF</strong> to print for the customer.</li>
+              <li>Staff click <strong>Record sale</strong> (PIN required) to log the total into Sales reports without double-recording.</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="category-label">B. Staff-Only Management Screens (11 – 14 • Protected by 6–12 Digit PIN)</div>
+        <div class="menu-grid">
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">▧</span><h3>11. Sales reports</h3></div>
+              <span class="badge badge-pin">Staff PIN</span>
+            </div>
+            <p>View recorded daily, weekly, or monthly desk totals grouped by currency.</p>
+            <ul>
+              <li>Filter by start &amp; end date, inspect itemized rows, <strong>Export CSV</strong> (formula-injection safe) for Excel, or save a Sale Record PDF.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">≡</span><h3>12. Price settings</h3></div>
+              <span class="badge badge-pin">Staff PIN</span>
+            </div>
+            <p>Add, edit, or update your shop’s currency and service price list in seconds.</p>
+            <ul>
+              <li>Simple <code>Service Name | Price</code> format — updates <strong>Price list</strong> and <strong>Receipts</strong> immediately.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">⚙</span><h3>13. Business settings</h3></div>
+              <span class="badge badge-pin">Staff PIN</span>
+            </div>
+            <p>Customize the app’s window title and sidebar header for each shop.</p>
+            <ul>
+              <li>Set Business Name, pick from 10 icons or upload a custom PNG/JPG/BMP logo, and <strong>Change staff PIN</strong>.</li>
+            </ul>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">✦</span><h3>14. AI settings</h3></div>
+              <span class="badge badge-pin">Staff PIN</span>
+            </div>
+            <p>Connect optional AI writing assistance for polishing customer CVs and cover letters.</p>
+            <ul>
+              <li>Auto-detects <strong>OpenRouter</strong> (<code>sk-or-v1-...</code>), <strong>OpenAI</strong> (<code>sk-...</code>), <strong>Groq</strong> (<code>gsk_...</code>), <strong>DeepSeek</strong>, or custom URLs.</li>
+              <li>Includes <strong>⚡ Test AI connection</strong> button; key stays in RAM only and clears on staff lock.</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="category-label">C. Bottom Sidebar — Projects, License &amp; Help (15 – 17)</div>
+        <div class="menu-grid">
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">▣</span><h3>15. Projects &amp; recovery</h3></div>
+              <span class="badge badge-public">Public + Staff</span>
+            </div>
+            <p>Save editable <code>.cafeproject</code> bundles (including photos &amp; crops) to reopen later, or enable 60-second crash recovery.</p>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">ⓘ</span><h3>16. About &amp; contact</h3></div>
+              <span class="badge badge-public">License Info</span>
+            </div>
+            <p>Displays <strong>1-Year Computer License status</strong>, expiry date, days remaining, this PC’s <strong>Machine ID</strong>, the <strong>🔑 Enter / Renew 1-Year Key</strong> button, and developer support links.</p>
+          </article>
+
+          <article class="menu-card">
+            <div class="menu-card-head">
+              <div class="menu-title-wrap"><span class="menu-icon">?</span><h3>17. Help &amp; privacy</h3></div>
+              <span class="badge badge-public">Guide</span>
+            </div>
+            <p>7-step beginner walkthrough, direct <strong>Tesseract OCR</strong> installer link, USB portable mode status, local data folder paths, and staff customer-file deletion.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- PART 5: START-TO-FINISH WALKTHROUGH -->
+      <section class="section-block" id="part-5">
+        <div class="section-header">
+          <span class="part-tag">Part 5</span>
+          <h2>Start-to-Finish Live Demo (How to Show a Customer Job in 3 Minutes)</h2>
+        </div>
+        <p class="section-intro">
+          When demonstrating Café Desk to a buyer or new staff member, walk through this real-world customer visit from start to end:
+        </p>
+
+        <div class="workflow-steps">
+          <div class="wf-box">
+            <div class="wf-step-tag">Step 1 • Career Docs</div>
+            <h4>Type the Customer’s CV</h4>
+            <p>Open <strong>Career documents</strong>, enter details + optional photo, pick one of the 13 templates, check the live A4 preview, click <strong>Save PDF</strong> AND click <strong>Add to PDF merge</strong>.</p>
+          </div>
+          <div class="wf-box">
+            <div class="wf-step-tag">Step 2 • Scan &amp; Images</div>
+            <h4>Scan Their ID &amp; Certificate</h4>
+            <p>Open <strong>Scan &amp; images</strong> (or <strong>Bluetooth files</strong> if sent from their phone), scan their ID and certificate pages, and save as <code>Attachments.pdf</code>.</p>
+          </div>
+          <div class="wf-box">
+            <div class="wf-step-tag">Step 3 • PDF Tools</div>
+            <h4>Combine Into One PDF</h4>
+            <p>Open <strong>PDF tools</strong> — the CV is already waiting in the merge list! Add <code>Attachments.pdf</code> below it and click <strong>Merge &amp; save</strong> for their email/portal upload.</p>
+          </div>
+          <div class="wf-box">
+            <div class="wf-step-tag">Step 4 • Receipts &amp; Reset</div>
+            <h4>Bill, Record Sale &amp; Reset</h4>
+            <p>Open <strong>Receipts</strong>, add <em>CV Typing</em> + <em>Scanning</em> + <em>Printing</em>, save receipt PDF, click <strong>Record sale</strong> (PIN), then click <strong>Next customer</strong> in the top bar!</p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>Important Note on Sales Reports &amp; Kiosk Accounts</strong>
+          <p>
+            Sales reports are a convenient local counter log (not a fiscal VAT/tax POS register). On shared walk-in computers, always run Windows under a standard (non-Administrator) user account and click <strong>Next customer</strong> after every client.
+          </p>
+        </div>
+      </section>
+
+      <!-- PART 6: OWNER CHEAT SHEET & FAQ -->
+      <section class="section-block" id="part-6">
+        <div class="section-header">
+          <span class="part-tag">Part 6</span>
+          <h2>Owner Cheat Sheet — Licensing, Renewals &amp; PC Performance FAQ</h2>
+        </div>
+
+        <div class="faq-grid">
+          <div class="faq-card">
+            <h4>What if a buyer copies CafeDesk to another PC?</h4>
+            <p>It will immediately stop at the <strong>Activate Café Desk</strong> screen! Every license key is cryptographically signed (Ed25519) for one specific computer’s hardware <code>Machine ID</code> and stored per-PC in <code>%APPDATA%\CafeDesk\license.json</code>.</p>
+          </div>
+
+          <div class="faq-card">
+            <h4>What happens after 1 year (365 days)?</h4>
+            <p>After 365 days, Café Desk locks cleanly and asks the shop owner to send you their <code>Machine ID</code> to purchase a 1-year renewal key. Built-in clock-rollback detection blocks users from rewinding their Windows date.</p>
+          </div>
+
+          <div class="faq-card">
+            <h4>Will it overheat old PCs or eat RAM?</h4>
+            <p>No — idle CPU is ~0% and typical RAM is only <strong>65–130 MB</strong> (far lighter than browser/Electron apps). Built-in safety caps block oversized images (&gt;50 MP / 60 MB) and giant PDFs (&gt;2,000 pages).</p>
+          </div>
+
+          <div class="faq-card">
+            <h4>How do I generate keys as the Owner?</h4>
+            <p>Run <code>python admin_keygen.py --init-keys --apply-public-key</code> <strong>once</strong> on your own laptop before building your customer <code>.exe</code>. Never copy <code>admin_keygen.py</code> or <code>owner-keys/</code> onto customer USB sticks!</p>
+          </div>
+        </div>
+
+        <footer>
+          <span><strong>Café Desk Document Studio</strong> • Complete User &amp; Sales Manual (v0.7.0)</span>
+          <span>WhatsApp: <a href="https://wa.me/27722279505" target="_blank" rel="noopener noreferrer">072 227 9505</a> &nbsp;•&nbsp; Email: <a href="mailto:njwayelodlamini@gmail.com">njwayelodlamini@gmail.com</a></span>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    function filterCards(query) {
+      var q = (query || '').toLowerCase().trim();
+      var cards = document.querySelectorAll('.menu-card');
+      for (var i = 0; i < cards.length; i++) {
+        var text = cards[i].textContent.toLowerCase();
+        cards[i].style.display = (!q || text.indexOf(q) !== -1) ? '' : 'none';
+      }
+    }
+  </script>
+</body>
+</html>
