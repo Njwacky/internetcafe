@@ -801,8 +801,8 @@ class DiagnosticRemediationTests(unittest.TestCase):
         bat_src=(repo/'packaging'/'build-windows.bat').read_text(encoding='utf-8')
         unix_src=(repo/'packaging'/'build-unix.sh').read_text(encoding='utf-8')
         wf_src=(repo/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
-        self.assertIn("APP_BUILD='0.7.0'",app_src)
-        self.assertIn('#define MyAppVersion "0.7.0"',iss_src)
+        self.assertIn("APP_BUILD='0.8.0'",app_src)
+        self.assertIn('#define MyAppVersion "0.8.0"',iss_src)
         self.assertIn('--exclude-module admin_keygen',bat_src)
         self.assertIn('--exclude-module admin_keygen',unix_src)
         self.assertIn('--exclude-module admin_keygen',wf_src)
@@ -1309,5 +1309,192 @@ class DiagnosticRemediationTests(unittest.TestCase):
             for expected in (mid,'Gauteng Print Shop',tok1,tok2):
                 self.assertIn(expected,csv_body)
                 self.assertIn(expected,html_body)
+
+    def test_multi_pc_shop_bundle_seats_and_dashboard_grouping(self):
+        import datetime as dt, subprocess
+        import admin_keygen, license_guard
+        repo=Path(__file__).resolve().parent
+        # Verify owner-keys/supabase-owner.json is also strictly gitignored
+        chk=subprocess.run(
+            ['git','check-ignore','owner-keys/supabase-owner.json','supabase-owner.json'],
+            cwd=str(repo),capture_output=True,text=True,
+        )
+        self.assertEqual(chk.returncode,0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir=Path(tmp)/'owner-keys'
+            priv_b64,pub_b64=admin_keygen.generate_owner_keypair(priv_path=tdir/'priv.key',pub_path=tdir/'pub.txt')
+            issue_day=dt.date(2026,11,15)
+
+            bundle=admin_keygen.sign_multi_pc_shop_bundle(
+                'CD-1111-2222-3333=Counter PC, CD-4444-5555-6666=Desk 2, CD-7777-8888-9999=Desk 3',
+                customer='Sunrise Cyber Café',
+                days=365,
+                shop_id='SHOP-SUNRISE',
+                pdf_unlock_mode='seat1',
+                issued_date=issue_day,
+                private_key_b64=priv_b64,
+            )
+            self.assertEqual(bundle['shop_id'],'SHOP-SUNRISE')
+            self.assertEqual(bundle['seat_max'],3)
+            self.assertEqual(len(bundle['seats']),3)
+
+            # Seat 1 has PDF Password Remover included; Seats 2 & 3 are standard
+            s1=license_guard.verify_license_token(bundle['seats'][0]['token'],expected_machine_id='CD-1111-2222-3333',public_key_b64=pub_b64,today=issue_day)
+            s2=license_guard.verify_license_token(bundle['seats'][1]['token'],expected_machine_id='CD-4444-5555-6666',public_key_b64=pub_b64,today=issue_day)
+            self.assertEqual((s1['shop_id'],s1['seat_no'],s1['seat_max'],s1['seat_label']),('SHOP-SUNRISE',1,3,'Counter PC'))
+            self.assertIn(license_guard.FEATURE_PDF_UNLOCK,s1['features'])
+            self.assertEqual((s2['shop_id'],s2['seat_no'],s2['seat_max'],s2['seat_label']),('SHOP-SUNRISE',2,3,'Desk 2'))
+            self.assertEqual(s2['features'],[])
+
+            # Seat 1 token still cannot be copied onto Seat 2's computer
+            with self.assertRaisesRegex(license_guard.LicenseError,'belongs to another computer'):
+                license_guard.verify_license_token(bundle['seats'][0]['token'],expected_machine_id='CD-4444-5555-6666',public_key_b64=pub_b64,today=issue_day)
+
+            pack_txt,csv_file,html_file=admin_keygen._save_and_record_shop_bundle(bundle,out_root=tdir/'issued-files',log_path=tdir/'issued-licenses.jsonl')
+            self.assertTrue(pack_txt.is_file())
+            self.assertIn('SHOP-SUNRISE',html_file.read_text(encoding='utf-8'))
+            self.assertIn('Seat 2/3',csv_file.read_text(encoding='utf-8-sig'))
+
+    def test_multi_pc_sales_station_merge_lan_sync_and_shop_pack(self):
+        import os
+        import sales_store, settings_store
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p=Path(tmp)
+            pc1_dir=tmp_p/'pc1_data'; pc2_dir=tmp_p/'pc2_data'; lan_dir=tmp_p/'shared_lan'
+            pc1_db=pc1_dir/'sales.sqlite3'; pc2_db=pc2_dir/'sales.sqlite3'
+            pc1_cfg=pc1_dir/'settings.json'; pc2_cfg=pc2_dir/'settings.json'
+
+            # Configure PC 1 (Main Counter) with prices & Shop ID, export .cafeshop.json pack
+            settings_store.save_settings('Sunrise Cyber Café','store',path=pc1_cfg)
+            settings_store.save_prices('R','B&W Print | 2.00\nColor Print | 5.50',path=pc1_cfg)
+            settings_store.save_multi_pc_settings('Counter PC 1',shop_id='SHOP-SUNRISE',lan_sync_folder=str(lan_dir),path=pc1_cfg)
+
+            pack_file=tmp_p/'sunrise.cafeshop.json'
+            old_port=os.environ.get('CAFE_DESK_PORTABLE_DIR')
+            os.environ['CAFE_DESK_PORTABLE_DIR']=str(pc1_dir)
+            try:
+                settings_store.export_shop_profile_pack(pack_file,path=pc1_cfg)
+            finally:
+                if old_port is None: os.environ.pop('CAFE_DESK_PORTABLE_DIR',None)
+                else: os.environ['CAFE_DESK_PORTABLE_DIR']=old_port
+
+            # PC 2 sets its own Station Name & PIN, then imports PC 1's Shop Pack without losing its Station Name or PIN
+            settings_store.set_pin('654321',path=pc2_cfg)
+            settings_store.save_multi_pc_settings('Desk 2',path=pc2_cfg)
+            imported=settings_store.import_shop_profile_pack(pack_file,path=pc2_cfg)
+            self.assertEqual(imported['business_name'],'Sunrise Cyber Café')
+            self.assertEqual(imported['shop_id'],'SHOP-SUNRISE')
+            self.assertEqual(imported['station_name'],'Desk 2')
+            self.assertEqual(len(imported['prices']),2)
+            self.assertTrue(settings_store.verify_pin('654321',path=pc2_cfg))
+
+            # Record distinct sales on PC 1 and PC 2
+            sales_store.record_sale('SALE-PC1-001','Sunrise Cyber Café','R',[{'name':'B&W Print','qty':5,'price':'2.00'}],created_at='2026-11-15T09:10:00+00:00',path=pc1_db,station='Counter PC 1')
+            sales_store.record_sale('SALE-PC2-001','Sunrise Cyber Café','R',[{'name':'Color Print','qty':2,'price':'5.50'}],created_at='2026-11-15T09:20:00+00:00',path=pc2_db,station='Desk 2')
+
+            # Two-way LAN folder sync combines both PCs' totals idempotently without duplicates
+            sales_store.sync_lan_folder(lan_dir,station_name='Counter PC 1',path=pc1_db)
+            res2=sales_store.sync_lan_folder(lan_dir,station_name='Desk 2',path=pc2_db)
+            self.assertEqual(res2['inserted'],1)
+            res1=sales_store.sync_lan_folder(lan_dir,station_name='Counter PC 1',path=pc1_db)
+            self.assertEqual(res1['inserted'],1)
+            # Re-running sync produces 0 duplicates
+            res1_again=sales_store.sync_lan_folder(lan_dir,station_name='Counter PC 1',path=pc1_db)
+            self.assertEqual(res1_again['inserted'],0)
+
+            rep=sales_store.report('2026-11-01','2026-11-30',path=pc1_db)
+            self.assertEqual(rep['totals'][0]['cents'],2100)  # R10.00 + R11.00 = R21.00 combined
+            by_st={r['station_label']:r['cents'] for r in rep['by_station']}
+            self.assertEqual(by_st,{'Counter PC 1':1000,'Desk 2':1100})
+
+            # Voiding a sale on PC 2 propagates to PC 1 on next sync
+            sales_store.void_sale('SALE-PC2-001','Customer cancelled',voided_at='2026-11-15T09:30:00+00:00',path=pc2_db)
+            sales_store.sync_lan_folder(lan_dir,station_name='Desk 2',path=pc2_db)
+            v_sync=sales_store.sync_lan_folder(lan_dir,station_name='Counter PC 1',path=pc1_db)
+            self.assertEqual(v_sync['updated_voids'],1)
+            rep_after=sales_store.report('2026-11-01','2026-11-30',path=pc1_db)
+            self.assertEqual(rep_after['totals'][0]['cents'],1000)
+
+    def test_remote_updater_sha256_verification_and_supabase_online_entitlement_sync(self):
+        import datetime as dt, hashlib, io, json, os
+        from unittest import mock
+        import admin_keygen, cloud_sync, license_guard
+
+        self.assertTrue(cloud_sync.is_newer_version('0.8.1','0.8.0'))
+        self.assertTrue(cloud_sync.is_newer_version('1.0.0','0.8.9'))
+        self.assertFalse(cloud_sync.is_newer_version('0.8.0','0.8.0'))
+        self.assertFalse(cloud_sync.is_newer_version('0.7.9','0.8.0'))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p=Path(tmp)
+            fake_exe_bytes=b'MZ-FAKE-CAFEDESK-INSTALLER-V0.8.1-SIGNED-PAYLOAD'
+            good_sha=hashlib.sha256(fake_exe_bytes).hexdigest()
+            wrong_sha='0'*64
+
+            class _FakeHTTPResp:
+                def __init__(self,body: bytes):
+                    self._bio=io.BytesIO(body)
+                    self.headers={'Content-Length':str(len(body))}
+                def read(self,n=-1):
+                    return self._bio.read(n)
+                def __enter__(self): return self
+                def __exit__(self,*_a): pass
+
+            # 1. Refuses non-HTTPS remote installer URLs
+            with self.assertRaisesRegex(ValueError,'HTTPS'):
+                cloud_sync.download_and_verify_update('http://evil.example.com/CafeDesk.exe',good_sha,tmp_p)
+
+            # 2. Tampered / mismatched SHA-256 deletes temporary file and raises security error
+            with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
+                with self.assertRaisesRegex(ValueError,'Security check failed'):
+                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',wrong_sha,tmp_p,version_label='0.8.1')
+            self.assertEqual(list(tmp_p.glob('*CafeDesk*')),[])
+
+            # 3. Matching SHA-256 saves verified installer cleanly
+            with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
+                saved_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1')
+            self.assertTrue(saved_exe.is_file())
+            self.assertEqual(saved_exe.read_bytes(),fake_exe_bytes)
+
+            # 4. Mock Supabase check_for_app_update + online Machine ID key pull + remote revocation
+            priv_b64,pub_b64=admin_keygen.generate_owner_keypair(priv_path=tmp_p/'priv.key',pub_path=tmp_p/'pub.txt')
+            mid='CD-ABCD-1234-EF56'
+            today=dt.datetime.now(dt.timezone.utc).date()
+            lic_tok,lic_pay=admin_keygen.sign_license_token(mid,customer='Cloud Cyber Shop',days=365,shop_id='SHOP-CLOUD',seat_no=2,seat_max=4,seat_label='Desk 2',issued_date=today,private_key_b64=priv_b64)
+            add_tok,add_pay=admin_keygen.sign_addon_token(mid,feature=license_guard.FEATURE_PDF_UNLOCK,customer='Cloud Cyber Shop',days=365,issued_date=today,private_key_b64=priv_b64)
+
+            lic_dir=tmp_p/'pc_lic'
+            cfg={'supabase_url':'https://demo-proj.supabase.co','supabase_anon_key':'anon-public-jwt'}
+
+            with mock.patch.dict(os.environ,{'CAFE_DESK_LICENSE_DIR':str(lic_dir),'CAFE_DESK_PUBLIC_KEY':pub_b64,'CAFE_DESK_TEST_MACHINE_ID':mid},clear=False):
+                with mock.patch.object(cloud_sync,'_supabase_request',return_value=[{'version':'0.9.0','download_url':'https://demo-proj.supabase.co/storage/v1/object/public/releases/CafeDesk.exe','sha256':good_sha,'release_notes':'Faster OCR','mandatory':False}]):
+                    upd=cloud_sync.check_for_app_update(cfg,current_version='0.8.0')
+                    self.assertTrue(upd['update_available'])
+                    self.assertEqual(upd['latest_version'],'0.9.0')
+
+                # Online sync activates both base 1-year seat license and PDF unlock add-on
+                with mock.patch.object(cloud_sync,'_supabase_request',return_value={
+                    'ok':True,
+                    'machine_id':mid,
+                    'active_keys':[{'license_id':lic_pay['lid'],'token':lic_tok},{'license_id':add_pay['lid'],'token':add_tok}],
+                    'revoked_keys':[],
+                }):
+                    sync_res=cloud_sync.sync_machine_entitlements_from_cloud(cfg,machine_id=mid,public_key_b64=pub_b64)
+                    self.assertEqual(len(sync_res['activated']),2)
+                    self.assertTrue(license_guard.current_license_status(public_key_b64=pub_b64,today=today)['valid'])
+                    self.assertTrue(license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK,public_key_b64=pub_b64,today=today)['valid'])
+
+                # Owner remotely revokes the add-on license_id -> next cloud sync removes it locally!
+                with mock.patch.object(cloud_sync,'_supabase_request',return_value={
+                    'ok':True,
+                    'machine_id':mid,
+                    'active_keys':[{'license_id':lic_pay['lid'],'token':lic_tok}],
+                    'revoked_keys':[{'license_id':add_pay['lid'],'reason':'Chargeback'}],
+                }):
+                    rev_res=cloud_sync.sync_machine_entitlements_from_cloud(cfg,machine_id=mid,public_key_b64=pub_b64)
+                    self.assertEqual(len(rev_res['revoked']),1)
+                    self.assertTrue(license_guard.current_license_status(public_key_b64=pub_b64,today=today)['valid'])
+                    self.assertFalse(license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK,public_key_b64=pub_b64,today=today)['valid'])
 
 if __name__=='__main__': unittest.main()

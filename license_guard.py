@@ -338,12 +338,20 @@ def verify_license_token(
     days_left = (expiry_date - now_date).days
     customer = ' '.join(str(payload.get('cust') or 'Licensed Café').split())[:80] or 'Licensed Café'
     license_id = str(payload.get('lid') or '')[:40]
+    shop_id = re.sub(r'[^A-Za-z0-9_-]', '', str(payload.get('shop_id') or ''))[:40]
+    seat_label = ' '.join(str(payload.get('seat_label') or '').split())[:40]
+    seat_no = int(payload['seat_no']) if isinstance(payload.get('seat_no'), int) and payload['seat_no'] > 0 else None
+    seat_max = int(payload['seat_max']) if isinstance(payload.get('seat_max'), int) and payload['seat_max'] > 0 else None
     raw_feats = payload.get('feat', [])
     features = [str(f) for f in raw_feats if isinstance(f, str) and f in KNOWN_PAID_FEATURES] if isinstance(raw_feats, list) else []
     return {
         'valid': True,
         'machine_id': token_mid,
         'customer': customer,
+        'shop_id': shop_id,
+        'seat_no': seat_no,
+        'seat_max': seat_max,
+        'seat_label': seat_label,
         'issued_at': issued_date.isoformat(),
         'expires_at': expiry_date.isoformat(),
         'days_remaining': days_left,
@@ -464,12 +472,20 @@ def verify_addon_token(
     days_left = (expiry_date - now_date).days
     customer = ' '.join(str(payload.get('cust') or 'Licensed Café').split())[:80] or 'Licensed Café'
     license_id = str(payload.get('lid') or '')[:40]
+    shop_id = re.sub(r'[^A-Za-z0-9_-]', '', str(payload.get('shop_id') or ''))[:40]
+    seat_label = ' '.join(str(payload.get('seat_label') or '').split())[:40]
+    seat_no = int(payload['seat_no']) if isinstance(payload.get('seat_no'), int) and payload['seat_no'] > 0 else None
+    seat_max = int(payload['seat_max']) if isinstance(payload.get('seat_max'), int) and payload['seat_max'] > 0 else None
     return {
         'valid': True,
         'feature': feature,
         'features': [str(f) for f in raw_feats if isinstance(f, str) and f in KNOWN_PAID_FEATURES],
         'machine_id': token_mid,
         'customer': customer,
+        'shop_id': shop_id,
+        'seat_no': seat_no,
+        'seat_max': seat_max,
+        'seat_label': seat_label,
         'issued_at': issued_date.isoformat(),
         'expires_at': expiry_date.isoformat(),
         'days_remaining': days_left,
@@ -551,6 +567,10 @@ def activate_and_save_license(raw_key_or_json: str, *, public_key_b64: str | Non
     record = {
         'token': info['token'],
         'customer': info['customer'],
+        'shop_id': info.get('shop_id', ''),
+        'seat_no': info.get('seat_no'),
+        'seat_max': info.get('seat_max'),
+        'seat_label': info.get('seat_label', ''),
         'machine_id': info['machine_id'],
         'issued_at': info['issued_at'],
         'expires_at': info['expires_at'],

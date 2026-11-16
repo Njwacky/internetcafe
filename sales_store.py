@@ -36,10 +36,12 @@ def connect(path=None):
         conn.execute('PRAGMA foreign_keys=ON')
         conn.execute('PRAGMA busy_timeout=10000')
         conn.execute('''CREATE TABLE IF NOT EXISTS sales (
-            sale_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, business TEXT NOT NULL,
-            currency TEXT NOT NULL, total_cents INTEGER NOT NULL, items_json TEXT NOT NULL,
-            voided_at TEXT, void_reason TEXT)''')
+            sale_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, station TEXT NOT NULL DEFAULT '',
+            business TEXT NOT NULL, currency TEXT NOT NULL, total_cents INTEGER NOT NULL,
+            items_json TEXT NOT NULL, voided_at TEXT, void_reason TEXT)''')
         cols={row[1] for row in conn.execute('PRAGMA table_info(sales)').fetchall()}
+        if 'station' not in cols:
+            conn.execute("ALTER TABLE sales ADD COLUMN station TEXT NOT NULL DEFAULT ''")
         if 'voided_at' not in cols:
             conn.execute('ALTER TABLE sales ADD COLUMN voided_at TEXT')
         if 'void_reason' not in cols:
@@ -71,10 +73,11 @@ def validate_items(items):
     return out,total
 
 
-def record_sale(sale_id,business,currency,items,created_at=None,path=None):
+def record_sale(sale_id,business,currency,items,created_at=None,path=None,station=None):
     if not isinstance(sale_id,str) or not sale_id or len(sale_id)>64:raise ValueError('Invalid sale reference.')
     business=settings_store.clean_name(business);currency=str(currency).strip()
     if not currency or len(currency)>8 or any(c in currency for c in '\n\r|'):raise ValueError('Invalid currency.')
+    clean_station=' '.join(str(station if station is not None else settings_store.load_settings().get('station_name','')).split())[:40]
     items,total=validate_items(items);payload=json.dumps(items,ensure_ascii=False,separators=(',',':'))
     when=created_at or datetime.now().astimezone().isoformat(timespec='seconds')
     try:datetime.fromisoformat(when)
@@ -86,7 +89,7 @@ def record_sale(sale_id,business,currency,items,created_at=None,path=None):
             if old:
                 if old!=(business,currency,total,payload):raise ValueError('This sale reference already exists with different details.')
                 conn.rollback();return False
-            conn.execute('INSERT INTO sales(sale_id,created_at,business,currency,total_cents,items_json) VALUES(?,?,?,?,?,?)',(sale_id,when,business,currency,total,payload));conn.commit()
+            conn.execute('INSERT INTO sales(sale_id,created_at,station,business,currency,total_cents,items_json) VALUES(?,?,?,?,?,?,?)',(sale_id,when,clean_station,business,currency,total,payload));conn.commit()
         except sqlite3.DatabaseError as exc:
             conn.rollback()
             _quarantine_corrupt_db(path or db_path())
@@ -150,11 +153,135 @@ def report(start,end,path=None,limit=500):
             conn.row_factory=sqlite3.Row
             rows=conn.execute("SELECT * FROM sales WHERE substr(created_at,1,10) BETWEEN ? AND ? ORDER BY created_at DESC, sale_id DESC LIMIT ?",(start,end,limit)).fetchall()
             totals=conn.execute("SELECT currency,COUNT(*) AS count,COALESCE(SUM(total_cents),0) AS cents FROM sales WHERE voided_at IS NULL AND substr(created_at,1,10) BETWEEN ? AND ? GROUP BY currency ORDER BY currency",(start,end)).fetchall()
+            by_station=conn.execute("SELECT CASE WHEN TRIM(COALESCE(station,''))='' THEN 'Unlabeled PC' ELSE station END AS station_label, currency, COUNT(*) AS count, COALESCE(SUM(total_cents),0) AS cents FROM sales WHERE voided_at IS NULL AND substr(created_at,1,10) BETWEEN ? AND ? GROUP BY station_label, currency ORDER BY station_label, currency",(start,end)).fetchall()
             void_count=conn.execute("SELECT COUNT(*) FROM sales WHERE voided_at IS NOT NULL AND substr(created_at,1,10) BETWEEN ? AND ?",(start,end)).fetchone()[0]
     except sqlite3.DatabaseError as exc:
         _quarantine_corrupt_db(path or db_path())
         raise SalesStoreError('Sales database is damaged or unreadable. Restore a backup or archive sales.sqlite3.') from exc
-    return {'rows':[dict(r) for r in rows],'totals':[dict(r) for r in totals],'voided_count':int(void_count or 0)}
+    return {
+        'rows':[dict(r) for r in rows],
+        'totals':[dict(r) for r in totals],
+        'by_station':[dict(r) for r in by_station],
+        'voided_count':int(void_count or 0),
+    }
+
+
+def export_sales_records(start=None,end=None,path=None,limit=5000):
+    """Return normalized sale dicts suitable for multi-PC JSON/LAN/Supabase sync."""
+    with closing(connect(path)) as conn:
+        conn.row_factory=sqlite3.Row
+        if start and end:
+            s,e=date_range(start,end)
+            rows=conn.execute("SELECT * FROM sales WHERE substr(created_at,1,10) BETWEEN ? AND ? ORDER BY created_at DESC LIMIT ?",(s,e,limit)).fetchall()
+        else:
+            rows=conn.execute("SELECT * FROM sales ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall()
+    out=[]
+    for r in rows:
+        try: items=json.loads(r['items_json'])
+        except Exception: items=[]
+        out.append({
+            'sale_id':r['sale_id'],
+            'created_at':r['created_at'],
+            'station':r['station'] if 'station' in r.keys() else '',
+            'business':r['business'],
+            'currency':r['currency'],
+            'total_cents':int(r['total_cents']),
+            'items':items,
+            'voided_at':r['voided_at'],
+            'void_reason':r['void_reason'],
+        })
+    return out
+
+
+def merge_external_sales(records,path=None):
+    """Idempotently merge sales from other shop PCs (SQLite file, JSON pack, or Supabase sync).
+
+    Existing `sale_id` rows are NEVER duplicated; if a sale was voided on another PC, the void
+    status propagates cleanly.
+    """
+    if not isinstance(records,list):
+        raise ValueError('Sales sync data must be a list of sale records.')
+    inserted=0; updated_voids=0; skipped=0
+    with closing(connect(path)) as conn:
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            for rec in records:
+                if not isinstance(rec,dict):
+                    skipped+=1; continue
+                sid=str(rec.get('sale_id') or '').strip()[:64]
+                if not sid:
+                    skipped+=1; continue
+                raw_items=rec.get('items')
+                if raw_items is None and rec.get('items_json'):
+                    raw_items=json.loads(str(rec['items_json']))
+                if not isinstance(raw_items,list) or not raw_items:
+                    skipped+=1; continue
+                try:
+                    clean_items,calc_cents=validate_items(raw_items)
+                    bname=settings_store.clean_name(rec.get('business') or settings_store.DEFAULT_NAME)
+                    curr=str(rec.get('currency') or 'R').strip()[:8]
+                    when=str(rec.get('created_at') or '').strip()
+                    datetime.fromisoformat(when)
+                except Exception:
+                    skipped+=1; continue
+                st=' '.join(str(rec.get('station') or '').split())[:40]
+                v_at=str(rec.get('voided_at') or '').strip() or None
+                v_reason=' '.join(str(rec.get('void_reason') or '').split())[:160] or None
+                payload=json.dumps(clean_items,ensure_ascii=False,separators=(',',':'))
+                existing=conn.execute('SELECT voided_at FROM sales WHERE sale_id=?',(sid,)).fetchone()
+                if existing is None:
+                    conn.execute(
+                        'INSERT INTO sales(sale_id,created_at,station,business,currency,total_cents,items_json,voided_at,void_reason) VALUES(?,?,?,?,?,?,?,?,?)',
+                        (sid,when,st,bname,curr,calc_cents,payload,v_at,v_reason),
+                    )
+                    inserted+=1
+                elif v_at and not existing[0]:
+                    conn.execute('UPDATE sales SET voided_at=?, void_reason=? WHERE sale_id=?',(v_at,v_reason or 'Voided on shop PC',sid))
+                    updated_voids+=1
+                else:
+                    skipped+=1
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    return {'inserted':inserted,'updated_voids':updated_voids,'skipped':skipped}
+
+
+def merge_from_file(source_file,path=None):
+    """Merge sales from another PC's `.sqlite3` backup or `.cafesales.json` export."""
+    src=Path(source_file)
+    if not src.is_file():
+        raise FileNotFoundError('Selected sales file was not found.')
+    if src.suffix.lower() in ('.json',):
+        raw=json.loads(src.read_text(encoding='utf-8'))
+        recs=raw.get('sales',[]) if isinstance(raw,dict) else raw
+        return merge_external_sales(recs,path=path)
+    # Otherwise treat as SQLite backup from another PC
+    other_records=export_sales_records(path=src,limit=50000)
+    return merge_external_sales(other_records,path=path)
+
+
+def sync_lan_folder(folder_path,station_name='',path=None):
+    """Two-way offline LAN folder sync: writes this PC's sales snapshot and merges all other PCs' snapshots."""
+    folder=Path(str(folder_path or '').strip())
+    if not str(folder_path or '').strip():
+        raise ValueError('Choose a Shared Network / USB Sync Folder in Business Settings first.')
+    folder.mkdir(parents=True,exist_ok=True)
+    safe_station=''.join(c if c.isalnum() or c in ('-','_') else '-' for c in (station_name or 'pc')).strip('-')[:32] or 'pc'
+    own_file=folder/f'sales-{safe_station}.cafesales.json'
+    own_records=export_sales_records(path=path,limit=5000)
+    own_payload=json.dumps({'format':'cafedesk-sales-v1','station':station_name,'sales':own_records},ensure_ascii=False)
+    services._atomic_write(own_file,lambda tmp: Path(tmp).write_text(own_payload,encoding='utf-8'))
+
+    total_in=0; total_void=0; files_read=0
+    for peer_file in sorted(folder.glob('sales-*.cafesales.json')):
+        if peer_file.resolve()==own_file.resolve():
+            continue
+        try:
+            res=merge_from_file(peer_file,path=path)
+            total_in+=res['inserted']; total_void+=res['updated_voids']; files_read+=1
+        except Exception:
+            continue
+    return {'inserted':total_in,'updated_voids':total_void,'peer_files':files_read,'own_file':str(own_file)}
 
 
 _CSV_FORMULA_PREFIXES = (
@@ -180,9 +307,9 @@ def export_csv(start,end,destination,path=None):
         try:
             with closing(connect(path)) as conn,open(tmp,'w',encoding='utf-8-sig',newline='') as f:
                 w=csv.writer(f)
-                w.writerow(['Reference','Date and time','Status','Business','Currency','Total','Services','Void reason'])
-                for ref,when,business,currency,total,payload,voided_at,void_reason in conn.execute(
-                    "SELECT sale_id,created_at,business,currency,total_cents,items_json,voided_at,void_reason "
+                w.writerow(['Reference','Date and time','Computer / Station','Status','Business','Currency','Total','Services','Void reason'])
+                for ref,when,station,business,currency,total,payload,voided_at,void_reason in conn.execute(
+                    "SELECT sale_id,created_at,station,business,currency,total_cents,items_json,voided_at,void_reason "
                     "FROM sales WHERE substr(created_at,1,10) BETWEEN ? AND ? ORDER BY created_at DESC",(start,end)
                 ):
                     details='; '.join(f"{x['name']} x{x['qty']} @ {x['price']}" for x in json.loads(payload))
@@ -191,6 +318,7 @@ def export_csv(start,end,destination,path=None):
                     w.writerow([
                         sanitize_csv_cell(ref),
                         sanitize_csv_cell(when),
+                        sanitize_csv_cell(station or ''),
                         status_label,
                         sanitize_csv_cell(business),
                         sanitize_csv_cell(currency),

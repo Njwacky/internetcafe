@@ -8,8 +8,9 @@ installer-output/
 *.spec
 .DS_Store
 Thumbs.db
-# NEVER commit owner Ed25519 private signing keys or customer license records
+# NEVER commit owner Ed25519 private signing keys, Supabase owner secrets, or customer license records
 owner-keys/
+supabase-owner.json
 *.private.key
 *.private.pem
 *.cafelicense
