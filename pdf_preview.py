@@ -2,12 +2,23 @@
 import math
 from pathlib import Path
 import pypdfium2 as pdfium
+import services
 
 BATCH_SIZE=6
 MAX_PAGES=2000
 
+def _validate_pdf_path(path):
+    services.assert_safe_user_input(path)
+    p=Path(path)
+    if not p.is_file():
+        raise ValueError(f'PDF not found: {p.name}')
+    if p.stat().st_size>services.MAX_PDF_FILE_BYTES:
+        raise ValueError(f'“{p.name}” exceeds the {services.MAX_PDF_FILE_BYTES//(1024*1024)} MB PDF size limit.')
+    return p
+
 def fingerprint(path):
-    info=Path(path).stat()
+    p=_validate_pdf_path(path)
+    info=p.stat()
     return (info.st_size,info.st_mtime_ns)
 
 def render_batch(path,start=0,expected=None):
@@ -29,7 +40,7 @@ def render_batch(path,start=0,expected=None):
             page=doc[i]
             try:
                 width,height=page.get_size()
-                if not all(math.isfinite(x) and x>0 for x in (width,height)):raise ValueError('Invalid PDF page dimensions.')
+                if not all(math.isfinite(x) and 0<x<=services.MAX_PDF_PAGE_DIM_PT for x in (width,height)):raise ValueError('Invalid PDF page dimensions.')
                 scale=min(1.5,180/width,250/height)
                 bitmap=page.render(scale=scale)
                 try:image=bitmap.to_pil().copy()
@@ -54,7 +65,7 @@ def render_page(path,number,expected):
         page=doc[number-1]
         try:
             w,h=page.get_size()
-            if not all(math.isfinite(v) and v>0 for v in (w,h)):raise ValueError('Invalid PDF page dimensions.')
+            if not all(math.isfinite(v) and 0<v<=services.MAX_PDF_PAGE_DIM_PT for v in (w,h)):raise ValueError('Invalid PDF page dimensions.')
             bitmap=page.render(scale=min(2,610/w,700/h))
             try:image=bitmap.to_pil().copy()
             finally:bitmap.close()

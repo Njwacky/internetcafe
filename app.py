@@ -78,9 +78,25 @@ def entry(parent,placeholder='',**kw): return ctk.CTkEntry(parent,placeholder_te
 class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
-        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
-        preferences=settings_store.load_settings(); self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick)
+        self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.ai_generation=0; self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
+        settings_corrupted=False
+        try:
+            preferences=settings_store.load_settings(strict=True)
+        except settings_store.CorruptedSettingsError:
+            settings_corrupted=True
+            preferences=settings_store.load_settings(strict=False)
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick)
+        if settings_corrupted:
+            self.status.set('⚠ Settings file damaged • staff access locked fail-closed until restored')
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
+        self.bind_all('<F1>',lambda _e:self.quick_help(),add='+')
+        self.bind_all('<Control-l>',lambda _e:self.lock_staff(),add='+')
+        self.bind_all('<Control-L>',lambda _e:self.lock_staff(),add='+')
+        self.bind_all('<Control-Shift-N>',lambda _e:self.clear_customer(),add='+')
+        self.bind_all('<Control-Shift-n>',lambda _e:self.clear_customer(),add='+')
+        lic_init=license_guard.current_license_status()
+        if lic_init.get('valid') and lic_init.get('days_remaining',999)<=14 and not settings_corrupted:
+            self.status.set(f"⚠ License expires in {lic_init['days_remaining']} day(s) ({lic_init['expires_at']}) • open About & contact to renew")
     def note_activity(self,event=None): self.idle.touch()
     def check_idle(self):
         if self.staff_unlocked and self.idle.expired(): self.lock_staff(); self.status.set('Staff access locked after five minutes of inactivity')
@@ -88,6 +104,12 @@ class CafeDesk(ctk.CTk):
     def has_unsaved_work(self):
         """Return True if any active tool holds unsaved customer text, files, scans, cards or forms."""
         if self.current=='Career documents': self.sync_long_fields()
+        if self.current=='Cards & invitations' and callable(getattr(self,'_sync_cards_hook',None)):
+            try: self._sync_cards_hook()
+            except Exception: pass
+        if self.current=='Forms creator' and callable(getattr(self,'_sync_forms_hook',None)):
+            try: self._sync_forms_hook()
+            except Exception: pass
         ocr_live=(self.ocr_editor and self.ocr_editor.winfo_exists() and self.ocr_editor.get('1.0','end-1c').strip())
         card_dirty=bool(
             self.card_state.get('photo')
@@ -97,6 +119,11 @@ class CafeDesk(ctk.CTk):
         default_form=forms_renderer.default_form_spec(self.form_state.get('template','General Application Form'))
         form_dirty=(
             str(self.form_state.get('organization','')).strip()!=''
+            or self.form_state.get('title')!=default_form.get('title')
+            or self.form_state.get('subtitle')!=default_form.get('subtitle')
+            or self.form_state.get('instructions')!=default_form.get('instructions')
+            or bool(self.form_state.get('fillable',True))!=bool(default_form.get('fillable',True))
+            or bool(self.form_state.get('signature_block',True))!=bool(default_form.get('signature_block',True))
             or self.form_state.get('fields')!=default_form.get('fields')
         )
         return bool(
@@ -144,7 +171,7 @@ class CafeDesk(ctk.CTk):
         with Image.open(root / 'assets' / 'icons' / 'unlock-staff.png') as image:
             images['unlock_staff']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(18,18))
         try:
-            with Image.open(settings_store.logo_path()) as image: images['custom']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
+            with services.open_safe_image(settings_store.logo_path(),allow_internal=True) as image: images['custom']=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
         except (OSError,ValueError): images['custom']=images['office']
         return images
     def update_clock(self):
@@ -168,8 +195,8 @@ class CafeDesk(ctk.CTk):
             path=filedialog.askopenfilename(parent=self,filetypes=[('Image files','*.png *.jpg *.jpeg *.bmp')])
             if not path: return
             try:
-                with Image.open(path) as original:
-                    image=original.convert('RGBA'); image.thumbnail((256,256)); sample=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
+                with services.open_safe_image(path) as original:
+                    image=ImageOps.exif_transpose(original).convert('RGBA'); image.thumbnail((256,256)); sample=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
                 selected_logo['path']=path; selected_logo['sample']=sample; icon_choice.set(settings_store.ICONS['custom']); icon_preview.configure(image=sample)
             except Exception as exc: messagebox.showerror('Invalid logo',str(exc),parent=self)
         button(icon_row,'Upload logo',choose_logo,secondary=True,width=125,height=36).pack(side='left',padx=10)
@@ -213,7 +240,17 @@ class CafeDesk(ctk.CTk):
                     messagebox.showerror('Staff access','Incorrect PIN. After 5 failed attempts, staff access locks for 60 seconds.',parent=self); return False
             self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer'); return True
         except settings_store.CorruptedSettingsError as exc:
-            messagebox.showerror('Settings damaged (fail-closed)',str(exc),parent=self); return False
+            bak=settings_store.settings_path().with_name('settings.json.bak')
+            if bak.is_file() and messagebox.askyesno('Settings damaged (fail-closed)',f'{exc}\n\nA verified backup (settings.json.bak) exists. Restore settings.json.bak now so you can enter your staff PIN?',parent=self):
+                try:
+                    restored=settings_store.restore_backup_settings()
+                    self.business_name.set(restored['business_name']); self.title(restored['business_name'])
+                    messagebox.showinfo('Backup restored','settings.json.bak was restored (the damaged file was quarantined as settings.json.corrupt). Click again to enter your staff PIN.',parent=self)
+                except Exception as r_exc:
+                    messagebox.showerror('Restore failed',f'Could not restore settings.json.bak:\n{r_exc}\n\nAn OS administrator must inspect:\n{settings_store.settings_path().parent}',parent=self)
+            else:
+                messagebox.showerror('Settings damaged (fail-closed)',f'{exc}\n\nFolder:\n{settings_store.settings_path().parent}',parent=self)
+            return False
         except (ValueError,OSError) as exc: messagebox.showerror('Staff access',str(exc),parent=self); return False
     def change_pin(self):
         try:
@@ -239,7 +276,7 @@ class CafeDesk(ctk.CTk):
         if btn and btn.winfo_exists():
             btn.configure(image=self.icon_images['unlock_staff' if self.staff_unlocked else 'lock_staff'])
     def lock_staff(self):
-        self.staff_unlocked=False; self.key.set(''); self.update_lock_button()
+        self.staff_unlocked=False; self.key.set(''); self.ai_generation+=1; self.update_lock_button()
         if self.current in ('Business settings','Price settings','AI settings','Sales reports'): self.show('Home')
         self.status.set('Staff access locked • session API key cleared')
     def _career_snapshot(self):
@@ -289,9 +326,30 @@ class CafeDesk(ctk.CTk):
         if not self.require_staff():return
         primary=self.recovery_dir()/(kind+'.cafeproject')
         prev=self.recovery_dir()/(kind+'.prev.cafeproject')
-        target=primary if primary.exists() else (prev if prev.exists() else None)
-        if target is None:return messagebox.showinfo('No recovery copy','No recovery copy exists for this project type.',parent=self)
-        self.open_project(str(target),allow_recovery=True)
+        candidates=[p for p in (primary,prev) if p.exists()]
+        if not candidates:return messagebox.showinfo('No recovery copy','No recovery copy exists for this project type.',parent=self)
+        session=self.session_temp.name
+        def load_with_fallback():
+            last_err=None
+            for idx,cand in enumerate(candidates):
+                try:
+                    return projects.load(str(cand),session,allow_internal=True), idx>0
+                except Exception as exc:
+                    last_err=exc
+            raise last_err
+        def loaded(res):
+            (proj_kind,data),used_fallback=res
+            what='career document' if proj_kind=='career' else 'picture sheet'
+            note='\n\nNote: The latest recovery file was unreadable, so the previous verified checkpoint (.prev.cafeproject) was loaded.' if used_fallback else ''
+            if not messagebox.askyesno('Open recovery copy',f'Opening this recovery copy replaces the current {what} in the workspace. Save your current work first if needed.{note}\n\nContinue?',parent=self):return
+            self.show('Home')
+            if proj_kind=='career':
+                self.doc_type.set(data['category']);self.template.set(data['template']);self.doc_text=data['draft'];self.cv_photo=data['photo']
+                for key,var in self.values.items():var.set(data['fields'].get(key,''))
+                self.show('Career documents')
+            else:self.sheet=data;self.show('A4 picture sheets')
+            self.status.set('Recovery project restored' + (' from previous checkpoint' if used_fallback else '') + ' • temporary until saved')
+        self.job('Opening recovery copy…',load_with_fallback,loaded)
     def perform_recovery(self):
         if not self.recovery_enabled or self.busy:return
         career=self._career_snapshot();sheet=self._sheet_snapshot();jobs=[]
@@ -309,7 +367,9 @@ class CafeDesk(ctk.CTk):
                     try: shutil.copy2(cur_file,prev_file)
                     except OSError: pass
                 projects.save(kind,data,str(cur_file),allow_internal=True)
-        self.job('Saving recovery copy…',work,lambda _:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted'))
+        def on_fail(err_msg):
+            self.status.set(f'⚠ Auto-recovery failed ({err_msg}) • save your work manually!')
+        self.job('Saving recovery copy…',work,lambda _:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted'),error_cb=on_fail)
     def recovery_tick(self):
         self.perform_recovery();self.after(60000,self.recovery_tick)
     def projects_screen(self):
@@ -318,7 +378,7 @@ class CafeDesk(ctk.CTk):
         label(box,'A project includes the document or picture-sheet layout and copies of its photos. It is not encrypted.',size=12,color=MUTED,wraplength=720,justify='left').pack(anchor='w',padx=20,pady=(0,12))
         row=ctk.CTkFrame(box,fg_color='transparent');row.pack(fill='x',padx=20,pady=(0,18));button(row,'Save career project',lambda:self.save_project('career'),width=170).pack(side='left',padx=(0,8));button(row,'Save picture sheet',lambda:self.save_project('sheet'),secondary=True,width=165).pack(side='left',padx=(0,8));button(row,'Open a project',self.open_project,secondary=True,width=140).pack(side='left')
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Optional recovery copies',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
-        label(box,'When enabled, a local copy is saved about every 60 seconds. It includes private text and photos and is not encrypted. Keep the computer and backups secure.',size=12,color=MUTED,wraplength=720,justify='left').pack(anchor='w',padx=20,pady=(0,12))
+        label(box,'When enabled, a local copy is saved about every 60 seconds into:\n'+str(self.recovery_dir())+'\nIt includes private text and photos and is not encrypted. Keep the computer and backups secure.',size=12,color=MUTED,wraplength=720,justify='left').pack(anchor='w',padx=20,pady=(0,12))
         toggle=ctk.BooleanVar(value=self.recovery_enabled)
         def change():
             if toggle.get():
@@ -350,7 +410,7 @@ class CafeDesk(ctk.CTk):
             'Sales reports':'Choose a date range to view locally recorded totals, export a CSV or save a selected sale record. Simple internal service log — payment status, cash/card drawer reconciliation and tax/VAT are NOT calculated.',
             'Price settings':'Enter each business service and price on its own line as service | price. Include units in the service name.',
             'Business settings':'Change the business name, icon, logo or staff PIN. Settings are local to this computer user.',
-            'AI settings':'Enter your own API key for this session. Confirm before the complete draft is sent to OpenAI.'}
+            'AI settings':'Enter your session API key (OpenRouter, OpenAI, Groq, DeepSeek or custom URL). Confirm before sending any draft.\n\nShortcuts: F1 = Quick help  •  Ctrl+L = Lock staff  •  Ctrl+Shift+N = Next customer'}
         messagebox.showinfo('Quick help • '+self.current,messages.get(self.current,'Open Help & privacy for the full guide.'),parent=self)
     def open_user_manual(self):
         root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)); path=root/'cafe-desk-manual.html'
@@ -391,7 +451,18 @@ class CafeDesk(ctk.CTk):
         mode_note='ACTIVE (saving inside CafeDeskData beside the app)' if settings_store.is_portable_data_mode() else 'Per-PC mode (create a "CafeDeskData" folder beside CafeDesk.exe to store prices/settings on USB)'
         label(usb_box,'1. Build once on Windows by double-clicking packaging\\build-windows.bat (or download CafeDesk-Windows-USB-Portable.zip from GitHub Actions on the repository).\n2. Copy the ENTIRE CafeDesk folder (including _internal) onto a USB flash drive — target Windows 10/11 PCs run CafeDesk.exe directly with NO Python installation needed.\n3. Optional USB Portable Data Mode: '+mode_note+'.\n4. Optional USB OCR: install Tesseract OCR on the target PC or place a Tesseract-OCR folder right inside the USB CafeDesk folder.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,16))
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Privacy, local data folders & file removal',size=15,bold=True).pack(anchor='w',padx=18,pady=(16,4));label(box,'Staff access locks after five minutes without activity. The PIN is basic app-level protection — run Café Desk inside a standard (non-Administrator) Windows/OS kiosk user account on shared PCs.\n\n• Session temp folder (wiped on Next customer & app close): '+str(self.session_temp.name)+'\n• App configuration, sales & recovery folder (protected from public exports): '+str(settings_store.settings_path().parent)+'\n\nNext customer clears in-app workspace data, temporary merge copies and recovery files, and locks staff, without deleting customer-saved PDFs or Downloads/Bluetooth files. A staff member can deliberately remove a selected customer file below.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,12))
-        button(box,'Delete a selected customer file',self.delete_selected_file,secondary=True,width=210).pack(anchor='w',padx=18,pady=(0,18))
+        hbtns=ctk.CTkFrame(box,fg_color='transparent');hbtns.pack(fill='x',padx=18,pady=(0,18))
+        button(hbtns,'Delete a selected customer file',self.delete_selected_file,secondary=True,width=215).pack(side='left',padx=(0,8))
+        def open_data_folder():
+            if not self.require_staff():return
+            folder=str(settings_store.settings_path().parent)
+            Path(folder).mkdir(parents=True,exist_ok=True,mode=0o700)
+            try:
+                if sys.platform.startswith('win'):os.startfile(folder)
+                elif sys.platform=='darwin':subprocess.Popen(['open',folder])
+                else:subprocess.Popen(['xdg-open',folder])
+            except Exception:messagebox.showinfo('Local data folder',f'App configuration & recovery folder:\n{folder}',parent=self)
+        button(hbtns,'📂 Staff: open local data folder',open_data_folder,secondary=True,width=225).pack(side='left')
     def about_screen(self):
         self.heading(self.body,'About & contact','Information about Café Desk, developer contacts, and GitHub repository.')
         hero=card(self.body);hero.pack(fill='x',pady=(0,12))
@@ -469,7 +540,7 @@ class CafeDesk(ctk.CTk):
 
         priv_box=card(self.body);priv_box.pack(fill='x',pady=(0,12))
         label(priv_box,'Local-first & privacy summary',size=15,bold=True).pack(anchor='w',padx=20,pady=(16,4))
-        label(priv_box,'All PDFs, scans, OCR text, picture sheets, CVs and cards are processed locally on this computer. Nothing is uploaded unless a staff member unlocks AI settings and confirms sending a draft to OpenAI.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,16))
+        label(priv_box,'All PDFs, scans, OCR text, picture sheets, CVs, forms and cards are processed locally on this computer. Nothing is uploaded unless a staff member unlocks AI settings and confirms sending a draft to your chosen AI provider.',size=12,color=MUTED,wraplength=760,justify='left').pack(anchor='w',padx=20,pady=(0,16))
     def delete_selected_file(self):
         if self.busy:return messagebox.showinfo('Please wait','Wait until the current task finishes.',parent=self)
         if not self.require_staff():return
@@ -520,7 +591,11 @@ class CafeDesk(ctk.CTk):
         label(box,'The PDF includes the full list, even when a search filter is active.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,16))
     def price_screen(self):
         self.heading(self.body,'Price settings','Set your own services and prices. The initial list is empty.')
-        data=settings_store.load_settings(); box=card(self.body); box.pack(fill='x')
+        try:
+            data=settings_store.load_settings(strict=True)
+        except settings_store.CorruptedSettingsError as exc:
+            messagebox.showerror('Settings damaged (fail-closed)',str(exc),parent=self); self.show('Home'); return
+        box=card(self.body); box.pack(fill='x')
         label(box,'Your price list',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
         label(box,'Enter one service per line: service name | price. Example format: Printing | 2.50.\nThe example is not a preset price; enter your own rates and include units in the service name.',size=12,color=MUTED,justify='left').pack(anchor='w',padx=20,pady=(0,12))
         label(box,'Currency symbol or code',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20); currency=entry(box,'R or USD'); currency.insert(0,str(data.get('currency','R'))); currency.pack(fill='x',padx=20,pady=(3,10))
@@ -581,11 +656,16 @@ class CafeDesk(ctk.CTk):
                 if self.receipt_token==token:self.receipt_recorded=True;refresh()
                 messagebox.showinfo('Sale recorded' if created else 'Already recorded','The sale is in local sales history. This does not confirm payment.',parent=self)
             self.job('Recording sale…',lambda:sales_store.record_sale(token,business,curr,items,when),complete)
+        def remove_line():
+            if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
+            if self.receipt_recorded:return messagebox.showinfo('Recorded sale','Start a new receipt before making changes.',parent=self)
+            if self.receipt_items:
+                self.receipt_items.pop();refresh()
         def new_receipt():
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
             if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Start a new receipt?','The current receipt has not been recorded. Discard it?',parent=self):return
             self.reset_receipt();refresh()
-        button(buttons,'Save receipt PDF',save_receipt,width=135).pack(side='left',padx=(0,8));button(buttons,'Record sale',record,width=115).pack(side='left',padx=(0,8));button(buttons,'New receipt',new_receipt,secondary=True,width=115).pack(side='left')
+        button(buttons,'Save receipt PDF',save_receipt,width=135).pack(side='left',padx=(0,8));button(buttons,'Record sale',record,width=115).pack(side='left',padx=(0,8));button(buttons,'Undo last item',remove_line,secondary=True,width=125).pack(side='left',padx=(0,8));button(buttons,'New receipt',new_receipt,secondary=True,width=115).pack(side='left')
         label(box,'Record sale is staff-only. No payment status, payment method or tax is tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
     def ocr_screen_part(self):
         show_ocr(self,self.body,card,label,button)
@@ -620,6 +700,13 @@ class CafeDesk(ctk.CTk):
         if self.current=='Career documents':
             self.sync_long_fields()
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_text=self.doc_editor.get('1.0','end-1c')
+        if self.current=='Cards & invitations' and callable(getattr(self,'_sync_cards_hook',None)):
+            try: self._sync_cards_hook()
+            except Exception: pass
+        if self.current=='Forms creator' and callable(getattr(self,'_sync_forms_hook',None)):
+            try: self._sync_forms_hook()
+            except Exception: pass
+        self._sync_cards_hook=None; self._sync_forms_hook=None
         self.doc_editor=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.long_fields={}; self.current=name; self.header_title.configure(text=name)
         for key,b in self.nav_buttons.items():
             active=(key==name)
@@ -648,18 +735,21 @@ class CafeDesk(ctk.CTk):
             if icon is None: ctk.CTkLabel(box,text='',image=self.icon_images['bluetooth_card']).pack(anchor='w',padx=18,pady=(14,4))
             else: label(box,icon,size=24,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(14,2))
             label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),secondary=True,width=90,height=32).pack(anchor='w',padx=18,pady=(0,14))
-    def job(self,description,fn,success):
+    def job(self,description,fn,success,error_cb=None):
         if self.busy: return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
         self.busy=True; self.status.set(description)
         def work():
             try: self.events.put(('ok',success,fn()))
-            except Exception as exc: self.events.put(('error',None,str(exc)))
+            except Exception as exc: self.events.put(('error',error_cb,str(exc)))
         threading.Thread(target=work,daemon=True).start()
     def poll_events(self):
         try:
             while True:
                 kind,callback,result=self.events.get_nowait(); self.busy=False
-                if kind=='error': self.status.set('Task could not be completed'); messagebox.showerror('Café Desk',result,parent=self)
+                if kind=='error':
+                    if callback is not None: callback(result)
+                    else: self.status.set('Task could not be completed')
+                    messagebox.showerror('Café Desk',result,parent=self)
                 else:
                     self.status.set('Ready  •  Task completed'); callback(result)
         except queue.Empty: pass
@@ -671,7 +761,7 @@ class CafeDesk(ctk.CTk):
         for widget in self.long_fields.values():
             if widget.winfo_exists(): widget.delete('1.0','end')
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
-        self.key.set(''); self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
+        self.key.set(''); self.ai_generation+=1; self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
         self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
@@ -697,13 +787,24 @@ class CafeDesk(ctk.CTk):
         def add_received(kind):
             types=[('PDF files','*.pdf')] if kind=='pdf' else [('Images','*.png *.jpg *.jpeg *.bmp *.tif *.tiff')]
             paths=filedialog.askopenfilenames(parent=self,title='Choose received '+('PDF files' if kind=='pdf' else 'images'),filetypes=types)
-            if paths:
+            if not paths: return
+            valid=[]; skipped=[]
+            for p in paths:
+                try:
+                    if kind=='pdf': services.assert_safe_user_input(p)
+                    else:
+                        with services.open_safe_image(p): pass
+                    valid.append(p)
+                except ValueError as exc:
+                    skipped.append(f'{Path(p).name}: {exc}')
+            if skipped: messagebox.showwarning('Some files skipped','\n'.join(skipped[:5]),parent=self)
+            if valid:
                 if kind=='pdf':
-                    self.pdf_files.extend(paths)
+                    self.pdf_files.extend(valid)
                     self.show('PDF tools')
                 else:
-                    if kind=='ocr': self.ocr_images.extend(paths)
-                    else: self.image_files.extend(paths)
+                    if kind=='ocr': self.ocr_images.extend(valid)
+                    else: self.image_files.extend(valid)
                     self.show('Scan & images')
         button(row,'Add received PDF',lambda:add_received('pdf'),secondary=True,width=160).pack(side='left',padx=(0,8))
         button(row,'Add received images',lambda:add_received('image'),secondary=True,width=170).pack(side='left',padx=(0,8))
@@ -722,17 +823,32 @@ class CafeDesk(ctk.CTk):
             if select is not None and 0<=select<len(files): lst.selection_set(select)
         def add():
             ft=[('PDF files','*.pdf')] if kind=='pdf' else [('Images','*.png *.jpg *.jpeg *.bmp *.tif *.tiff')]
-            files.extend(filedialog.askopenfilenames(parent=self,filetypes=ft)); refresh()
+            chosen=filedialog.askopenfilenames(parent=self,filetypes=ft)
+            if not chosen: return
+            skipped=[]
+            for p in chosen:
+                try:
+                    if kind=='pdf': services.assert_safe_user_input(p)
+                    else:
+                        with services.open_safe_image(p): pass
+                    files.append(p)
+                except ValueError as exc:
+                    skipped.append(f'{Path(p).name}: {exc}')
+            if skipped: messagebox.showwarning('Some files skipped','\n'.join(skipped[:5]),parent=self)
+            refresh()
         def remove():
             sel=lst.curselection()
             if sel: del files[sel[0]]; refresh()
+        def clear_all():
+            if files and messagebox.askyesno('Clear list','Remove all files from this list? (Original files on disk are not deleted.)',parent=self):
+                files.clear(); refresh()
         def move(d):
             sel=lst.curselection()
             if sel:
                 i=sel[0]; j=i+d
                 if 0<=j<len(files): files[i],files[j]=files[j],files[i]; refresh(j)
         actions=ctk.CTkFrame(box,fg_color='transparent'); actions.pack(fill='x',padx=20,pady=(0,18))
-        for title,cmd in [('＋ Add files',add),('✕ Remove',remove),('↑',lambda:move(-1)),('↓',lambda:move(1))]: button(actions,title,cmd,secondary=True,width=92 if len(title)>2 else 40,height=34).pack(side='left',padx=(0,7))
+        for title,cmd in [('＋ Add files',add),('✕ Remove',remove),('Clear all',clear_all),('↑',lambda:move(-1)),('↓',lambda:move(1))]: button(actions,title,cmd,secondary=True,width=92 if len(title)>2 else 40,height=34).pack(side='left',padx=(0,7))
         button(actions,'Merge & save' if kind=='pdf' else 'Convert to PDF',lambda:self.save_files(kind),width=145,height=34).pack(side='right')
         refresh()
     def save_files(self,kind):
@@ -750,7 +866,10 @@ class CafeDesk(ctk.CTk):
         file_label=label(row,Path(self.split_source).name if self.split_source else 'No PDF selected',size=12,color=MUTED); file_label.pack(side='left',fill='x',expand=True,anchor='w')
         def choose():
             path=filedialog.askopenfilename(parent=self,filetypes=[('PDF document','*.pdf')])
-            if path:self.split_source=path;self.split_preview_fingerprint=None;pages.delete(0,'end');file_label.configure(text=Path(path).name)
+            if path:
+                try: services.assert_safe_user_input(path)
+                except ValueError as exc: return messagebox.showerror('Cannot open PDF',str(exc),parent=self)
+                self.split_source=path;self.split_preview_fingerprint=None;pages.delete(0,'end');file_label.configure(text=Path(path).name)
         button(row,'Choose PDF',choose,secondary=True,width=120).pack(side='right')
         controls=ctk.CTkFrame(box,fg_color='transparent'); controls.pack(fill='x',padx=20,pady=(0,9)); pages=entry(controls,'Pages, e.g. 1-3, 5'); pages.pack(side='left',fill='x',expand=True,padx=(0,8))
         def preview():
@@ -772,7 +891,7 @@ class CafeDesk(ctk.CTk):
             try:
                 import pdf_preview
                 if pdf_preview.fingerprint(src)!=self.split_preview_fingerprint: return messagebox.showerror('PDF changed','The PDF changed since it was previewed. Choose it again and reselect the pages.',parent=self)
-            except OSError as exc:return messagebox.showerror('Cannot read PDF',str(exc),parent=self)
+            except (OSError,ValueError) as exc:return messagebox.showerror('Cannot read PDF',str(exc),parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='extracted-pages.pdf')
         if out: self.job('Extracting pages…',lambda:services.extract_pdf(src,spec,out),lambda count:messagebox.showinfo('All done',f'{count} page(s) saved to:\n{out}',parent=self))
     def split_all(self):
@@ -988,7 +1107,7 @@ class CafeDesk(ctk.CTk):
         path=filedialog.askopenfilename(parent=self,filetypes=[('Image files','*.png *.jpg *.jpeg *.bmp *.tif *.tiff')])
         if not path: return
         try:
-            with Image.open(path) as image: image.verify()
+            with services.open_safe_image(path) as image: image.verify()
             self.cv_photo=path; self.cv_photo_label.configure(text='CV photo: '+Path(path).name); self.status.set('CV photo selected • shown in CV preview and PDF')
             if self.current_text() and self.doc_type.get()==CATEGORIES[0]: self.refresh_doc_preview()
         except Exception as exc: messagebox.showerror('Could not open photo',str(exc),parent=self)
@@ -1060,11 +1179,13 @@ class CafeDesk(ctk.CTk):
                 messagebox.showinfo('AI connection working',f'Connected to {prov_label}!\n\nModel: {resolved_model}\nTest reply: {reply[:80]}',parent=self)
             self.job('Testing AI connection…',run_check,done)
 
+        def clear_key():
+            self.key.set(''); self.ai_generation+=1; self.status.set('Session AI key cleared')
         btn_row=ctk.CTkFrame(box,fg_color='transparent'); btn_row.pack(fill='x',padx=20,pady=(0,15))
         button(btn_row,'⚡ Test AI connection',test_ai,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=195).pack(side='left',padx=(0,10))
-        button(btn_row,'Clear key now',lambda:(self.key.set(''),self.status.set('Session AI key cleared')),secondary=True,width=130).pack(side='left')
+        button(btn_row,'Clear key now',clear_key,secondary=True,width=130).pack(side='left')
 
-        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy first',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to your selected AI provider after confirmation. Get the customer’s consent.\nDo not leave your API key accessible to customers on a shared computer.',size=12,color='#F1D1A5',justify='left').pack(anchor='w',padx=14,pady=(0,12))
+        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy & data minimization',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to your selected AI provider after confirmation. Get the customer’s explicit consent, avoid sending unnecessary ID numbers/private identifiers when polishing wording, and never leave your API key unlocked on a shared computer.',size=12,color='#F1D1A5',justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,12))
     def improve(self):
         if not self.require_staff(): return
         text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
@@ -1074,11 +1195,15 @@ class CafeDesk(ctk.CTk):
             _,prov_label=services.detect_ai_provider(key,prov,curl)
         except ValueError as exc:
             return messagebox.showerror('AI settings',str(exc),parent=self)
-        if not messagebox.askyesno('Consent and privacy',f'Send the complete draft to {prov_label} for improvement? This can incur API charges. Please get the customer’s permission first.',parent=self): return
+        if not messagebox.askyesno('Customer consent & privacy',f'Send the complete draft ({len(text):,} characters) to {prov_label} ({model})?\n\n• Get the customer’s explicit permission first.\n• Tip: remove ID numbers or sensitive personal details you do not want transmitted.\n• Standard API charges may apply.\n\nSend draft now?',parent=self): return
+        req_gen=self.ai_generation
         def request():
             reply,used_prov,used_model=services.call_ai_chat(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)
             return reply,used_prov,used_model
         def complete(res):
+            if self.ai_generation!=req_gen:
+                self.status.set('Discarded AI reply from a locked or cleared session')
+                return
             result,used_prov,used_model=res
             current=self.current_text()
             if current!=text and not messagebox.askyesno('Draft changed','The draft changed while the request was running. Replace it with the AI result?',parent=self): return

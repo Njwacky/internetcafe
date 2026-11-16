@@ -622,6 +622,9 @@ def _draw_invitation_card(c, x, y, w, h, design, data, logo_reader):
 
 def render_card_pdf(destination, kind, template_index, fields, sheet_index=0, photo_path=None, crop_marks=True):
     """Render a Business card or Invitation card PDF (multi-up A4 sheet or single proof)."""
+    services.assert_safe_user_output(destination)
+    if photo_path:
+        services._different([photo_path], destination)
     if kind not in CARD_TYPES:
         raise ValueError('Choose Business card or Invitation card.')
     design = CARD_TEMPLATES[max(0, min(len(CARD_TEMPLATES) - 1, int(template_index)))]
@@ -653,7 +656,8 @@ def render_card_pdf(destination, kind, template_index, fields, sheet_index=0, ph
             if crop_marks:
                 _draw_crop_marks(c, cx, cy, cw, ch)
 
-    c.setFont('Helvetica', 7.5)
+    sans_reg, _ = pdf_fonts.font_pair('Helvetica')
+    c.setFont(sans_reg, 7.5)
     c.setFillColor(colors.HexColor('#7A8694'))
     c.drawCentredString(pw / 2, 6 * mm, f'{kind.upper()}  •  {design["name"].upper()}  •  Print at 100% / Actual size')
     c.showPage()
@@ -662,6 +666,9 @@ def render_card_pdf(destination, kind, template_index, fields, sheet_index=0, ph
 
 def render_single_card_pdf(destination, kind, template_index, fields, photo_path=None):
     """Render just a single cropped card page at exact card dimensions for crisp UI preview."""
+    services.assert_safe_user_output(destination)
+    if photo_path:
+        services._different([photo_path], destination)
     if kind not in CARD_TYPES:
         raise ValueError('Choose Business card or Invitation card.')
     design = CARD_TEMPLATES[max(0, min(len(CARD_TEMPLATES) - 1, int(template_index)))]

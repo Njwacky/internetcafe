@@ -1,5 +1,5 @@
 """Local per-user preferences and PIN verifier. Not a security boundary against OS admins."""
-import hashlib,hmac,json,os,sys,tempfile,time
+import hashlib,hmac,json,os,shutil,sys,tempfile,time
 from pathlib import Path
 from decimal import Decimal,InvalidOperation
 DEFAULT_NAME='Café Desk'; DEFAULT_ICON='office'; MAX_NAME=48
@@ -8,6 +8,37 @@ ICONS={'office':'Office','document':'Document','printer':'Printer','scanner':'Sc
 
 class CorruptedSettingsError(ValueError):
     """Raised when the settings file exists on disk but is unreadable or damaged."""
+
+def _quarantine_corrupt_settings(target):
+    """Preserve a copy of damaged settings.json once as settings.json.corrupt before failing closed."""
+    p=Path(target)
+    if not p.exists(): return None
+    corrupt_copy=p.with_name(p.name+'.corrupt')
+    try:
+        if not corrupt_copy.exists():
+            shutil.copy2(p,corrupt_copy)
+    except OSError:
+        pass
+    return corrupt_copy
+
+def restore_backup_settings(path=None):
+    """Restore a verified settings.json.bak over a damaged settings.json when available."""
+    target=Path(path or settings_path())
+    backup=target.with_name(target.name+'.bak')
+    if not backup.is_file():
+        raise ValueError('No verified settings.json.bak backup was found.')
+    data=_parse_settings_file(backup)
+    _quarantine_corrupt_settings(target)
+    fd,tmp=tempfile.mkstemp(prefix='.settings-restore-',suffix='.json',dir=target.parent)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as f:
+            json.dump(data,f,ensure_ascii=False,indent=2)
+        try: os.chmod(tmp,0o600)
+        except OSError: pass
+        os.replace(tmp,target)
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+    return data
 
 def app_exe_dir():
     """Return the directory containing CafeDesk.exe when frozen, or the repo folder in source mode."""
@@ -71,12 +102,15 @@ def _parse_settings_file(target):
         raw=target.read_text(encoding='utf-8')
         obj=json.loads(raw)
     except (OSError,ValueError,TypeError) as exc:
+        _quarantine_corrupt_settings(target)
         raise CorruptedSettingsError('Settings file is damaged or unreadable. Staff access is locked until an administrator restores settings.json.bak or removes the damaged file.') from exc
     if not isinstance(obj,dict):
+        _quarantine_corrupt_settings(target)
         raise CorruptedSettingsError('Settings file has an invalid structure. Staff access is locked.')
     has_salt='pin_salt' in obj and bool(obj.get('pin_salt'))
     has_hash='pin_hash' in obj and bool(obj.get('pin_hash'))
     if has_salt!=has_hash:
+        _quarantine_corrupt_settings(target)
         raise CorruptedSettingsError('Staff PIN record in settings.json is incomplete or damaged. Staff access is locked.')
     if has_salt:
         try:
@@ -84,6 +118,7 @@ def _parse_settings_file(target):
             hash_b=bytes.fromhex(str(obj['pin_hash']))
             if len(salt_b)!=16 or len(hash_b)!=32: raise ValueError()
         except (ValueError,TypeError) as exc:
+            _quarantine_corrupt_settings(target)
             raise CorruptedSettingsError('Staff PIN verifier in settings.json is damaged. Staff access is locked.') from exc
     try: name=clean_name(obj.get('business_name',DEFAULT_NAME))
     except ValueError: name=DEFAULT_NAME
@@ -103,23 +138,25 @@ def load_name(path=None): return load_settings(path)['business_name']
 def _write(data,path=None):
     target=Path(path or settings_path()); target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=target.with_name(target.name+'.bak')
-    if target.exists():
-        try:
-            _parse_settings_file(target)
-            fd_b,tmp_b=tempfile.mkstemp(prefix='.settings-bak-',suffix='.json',dir=target.parent)
-            try:
-                with os.fdopen(fd_b,'wb') as fb: fb.write(target.read_bytes())
-                os.replace(tmp_b,backup)
-            finally:
-                if os.path.exists(tmp_b): os.unlink(tmp_b)
-        except Exception:
-            pass
     fd,tmp=tempfile.mkstemp(prefix='.settings-',suffix='.json',dir=target.parent)
     try:
         with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
         try: os.chmod(tmp,0o600)
         except OSError: pass
         os.replace(tmp,target)
+        # Keep settings.json.bak synchronized with the latest verified good state
+        try:
+            _parse_settings_file(target)
+            fd_b,tmp_b=tempfile.mkstemp(prefix='.settings-bak-',suffix='.json',dir=target.parent)
+            try:
+                with os.fdopen(fd_b,'wb') as fb: fb.write(target.read_bytes())
+                try: os.chmod(tmp_b,0o600)
+                except OSError: pass
+                os.replace(tmp_b,backup)
+            finally:
+                if os.path.exists(tmp_b): os.unlink(tmp_b)
+        except Exception:
+            pass
     finally:
         if os.path.exists(tmp): os.unlink(tmp)
 def save_settings(name,icon,path=None):

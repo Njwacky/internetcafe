@@ -1,0 +1,16 @@
+[project]
+name = "cafe-desk"
+version = "0.7.0"
+description = "Local-first document studio for internet cafés, copy shops, and service desks"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "customtkinter>=5.2.2,<6",
+    "pypdf>=5,<7",
+    "Pillow>=13.0.0,<14",
+    "reportlab>=4,<5",
+    "requests>=2.31,<3",
+    "cryptography>=44,<51",
+    "pypdfium2>=5.14,<6",
+    "pywin32>=311; sys_platform == 'win32'",
+]

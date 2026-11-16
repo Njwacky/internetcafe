@@ -10,7 +10,9 @@ KNOWN_FEATURES={'crop_rect','custom_mm'}
 MAX_ASSET=20*1024*1024;MAX_TOTAL=80*1024*1024;MAX_MANIFEST=2*1024*1024;MAX_ITEMS=200
 HEX=re.compile(r'^[0-9a-f]{64}$')
 
-def _image(path):
+def _image(path,allow_internal=False):
+    if not allow_internal:
+        services.assert_safe_user_input(path)
     p=Path(path)
     if p.stat().st_size>MAX_ASSET:raise ValueError('Each image must be 20 MB or smaller for a project.')
     data=p.read_bytes()
@@ -23,9 +25,9 @@ def _image(path):
     except Exception as exc:raise ValueError(f'Could not read image: {p.name}') from exc
     return data
 
-def _asset(path,assets):
+def _asset(path,assets,allow_internal=False):
     if not path:return None
-    data=_image(path);key=hashlib.sha256(data).hexdigest();assets.setdefault(key,data)
+    data=_image(path,allow_internal=allow_internal);key=hashlib.sha256(data).hexdigest();assets.setdefault(key,data)
     if sum(len(v) for v in assets.values())>MAX_TOTAL:raise ValueError('Project images exceed the 80 MB total limit.')
     return key
 
@@ -35,13 +37,15 @@ def _text(value,name,limit):
 
 def save(kind,data,destination,allow_internal=False):
     if kind not in ('career','sheet'):raise ValueError('Unknown project type.')
+    if not allow_internal:
+        services.assert_safe_user_output(destination)
     assets={};paths=[];features=[]
     if kind=='career':
         category=data.get('category');template=data.get('template')
         if category not in CATEGORIES or template not in (CV_NAMES if category==CATEGORIES[0] else NAMES):raise ValueError('Invalid document type or template.')
         fields=data.get('fields',{});fields={k:_text(fields.get(k,''),k,50000) for k in LABELS}
         photo=data.get('photo');paths=[photo] if photo else []
-        payload={'category':category,'template':template,'fields':fields,'draft':_text(data.get('draft',''),'draft',1000000),'photo':_asset(photo,assets)}
+        payload={'category':category,'template':template,'fields':fields,'draft':_text(data.get('draft',''),'draft',1000000),'photo':_asset(photo,assets,allow_internal=allow_internal)}
     else:
         sheet=data;items=sheet.get('items',[])
         if not isinstance(items,list) or len(items)>MAX_ITEMS:raise ValueError('Too many pictures in the project.')
@@ -50,7 +54,7 @@ def save(kind,data,destination,allow_internal=False):
         for item in items:
             crop=collage.validate_crop(item.get('crop',[0,0,1,1]))
             if crop!=[0.0,0.0,1.0,1.0]:has_crop=True
-            entry={k:item.get(k) for k in ('page','x','y','w','h','rotation')};entry['asset']=_asset(item.get('path'),assets);entry['crop']=crop;saved.append(entry)
+            entry={k:item.get(k) for k in ('page','x','y','w','h','rotation')};entry['asset']=_asset(item.get('path'),assets,allow_internal=allow_internal);entry['crop']=crop;saved.append(entry)
         if has_crop:features.append('crop_rect')
         if sheet.get('preset')=='Custom size (mm)':features.append('custom_mm')
         payload={'items':saved,'preset':sheet.get('preset'),'page':sheet.get('page',0),'mode':sheet.get('mode'),'brightness':sheet.get('brightness'),'gray':sheet.get('gray'),'width_mm':str(sheet.get('width_mm','')),'height_mm':str(sheet.get('height_mm',''))}

@@ -16,15 +16,24 @@ MAX_IMAGE_PIXELS=50_000_000
 MAX_IMAGE_FILE_BYTES=60*1024*1024
 MAX_IMAGE_FRAMES=300
 MAX_PDF_PAGES=2000
+MAX_PDF_FILE_BYTES=150*1024*1024
+MAX_PDF_PAGE_DIM_PT=14400.0
 Image.MAX_IMAGE_PIXELS=MAX_IMAGE_PIXELS
+
+def assert_safe_user_input(source, data_dir=None):
+    """Refuse to open or exfiltrate files inside Café Desk's internal settings/sales/recovery directory."""
+    if settings_store.is_internal_path(source, data_dir=data_dir):
+        raise ValueError('Cannot open files from the Café Desk internal configuration, sales or recovery folder.')
 
 def assert_safe_user_output(destination, data_dir=None):
     """Refuse to write user exports over Café Desk's internal settings/sales/recovery directory."""
     if settings_store.is_internal_path(destination, data_dir=data_dir):
         raise ValueError('Cannot save inside the Café Desk internal configuration, sales or recovery folder. Choose another folder.')
 
-def open_safe_image(path):
-    """Open an untrusted image with file-size and pixel-count bounds."""
+def open_safe_image(path, allow_internal=False):
+    """Open an untrusted image with internal-path, file-size, and pixel-count bounds."""
+    if not allow_internal:
+        assert_safe_user_input(path)
     p=Path(path)
     if not p.is_file():
         raise ValueError(f'Image not found: {p.name}')
@@ -56,11 +65,28 @@ def _atomic_write(destination, write, allow_internal=False):
         if os.path.exists(tmp): os.unlink(tmp)
 
 def _reader(path):
-    reader=PdfReader(str(path))
+    import math
+    assert_safe_user_input(path)
+    p=Path(path)
+    if not p.is_file():
+        raise ValueError(f'PDF not found: {p.name}')
+    if p.stat().st_size>MAX_PDF_FILE_BYTES:
+        raise ValueError(f'“{p.name}” exceeds the {MAX_PDF_FILE_BYTES//(1024*1024)} MB PDF size limit.')
+    try:
+        reader=PdfReader(str(p))
+    except Exception as exc:
+        raise ValueError(f'Could not read PDF “{p.name}”. It may be damaged or unsupported.') from exc
     if reader.is_encrypted and reader.decrypt('') == 0:
-        raise ValueError(f'“{Path(path).name}” is password-protected. Remove its password before using it here.')
+        raise ValueError(f'“{p.name}” is password-protected. Remove its password before using it here.')
     if len(reader.pages)>MAX_PDF_PAGES:
-        raise ValueError(f'“{Path(path).name}” has more than {MAX_PDF_PAGES} pages.')
+        raise ValueError(f'“{p.name}” has more than {MAX_PDF_PAGES} pages.')
+    for idx,page in enumerate(reader.pages,1):
+        try:
+            w=float(page.mediabox.width); h=float(page.mediabox.height)
+        except Exception as exc:
+            raise ValueError(f'Page {idx} of “{p.name}” has unreadable dimensions.') from exc
+        if not (math.isfinite(w) and math.isfinite(h) and 0<w<=MAX_PDF_PAGE_DIM_PT and 0<h<=MAX_PDF_PAGE_DIM_PT):
+            raise ValueError(f'Page {idx} of “{p.name}” has invalid or oversized dimensions.')
     return reader
 
 def _different(source_paths, destination):
@@ -342,6 +368,7 @@ def run_ocr_many(sources):
 def run_ocr(source):
     """OCR an image locally with a separately installed or USB-bundled Tesseract, English only."""
     import subprocess,shutil,os
+    assert_safe_user_input(source)
     executable=os.environ.get('TESSERACT_CMD')
     if not executable:
         bundled_dir=settings_store.app_exe_dir()/'Tesseract-OCR'
