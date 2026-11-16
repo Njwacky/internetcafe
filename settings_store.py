@@ -37,14 +37,26 @@ def app_data_dir():
 def settings_path(): return app_data_dir()/'settings.json'
 def logo_path(): return settings_path().parent/'business-logo.png'
 def is_internal_path(candidate, data_dir=None):
-    """Return True if candidate resolves inside the Café Desk app-data folder."""
-    base=Path(data_dir) if data_dir is not None else settings_path().parent
+    """Return True if candidate resolves inside the Café Desk app-data or per-PC license folder."""
+    roots=[Path(data_dir)] if data_dir is not None else [settings_path().parent]
     try:
-        base_res=base.resolve()
+        import license_guard
+        if data_dir is None:
+            roots.append(license_guard.host_license_dir())
+    except Exception:
+        pass
+    try:
         cand_res=Path(candidate).resolve()
     except OSError:
         return True
-    return cand_res==base_res or cand_res.is_relative_to(base_res)
+    for base in roots:
+        try:
+            base_res=base.resolve()
+        except OSError:
+            return True
+        if cand_res==base_res or cand_res.is_relative_to(base_res):
+            return True
+    return False
 def clean_name(name):
     name=' '.join(str(name).split())
     if not name: raise ValueError('Enter a business name.')

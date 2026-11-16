@@ -82,6 +82,32 @@ Python 3.11+ and internet access are needed only on the build computer:
 
 Unsigned Windows/macOS builds can show SmartScreen/Gatekeeper prompts (`More info` → `Run anyway` on Windows); wider distribution may use code signing.
 
+## Commercial Per-Computer Locking & 1-Year Licensing (`v0.7.0`)
+
+Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 1 — Offline Hardware Machine-ID + 1-Year Ed25519 Signed Activation**:
+
+1. **One-time Owner Keypair Setup (on YOUR private PC only):**
+   ```bash
+   python admin_keygen.py --init-keys --apply-public-key
+   ```
+   - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` (**gitignored — NEVER share or copy `owner-keys/` or `admin_keygen.py` onto customer USBs!**).
+   - Writes only your Ed25519 **public key** into `license_guard.py`, then commit & push (or run `packaging\build-windows.bat`) so your `.exe` builds verify signatures against **your** keypair.
+   - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.
+
+2. **Installing & Activating on a Customer's Computer:**
+   - Copy `dist\CafeDesk` (or `CafeDesk-Setup.exe`) from your USB onto the customer's PC and launch `CafeDesk.exe`.
+   - Café Desk displays that computer's unique hardware **Machine ID** (`CD-XXXX-XXXX-XXXX`) and blocks access until activated.
+   - On **your** laptop, generate a 1-year (365-day) license bound to that exact `Machine ID`:
+     ```bash
+     python admin_keygen.py --machine-id CD-8F3A-91BC-204E --customer "Benoni Cyber Cafe" --days 365
+     ```
+     *(Or simply run `python admin_keygen.py` with no arguments for the interactive prompt, which also saves a `.cafelicense` file in `owner-keys/issued-files/`.)*
+   - Paste the `CDLIC1...` activation key (or load the `.cafelicense` file) into the customer's Activation window.
+
+3. **What Happens If Someone Copies the App to Another PC or After 1 Year?**
+   - **Copied to another PC:** `license.json` is stored per-PC (`%APPDATA%\CafeDesk\license.json`, never shared via `CafeDeskData`), and even if someone copies `license.json` manually, the second computer's hardware `Machine ID` will not match — Café Desk immediately blocks startup and asks for a new key from you.
+   - **After 365 days (1 year):** Café Desk shows that the 1-year license expired (with clock-rollback tamper detection) and prompts the customer to contact you with their `Machine ID` for a renewal key. Staff can also check remaining days or enter a renewal key early under **About & contact**.
+
 ## Tests and limitations
 
 Run `python -m unittest -v test_services` after installing dependencies. Automated tests cover templates, PDF operations and layout text, image conversion, custom photo size and rotation, portable projects, archive validation, inactivity timing, logo normalization, prices, sales records and CSV export, local PIN verifier, and a **mocked** OCR invocation. The GUI, actual Tesseract recognition, Windows WIA/pywin32 integration, Epson scanner hardware, real AI calls and target-platform installers have not been tested in this environment. Scanner automated tests use mock devices. Built-in PDF fonts may not render some non-Latin characters. Keep originals, check exported files, and test thoroughly before using with real customers.

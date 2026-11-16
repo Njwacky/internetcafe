@@ -787,8 +787,11 @@ class DiagnosticRemediationTests(unittest.TestCase):
         bat_src=(repo/'packaging'/'build-windows.bat').read_text(encoding='utf-8')
         unix_src=(repo/'packaging'/'build-unix.sh').read_text(encoding='utf-8')
         wf_src=(repo/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
-        self.assertIn("APP_BUILD='0.6.1'",app_src)
-        self.assertIn('#define MyAppVersion "0.6.1"',iss_src)
+        self.assertIn("APP_BUILD='0.7.0'",app_src)
+        self.assertIn('#define MyAppVersion "0.7.0"',iss_src)
+        self.assertIn('--exclude-module admin_keygen',bat_src)
+        self.assertIn('--exclude-module admin_keygen',unix_src)
+        self.assertIn('--exclude-module admin_keygen',wf_src)
         self.assertIn('--collect-all pypdfium2_raw',bat_src)
         self.assertIn('--collect-all pypdfium2_raw',unix_src)
         self.assertIn('--collect-all reportlab',bat_src)
@@ -812,5 +815,74 @@ class DiagnosticRemediationTests(unittest.TestCase):
                 out=services.run_ocr(img_path)
                 self.assertEqual(out,'USB OCR OK')
                 self.assertEqual(run_mock.call_args[0][0][0],str(fake_tess))
+
+    def test_hardware_machine_lock_and_one_year_ed25519_license(self):
+        import datetime as dt, os
+        from unittest import mock
+        import license_guard, admin_keygen, settings_store
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p=Path(tmp)
+            priv_file=tmp_p/'owner.private.key'
+            pub_file=tmp_p/'owner.public.txt'
+            lic_dir=tmp_p/'pc_license_dir'
+            priv_b64,pub_b64=admin_keygen.generate_owner_keypair(priv_path=priv_file,pub_path=pub_file)
+
+            pc1_mid='CD-1A2B-3C4D-5E6F'
+            pc2_mid='CD-9988-7766-5544'
+            issue_day=dt.date(2026,11,15)
+
+            # Owner signs a 365-day (1-year) license strictly for PC #1
+            token,payload=admin_keygen.sign_license_token(
+                pc1_mid,customer='Benoni Cyber Cafe',days=365,
+                issued_date=issue_day,private_key_b64=priv_b64
+            )
+            self.assertEqual(payload['exp'],'2027-11-15')
+
+            env={'CAFE_DESK_PUBLIC_KEY':pub_b64,'CAFE_DESK_LICENSE_DIR':str(lic_dir),'CAFE_DESK_TEST_MACHINE_ID':pc1_mid}
+            with mock.patch.dict(os.environ,env,clear=False):
+                # Before activation -> invalid
+                st0=license_guard.current_license_status(today=issue_day)
+                self.assertFalse(st0['valid'])
+
+                # Activate on PC #1 -> succeeds with 365 days remaining
+                activated=license_guard.activate_and_save_license(token,today=issue_day)
+                self.assertTrue(activated['valid'])
+                self.assertEqual(activated['customer'],'Benoni Cyber Cafe')
+                self.assertEqual(activated['days_remaining'],365)
+                self.assertTrue((lic_dir/'license.json').is_file())
+                # Internal path guard also protects license.json from public overwrite/delete
+                self.assertTrue(settings_store.is_internal_path(lic_dir/'license.json'))
+
+                # Day 365 (expiry day) -> still valid (0 days remaining)
+                st_last=license_guard.current_license_status(today=dt.date(2027,11,15))
+                self.assertTrue(st_last['valid'])
+                self.assertEqual(st_last['days_remaining'],0)
+
+                # Day 366 (after 1 year) -> rejected as expired!
+                st_exp=license_guard.current_license_status(today=dt.date(2027,11,16))
+                self.assertFalse(st_exp['valid'])
+                self.assertIn('expired on 2027-11-15',st_exp['reason'])
+
+            # Someone copies the app + license.json to PC #2 -> rejected (Machine ID mismatch)!
+            env_pc2={'CAFE_DESK_PUBLIC_KEY':pub_b64,'CAFE_DESK_LICENSE_DIR':str(lic_dir),'CAFE_DESK_TEST_MACHINE_ID':pc2_mid}
+            with mock.patch.dict(os.environ,env_pc2,clear=False):
+                st_copied=license_guard.current_license_status(today=issue_day)
+                self.assertFalse(st_copied['valid'])
+                self.assertIn('belongs to another computer',st_copied['reason'])
+                with self.assertRaises(license_guard.LicenseError):
+                    license_guard.activate_and_save_license(token,today=issue_day)
+
+            # Forged/tampered signature with wrong private key -> rejected!
+            rogue_priv,_=admin_keygen.generate_owner_keypair(priv_path=tmp_p/'rogue.key',pub_path=tmp_p/'rogue.pub')
+            rogue_token,_=admin_keygen.sign_license_token(pc2_mid,customer='Pirate Copy',days=365,issued_date=issue_day,private_key_b64=rogue_priv)
+            with mock.patch.dict(os.environ,env_pc2,clear=False):
+                with self.assertRaises(license_guard.LicenseError):
+                    license_guard.activate_and_save_license(rogue_token,today=issue_day)
+
+            # System clock rolled backward to cheat expiry -> rejected by clock guard!
+            with mock.patch.dict(os.environ,env,clear=False):
+                license_guard._check_and_update_clock_guard(dt.date(2027,6,1))
+                with self.assertRaises(license_guard.LicenseError):
+                    license_guard._check_and_update_clock_guard(dt.date(2027,5,1))
 
 if __name__=='__main__': unittest.main()

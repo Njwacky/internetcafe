@@ -58,10 +58,12 @@ import cards_renderer
 from cards_ui import show_cards
 import forms_renderer
 from forms_ui import show_forms
+import license_guard
+import license_ui
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.6.1'
+APP_BUILD='0.7.0'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -393,6 +395,24 @@ class CafeDesk(ctk.CTk):
             messagebox.showinfo('Copied',f'{desc} copied to clipboard:\n{val}',parent=self)
 
         contact_box=card(self.body);contact_box.pack(fill='x',pady=(0,12))
+        lic_status=license_guard.current_license_status()
+        lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12))
+        lic_box.pack_forget()
+        lic_box.pack(fill='x',pady=(0,12),before=contact_box)
+        label(lic_box,'1-Year Computer License & Machine ID',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
+        mid_val=lic_status.get('machine_id') or license_guard.get_machine_id()
+        if lic_status.get('valid'):
+            days_left=lic_status.get('days_remaining',0)
+            badge_color='#FFB8B0' if days_left<=30 else LIME
+            summary=f'ACTIVE  •  Licensed to: {lic_status["customer"]}  •  Expires: {lic_status["expires_at"]} ({days_left} days remaining)'
+        else:
+            badge_color='#FFDBA2'
+            summary=f'Developer / Unactivated mode  •  {lic_status.get("reason","No per-PC license installed yet.")}'
+        label(lic_box,summary,size=12,bold=True,color=badge_color,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
+        mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,16))
+        m_entry=entry(mrow);m_entry.insert(0,f'Machine ID: {mid_val}');m_entry.configure(state='readonly');m_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
+        button(mrow,'⧉ Copy Machine ID',lambda:copy_val(mid_val,'Machine ID'),secondary=True,width=155,height=34).pack(side='left',padx=(0,8))
+        button(mrow,'🔑 Enter / Renew 1-Year Key',lambda:license_ui.open_renewal_modal(self,on_updated=lambda _info:self.show('About & contact')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=205,height=34).pack(side='left')
         label(contact_box,'Developer & support contacts',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(contact_box,'Have feedback, feature ideas, or need help setting up Café Desk? Reach out directly or visit GitHub.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,14))
 
@@ -1002,4 +1022,7 @@ class CafeDesk(ctk.CTk):
             messagebox.showinfo('Draft improved','Review the AI result and check all facts before saving.',parent=self)
         self.job('Improving draft with AI…',request,complete)
 
-if __name__=='__main__': CafeDesk().mainloop()
+if __name__=='__main__':
+    if license_ui.ensure_computer_licensed() is not None:
+        CafeDesk().mainloop()
+

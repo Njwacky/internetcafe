@@ -9,50 +9,50 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 .venv\Scripts\python.exe -m pip install -r requirements-build.txt
 if errorlevel 1 exit /b 1
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "README.md;." app.py
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "README.md;." app.py
 if errorlevel 1 exit /b 1
 
 > "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" (
   echo ============================================================
-  echo   Cafe Desk v0.6.1 -- Portable USB Edition ^(Windows x64^)
+  echo   Cafe Desk v0.7.0 -- Commercial 1-Year Licensed Edition
   echo ============================================================
   echo.
-  echo 1. COPY OR RUN FROM USB:
+  echo 1. COPY TO TARGET PC ^& ACTIVATE ^(1-YEAR PER-COMPUTER LICENSE^):
   echo    Keep this ENTIRE "CafeDesk" folder together ^(including "_internal"^).
-  echo    Copy the whole "CafeDesk" folder onto a USB flash drive or onto
-  echo    another Windows 10/11 PC ^(for example Desktop or C:\CafeDesk^),
-  echo    then double-click "CafeDesk.exe". No Python installation is needed
-  echo    on the other computers!
+  echo    Copy the whole "CafeDesk" folder onto a Windows 10/11 PC and run
+  echo    "CafeDesk.exe". No Python installation is needed!
   echo.
-  echo 2. PORTABLE USB DATA MODE ^(OPTIONAL^):
-  echo    By default, business name, logo, prices, staff PIN and sales history
-  echo    are saved separately on each Windows user account ^(%%APPDATA%%\CafeDesk^).
-  echo    If you want settings, prices and sales to travel ON THE USB DRIVE instead,
-  echo    create an empty folder named "CafeDeskData" inside this "CafeDesk" folder
-  echo    ^(next to CafeDesk.exe^) or double-click "Enable-USB-Portable-Data.bat".
+  echo    On first launch on a new computer, Cafe Desk displays that PC's
+  echo    unique hardware Machine ID ^(CD-XXXX-XXXX-XXXX^) and asks for a
+  echo    1-year Activation Key. Copying this folder to another computer will
+  echo    NOT transfer activation -- every computer requires its own key from
+  echo    the owner.
+  echo.
+  echo 2. PORTABLE USB SETTINGS MODE ^(OPTIONAL^):
+  echo    Create an empty folder named "CafeDeskData" beside CafeDesk.exe
+  echo    ^(or run "Enable-USB-Portable-Data.bat"^) if you want prices/settings
+  echo    stored inside this folder. Note: computer activation ^(license.json^)
+  echo    is always bound per-PC.
   echo.
   echo 3. OPTIONAL -- ENGLISH OCR ^(TESSERACT^):
-  echo    If you want image-to-text OCR on a target PC, install Tesseract OCR
-  echo    ^(keep English language data ticked^) using the direct link inside
-  echo    Cafe Desk -^> Help ^& privacy, OR copy a Tesseract-OCR folder inside
-  echo    this "CafeDesk\Tesseract-OCR" folder ^(with tesseract.exe^).
+  echo    Install Tesseract OCR ^(keep English ticked^) using the direct link
+  echo    in Help ^& privacy, OR place a "Tesseract-OCR" folder inside this
+  echo    "CafeDesk\Tesseract-OCR" folder.
 )
 
 > "dist\CafeDesk\Enable-USB-Portable-Data.bat" (
   echo @echo off
   echo mkdir "%%~dp0CafeDeskData" 2^>nul
   echo echo Portable USB data folder enabled: "%%~dp0CafeDeskData"
-  echo echo Settings, prices, logo and sales will now stay inside this CafeDesk folder.
   echo pause
 )
 
 echo.
 echo ======================================================================
-echo Portable USB folder ready: dist\CafeDesk
-echo   1^) Copy the ENTIRE "dist\CafeDesk" folder to your USB drive.
-echo   2^) On any Windows 10/11 PC, open the folder and run "CafeDesk.exe"
-echo      ^(or copy the folder to that PC's Desktop first for faster startup^).
-echo   3^) Optional single-file setup.exe: compile packaging\windows-installer.iss
-echo      with Inno Setup 6 to create installer-output\CafeDesk-Setup.exe.
+echo Licensed USB folder ready: dist\CafeDesk
+echo   IMPORTANT FOR COMMERCIAL SALES:
+echo   - Make sure you ran: python admin_keygen.py --init-keys --apply-public-key
+echo     BEFORE building so only YOUR secret private key can activate PCs!
+echo   - NEVER copy "admin_keygen.py" or "owner-keys\" onto customer USBs!
 echo ======================================================================
 pause

@@ -29,25 +29,24 @@ jobs:
       - name: Run unit test suite
         run: python -m unittest -v test_services.py
 
-      - name: Build USB-ready portable folder (dist\CafeDesk)
+      - name: Build USB-ready 1-Year Licensed folder (dist\CafeDesk)
         shell: cmd
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "README.md;." app.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "README.md;." app.py
           (
             echo ============================================================
-            echo   Cafe Desk -- Portable USB Edition ^(Windows 10/11 x64^)
+            echo   Cafe Desk v0.7.0 -- 1-Year Licensed USB Edition ^(Windows^)
             echo ============================================================
             echo.
-            echo 1. COPY TO USB ^& OTHER COMPUTERS:
+            echo 1. COPY TO PC ^& ACTIVATE ^(LOCKED PER COMPUTER^):
             echo    Keep this ENTIRE "CafeDesk" folder together ^(including "_internal"^).
-            echo    Copy the whole "CafeDesk" folder to a USB flash drive or to another
-            echo    Windows PC's Desktop, then run "CafeDesk.exe". No Python needed!
+            echo    Copy the whole "CafeDesk" folder to the customer's Windows 10/11 PC
+            echo    and run "CafeDesk.exe". No Python installation is needed!
             echo.
-            echo 2. PORTABLE USB SETTINGS/PRICES MODE ^(OPTIONAL^):
-            echo    Double-click "Enable-USB-Portable-Data.bat" ^(or create a folder named
-            echo    "CafeDeskData" beside CafeDesk.exe^) if you want your business name,
-            echo    logo, price list, PIN and sales history stored ON THE USB DRIVE.
-            echo    Otherwise each PC stores its own settings in %%APPDATA%%\CafeDesk.
+            echo    On first launch, Cafe Desk displays that PC's hardware Machine ID
+            echo    ^(CD-XXXX-XXXX-XXXX^) and requires a 1-year Activation Key signed
+            echo    by the owner. Copying the folder to another PC will NOT activate
+            echo    the other PC.
           ) > "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt"
           (
             echo @echo off
