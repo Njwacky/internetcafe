@@ -4,7 +4,7 @@ from pathlib import Path
 import pypdfium2 as pdfium
 
 BATCH_SIZE=6
-MAX_PAGES=10000
+MAX_PAGES=2000
 
 def fingerprint(path):
     info=Path(path).stat()

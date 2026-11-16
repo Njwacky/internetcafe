@@ -4,7 +4,7 @@ from PIL import Image,ImageOps,ImageEnhance
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-from services import _atomic_write, _different
+from services import _atomic_write, _different, open_safe_image
 
 PRESETS={'2 per page':(1,2),'4 per page':(2,2),'6 per page':(2,3),'9 per page':(3,3),'Free layout':(3,3),'Custom size (mm)':None}
 
@@ -32,7 +32,7 @@ def layout(paths,preset,width_mm=None,height_mm=None):
     return result
 
 def photo(path,brightness=1.0,grayscale=False,rotation=0):
-    with Image.open(path) as src:
+    with open_safe_image(path) as src:
         image=ImageOps.exif_transpose(src).convert('RGBA')
         base=Image.new('RGB',image.size,'white'); base.paste(image,mask=image.getchannel('A'))
     if rotation not in (0,90,180,270): raise ValueError('Rotation must be a right angle.')
@@ -70,6 +70,26 @@ def resize_frame(item,width_mm,height_mm):
     if x+w>1+1e-9 or y+h>1+1e-9:raise ValueError('This size will not fit at the current position. Move the picture up or left, or enter a smaller size.')
     item.update(w=min(w,1-x),h=min(h,1-y))
 
+def _crop_to_aspect(image, target_w_pt, target_h_pt):
+    """Physically center-crop `image` to match `target_w_pt / target_h_pt` so clipped pixels are never embedded in PDF."""
+    import math
+    if image.width <= 0 or image.height <= 0 or target_w_pt <= 0 or target_h_pt <= 0:
+        return image
+    target_ratio = target_w_pt / target_h_pt
+    img_ratio = image.width / image.height
+    if abs(img_ratio - target_ratio) <= 1e-4:
+        return image
+    if img_ratio > target_ratio:
+        # Image is wider than frame -> trim left and right pixels physically
+        keep_w = max(1, min(image.width, int(round(image.height * target_ratio))))
+        left = (image.width - keep_w) // 2
+        return image.crop((left, 0, left + keep_w, image.height))
+    else:
+        # Image is taller than frame -> trim top and bottom pixels physically
+        keep_h = max(1, min(image.height, int(round(image.width / target_ratio))))
+        top = (image.height - keep_h) // 2
+        return image.crop((0, top, image.width, top + keep_h))
+
 def render_pdf(items,destination,mode='Fit whole image',brightness=1.0,grayscale=False):
     if not items: raise ValueError('Add one or more pictures first.')
     if mode not in ('Fit whole image','Fill & crop'): raise ValueError('Choose a valid image fitting mode.')
@@ -81,10 +101,23 @@ def render_pdf(items,destination,mode='Fit whole image',brightness=1.0,grayscale
         out=canvas.Canvas(tmp,pagesize=A4); pw,ph=A4
         for page in range(max(i['page'] for i in items)+1):
             for item in (x for x in items if x['page']==page):
-                image=crop_image(photo(item['path'],brightness,grayscale,item.get('rotation',0)),item.get('crop',[0,0,1,1])); w=item['w']*pw; h=item['h']*ph; x=item['x']*pw; y=ph-(item['y']*ph)-h
-                scale=(max if mode=='Fill & crop' else min)(w/image.width,h/image.height); dw=image.width*scale; dh=image.height*scale
-                out.saveState(); clip=out.beginPath(); clip.rect(x,y,w,h); out.clipPath(clip,stroke=0,fill=0)
-                out.drawImage(ImageReader(image),x+(w-dw)/2,y+(h-dh)/2,width=dw,height=dh,mask='auto'); out.restoreState()
+                image=crop_image(photo(item['path'],brightness,grayscale,item.get('rotation',0)),item.get('crop',[0,0,1,1]))
+                w=item['w']*pw; h=item['h']*ph; x=item['x']*pw; y=ph-(item['y']*ph)-h
+                if mode=='Fill & crop':
+                    image=_crop_to_aspect(image, w, h)
+                    max_px_w=max(64, int(round(w * 300 / 72.0)))
+                    max_px_h=max(64, int(round(h * 300 / 72.0)))
+                    if image.width>max_px_w or image.height>max_px_h:
+                        image=image.copy(); image.thumbnail((max_px_w, max_px_h), Image.Resampling.LANCZOS)
+                    out.drawImage(ImageReader(image),x,y,width=w,height=h,mask='auto')
+                else:
+                    scale=min(w/image.width,h/image.height); dw=image.width*scale; dh=image.height*scale
+                    max_px_w=max(64, int(round(dw * 300 / 72.0)))
+                    max_px_h=max(64, int(round(dh * 300 / 72.0)))
+                    if image.width>max_px_w or image.height>max_px_h:
+                        image=image.copy(); image.thumbnail((max_px_w, max_px_h), Image.Resampling.LANCZOS)
+                    out.saveState(); clip=out.beginPath(); clip.rect(x,y,w,h); out.clipPath(clip,stroke=0,fill=0)
+                    out.drawImage(ImageReader(image),x+(w-dw)/2,y+(h-dh)/2,width=dw,height=dh,mask='auto'); out.restoreState()
             out.showPage()
         out.save()
     _atomic_write(destination,write)

@@ -552,4 +552,183 @@ class CareerUXAndVisualPreviewTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 services.open_external_url(services.DEVELOPER_GITHUB_URL)
 
+
+class DiagnosticRemediationTests(unittest.TestCase):
+    def test_pillow_13_minimum_version(self):
+        import PIL
+        major=int(str(PIL.__version__).split('.')[0])
+        self.assertGreaterEqual(major,13)
+        req_text=Path(__file__).resolve().parent.joinpath('requirements.txt').read_text(encoding='utf-8')
+        self.assertIn('Pillow>=13',req_text)
+        self.assertTrue(Path(__file__).resolve().parent.joinpath('requirements-lock.txt').exists())
+
+    def test_internal_path_protection_blocks_settings_sales_and_recovery_overwrite(self):
+        import settings_store as ss, sales_store, projects
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            fake_data=Path(d)/'CafeDesk'
+            fake_settings=fake_data/'settings.json'
+            with patch.object(ss,'settings_path',return_value=fake_settings):
+                ss.set_pin('654321',fake_settings)
+                self.assertTrue(ss.is_internal_path(fake_settings))
+                self.assertTrue(ss.is_internal_path(fake_data/'recovery'/'career.cafeproject'))
+                self.assertTrue(ss.is_internal_path(fake_data/'sales.sqlite3'))
+                # Public text/PDF/project/CSV exports cannot overwrite settings.json or recovery
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    services.export_text('{"business_name":"Hacked"}',fake_settings)
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    services.export_document_pdf('Hello',fake_data/'sales.sqlite3','Cover letter',0)
+                with self.assertRaisesRegex(ValueError,'internal configuration'):
+                    projects.save('career',{'category':'Résumé / CV','template':'Classic','fields':{},'draft':'CV','photo':None},fake_data/'recovery'/'career.cafeproject')
+                # PIN in settings.json remains completely intact
+                self.assertTrue(ss.verify_pin('654321',fake_settings))
+
+                # Recovery checkpoint saved with allow_internal=True succeeds, but public load() rejects it
+                rec_file=fake_data/'recovery'/'career.cafeproject'
+                projects.save('career',{'category':'Résumé / CV','template':'Classic','fields':{},'draft':'Secret draft','photo':None},rec_file,allow_internal=True)
+                sess=Path(d)/'sess'; sess.mkdir()
+                with self.assertRaisesRegex(ValueError,'Staff recovery'):
+                    projects.load(rec_file,sess,allow_internal=False)
+                kind,loaded=projects.load(rec_file,sess,allow_internal=True)
+                self.assertEqual(kind,'career')
+                self.assertEqual(loaded['draft'],'Secret draft')
+
+    def test_corrupted_settings_fail_closed_and_backup_created(self):
+        import settings_store as ss
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'settings.json'
+            ss.set_pin('123456',p)
+            ss.save_settings('Sunrise Desk','office',p)
+            bak=Path(d)/'settings.json.bak'
+            self.assertTrue(bak.exists())
+            # Corrupt settings.json -> pin_is_set and verify_pin MUST fail closed (raise CorruptedSettingsError), NOT return False
+            p.write_text('{corrupted json',encoding='utf-8')
+            with self.assertRaises(ss.CorruptedSettingsError):
+                ss.pin_is_set(p)
+            with self.assertRaises(ss.CorruptedSettingsError):
+                ss.verify_pin('123456',p)
+            with self.assertRaises(ss.CorruptedSettingsError):
+                ss.set_pin('999999',p)
+            # Non-strict display read still falls back gracefully for window title
+            self.assertEqual(ss.load_name(p),'Café Desk')
+            # Partial/half-deleted PIN hash also fails closed
+            p.write_text('{"business_name":"Shop","pin_salt":"00112233445566778899aabbccddeeff"}',encoding='utf-8')
+            with self.assertRaises(ss.CorruptedSettingsError):
+                ss.pin_is_set(p)
+
+    def test_pin_lockout_persists_across_reloads(self):
+        import settings_store as ss
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'settings.json'
+            ss.set_pin('246810',p)
+            t0=1_700_000_000.0
+            for i in range(5):
+                self.assertFalse(ss.verify_pin('000000',p,now=t0+i))
+            # Even with the right PIN, verification is locked out for 60s across fresh file loads
+            self.assertGreater(ss.lockout_remaining(p,now=t0+10),50)
+            self.assertFalse(ss.verify_pin('246810',p,now=t0+10))
+            # After 61 seconds, the right PIN succeeds and resets lockout
+            self.assertEqual(ss.lockout_remaining(p,now=t0+66),0.0)
+            self.assertTrue(ss.verify_pin('246810',p,now=t0+66))
+            self.assertEqual(ss.load_settings(p,strict=True).get('failed_attempts'),0)
+
+    def test_fill_and_crop_physically_removes_clipped_pixels_from_pdf(self):
+        import collage, io
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)
+            # Create wide 600x200 image: left 150px pure RED (secret), center 300px GREEN, right 150px RED (secret)
+            im=Image.new('RGB',(600,200),(0,200,0))
+            red=Image.new('RGB',(150,200),(255,0,0))
+            im.paste(red,(0,0)); im.paste(red,(450,0))
+            src=p/'wide_secret.png'; im.save(src)
+            # Place into a portrait/square-ish frame (w=0.4 of 210mm = 84mm, h=0.4 of 297mm = 118.8mm -> aspect < 1)
+            # Center crop of 600x200 to aspect ~0.707 keeps ~141px width in center (x=229..370), strictly inside GREEN (150..450)!
+            items=[dict(path=str(src),page=0,x=0.1,y=0.1,w=0.4,h=0.4,rotation=0,crop=[0,0,1,1])]
+            out=p/'sheet_fill.pdf'
+            collage.render_pdf(items,out,mode='Fill & crop')
+            reader=PdfReader(str(out))
+            embedded_imgs=reader.pages[0].images
+            self.assertEqual(len(embedded_imgs),1)
+            with Image.open(io.BytesIO(embedded_imgs[0].data)).convert('RGB') as extracted:
+                # Verify zero red pixels were embedded into the PDF stream
+                raw_bytes=extracted.tobytes()
+                pixels=[(raw_bytes[i],raw_bytes[i+1],raw_bytes[i+2]) for i in range(0,len(raw_bytes),3)]
+                self.assertTrue(pixels)
+                self.assertTrue(all(r<30 and g>150 for r,g,b in pixels), 'Clipped red edge pixels must not be embedded in Fill & crop PDF')
+
+    def test_csv_formula_sanitization_blocks_whitespace_and_unicode_prefixes(self):
+        import sales_store
+        for dangerous in ('=1+1','  =SUM(A1:A2)','\t+cmd','\u00a0-2+3','\u200b@SUM(1)','\n=HYPERLINK("x")'):
+            cleaned=sales_store.sanitize_csv_cell(dangerous)
+            self.assertTrue(cleaned.startswith("'"),f'Did not prefix {dangerous!r}: got {cleaned!r}')
+            self.assertNotIn('\n',cleaned)
+        self.assertEqual(sales_store.sanitize_csv_cell('Normal Service x2'),'Normal Service x2')
+
+    def test_project_capability_versioning_and_unknown_feature_rejection(self):
+        import projects, zipfile, json
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d); img=p/'pic.png'; Image.new('RGB',(80,80),'blue').save(img)
+            # Uncropped standard preset -> version 1
+            s1={'items':[dict(path=str(img),page=0,x=0.1,y=0.1,w=0.3,h=0.3,rotation=0,crop=[0,0,1,1])],'preset':'4 per page','page':0,'mode':'Fit whole image','brightness':100,'gray':False,'width_mm':'','height_mm':''}
+            f1=p/'v1.cafeproject'; projects.save('sheet',s1,f1)
+            with zipfile.ZipFile(f1) as z:
+                m1=json.loads(z.read('manifest.json'))
+                self.assertEqual(m1['version'],1); self.assertEqual(m1['features'],[])
+            # Cropped picture -> version 2 with crop_rect feature
+            s2={'items':[dict(path=str(img),page=0,x=0.1,y=0.1,w=0.3,h=0.3,rotation=0,crop=[0.1,0.2,0.8,0.9])],'preset':'Custom size (mm)','page':0,'mode':'Fill & crop','brightness':100,'gray':False,'width_mm':'40','height_mm':'50'}
+            f2=p/'v2.cafeproject'; projects.save('sheet',s2,f2)
+            with zipfile.ZipFile(f2) as z:
+                m2=json.loads(z.read('manifest.json'))
+                self.assertEqual(m2['version'],2)
+                self.assertIn('crop_rect',m2['features']); self.assertIn('custom_mm',m2['features'])
+            sess=p/'sess'; sess.mkdir()
+            kind,loaded=projects.load(f2,sess)
+            self.assertEqual(kind,'sheet'); self.assertEqual(loaded['items'][0]['crop'],[0.1,0.2,0.8,0.9])
+            # Unknown future feature is cleanly rejected instead of silently dropping data
+            f_future=p/'future.cafeproject'
+            with zipfile.ZipFile(f1,'r') as zin, zipfile.ZipFile(f_future,'w') as zout:
+                for item in zin.infolist():
+                    raw=zin.read(item.filename)
+                    if item.filename=='manifest.json':
+                        obj=json.loads(raw); obj['version']=2; obj['features']=['perspective_3d_warp']
+                        raw=json.dumps(obj).encode('utf-8')
+                    zout.writestr(item,raw)
+            with self.assertRaisesRegex(ValueError,'newer features'):
+                projects.load(f_future,sess)
+
+    def test_unicode_pdf_rendering_and_resource_caps(self):
+        import pdf_fonts
+        info=pdf_fonts.ensure_fonts()
+        self.assertIn('sans',info)
+        with tempfile.TemporaryDirectory() as d:
+            out=Path(d)/'unicode_cv.pdf'
+            txt='Zoë Dlamini — Šimunović\nzoe@example.com\n\nPROFESSIONAL PROFILE\nFluent in English, Français & Español — Café Desk €100.'
+            services.export_document_pdf(txt,out,'Résumé / CV',0)
+            extracted=PdfReader(str(out)).pages[0].extract_text()
+            self.assertIn('Dlamini',extracted)
+            # Resource limit rejects oversized pixel bomb
+            tiny=Path(d)/'ok.png'; Image.new('RGB',(100,100),'white').save(tiny)
+            from unittest.mock import patch
+            with patch.object(services,'MAX_IMAGE_PIXELS',5000):
+                with self.assertRaisesRegex(ValueError,'pixel safety limit'):
+                    services.open_safe_image(tiny)
+
+    def test_forms_creator_fillable_and_printable_pdfs(self):
+        import forms_renderer
+        with tempfile.TemporaryDirectory() as d:
+            for tpl_name in forms_renderer.FORM_TEMPLATE_NAMES:
+                spec=forms_renderer.default_form_spec(tpl_name,org_name='Sunrise Internet Café')
+                out=Path(d)/f"{tpl_name.split()[0].lower()}.pdf"
+                services.export_form_pdf(spec,out)
+                reader=PdfReader(str(out))
+                self.assertGreaterEqual(len(reader.pages),1)
+                # Verify AcroForm interactive fields exist when fillable=True
+                self.assertIsNotNone(reader.trailer['/Root'].get('/AcroForm'))
+            # Preview rasterizes cleanly
+            custom_spec=forms_renderer.default_form_spec('Custom Blank Form',org_name='Benoni Print Hub')
+            custom_spec['fields'].append({'label':'Applicant Signature','type':'signature','value':''})
+            im,pnum,tot=services.render_form_preview(custom_spec,page=1,max_size=(300,420))
+            self.assertEqual(im.mode,'RGB')
+            self.assertEqual((pnum,tot),(1,1))
+
 if __name__=='__main__': unittest.main()

@@ -1,58 +1,146 @@
-"""Local per-user preferences and PIN verifier. Not a security boundary."""
-import hashlib,hmac,json,os,sys,tempfile
+"""Local per-user preferences and PIN verifier. Not a security boundary against OS admins."""
+import hashlib,hmac,json,os,sys,tempfile,time
 from pathlib import Path
 from decimal import Decimal,InvalidOperation
 DEFAULT_NAME='Café Desk'; DEFAULT_ICON='office'; MAX_NAME=48
+PIN_MAX_ATTEMPTS=5; PIN_LOCKOUT_SECONDS=60
 ICONS={'office':'Office','document':'Document','printer':'Printer','scanner':'Scanner','briefcase':'Briefcase','globe':'Globe','star':'Star','diamond':'Diamond','store':'Shop','leaf':'Leaf','custom':'Custom logo'}
-def settings_path():
+
+class CorruptedSettingsError(ValueError):
+    """Raised when the settings file exists on disk but is unreadable or damaged."""
+
+def app_data_dir():
     if sys.platform=='win32': root=Path(os.environ.get('APPDATA') or Path.home()/'AppData'/'Roaming')
-    elif sys.platform=='darwin': root=Path.home()/'Library'/'Application Support'
+    elif sys.platform=='darwin': root=Path(os.environ.get('CAFE_DESK_MAC_DIR') or (Path.home()/'Library'/'Application Support'))
     else:
         xdg=os.environ.get('XDG_CONFIG_HOME',''); root=Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home()/'.config'
-    return root/'CafeDesk'/'settings.json'
+    return root/'CafeDesk'
+def settings_path(): return app_data_dir()/'settings.json'
 def logo_path(): return settings_path().parent/'business-logo.png'
+def is_internal_path(candidate, data_dir=None):
+    """Return True if candidate resolves inside the Café Desk app-data folder."""
+    base=Path(data_dir) if data_dir is not None else settings_path().parent
+    try:
+        base_res=base.resolve()
+        cand_res=Path(candidate).resolve()
+    except OSError:
+        return True
+    return cand_res==base_res or cand_res.is_relative_to(base_res)
 def clean_name(name):
     name=' '.join(str(name).split())
     if not name: raise ValueError('Enter a business name.')
     if len(name)>MAX_NAME: raise ValueError(f'Use {MAX_NAME} characters or fewer.')
     return name
-def load_settings(path=None):
-    default={'business_name':DEFAULT_NAME,'business_icon':DEFAULT_ICON,'currency':'R','prices':[]}
+def _default_dict():
+    return {'business_name':DEFAULT_NAME,'business_icon':DEFAULT_ICON,'currency':'R','prices':[]}
+def _parse_settings_file(target):
+    default=_default_dict()
+    if not target.exists(): return default
     try:
-        obj=json.loads(Path(path or settings_path()).read_text(encoding='utf-8'))
-        if not isinstance(obj,dict): return default
-        name=clean_name(obj.get('business_name',DEFAULT_NAME)); icon=obj.get('business_icon',DEFAULT_ICON)
-        default.update({k:v for k,v in obj.items() if k in ('pin_salt','pin_hash','currency','prices')})
-        default.update(business_name=name,business_icon=icon if icon in ICONS else DEFAULT_ICON)
-        if not isinstance(default['prices'],list): default['prices']=[]
-        return default
-    except (OSError,ValueError,TypeError,AttributeError): return default
+        raw=target.read_text(encoding='utf-8')
+        obj=json.loads(raw)
+    except (OSError,ValueError,TypeError) as exc:
+        raise CorruptedSettingsError('Settings file is damaged or unreadable. Staff access is locked until an administrator restores settings.json.bak or removes the damaged file.') from exc
+    if not isinstance(obj,dict):
+        raise CorruptedSettingsError('Settings file has an invalid structure. Staff access is locked.')
+    has_salt='pin_salt' in obj and bool(obj.get('pin_salt'))
+    has_hash='pin_hash' in obj and bool(obj.get('pin_hash'))
+    if has_salt!=has_hash:
+        raise CorruptedSettingsError('Staff PIN record in settings.json is incomplete or damaged. Staff access is locked.')
+    if has_salt:
+        try:
+            salt_b=bytes.fromhex(str(obj['pin_salt']))
+            hash_b=bytes.fromhex(str(obj['pin_hash']))
+            if len(salt_b)!=16 or len(hash_b)!=32: raise ValueError()
+        except (ValueError,TypeError) as exc:
+            raise CorruptedSettingsError('Staff PIN verifier in settings.json is damaged. Staff access is locked.') from exc
+    try: name=clean_name(obj.get('business_name',DEFAULT_NAME))
+    except ValueError: name=DEFAULT_NAME
+    icon=obj.get('business_icon',DEFAULT_ICON)
+    default.update({k:v for k,v in obj.items() if k in ('pin_salt','pin_hash','currency','prices','failed_attempts','lockout_until_epoch')})
+    default.update(business_name=name,business_icon=icon if icon in ICONS else DEFAULT_ICON)
+    if not isinstance(default['prices'],list): default['prices']=[]
+    return default
+def load_settings(path=None,strict=False):
+    target=Path(path or settings_path())
+    try:
+        return _parse_settings_file(target)
+    except CorruptedSettingsError:
+        if strict: raise
+        return _default_dict()
 def load_name(path=None): return load_settings(path)['business_name']
 def _write(data,path=None):
-    target=Path(path or settings_path()); target.parent.mkdir(parents=True,exist_ok=True)
+    target=Path(path or settings_path()); target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    backup=target.with_name(target.name+'.bak')
+    if target.exists():
+        try:
+            _parse_settings_file(target)
+            fd_b,tmp_b=tempfile.mkstemp(prefix='.settings-bak-',suffix='.json',dir=target.parent)
+            try:
+                with os.fdopen(fd_b,'wb') as fb: fb.write(target.read_bytes())
+                os.replace(tmp_b,backup)
+            finally:
+                if os.path.exists(tmp_b): os.unlink(tmp_b)
+        except Exception:
+            pass
     fd,tmp=tempfile.mkstemp(prefix='.settings-',suffix='.json',dir=target.parent)
     try:
         with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
+        try: os.chmod(tmp,0o600)
+        except OSError: pass
         os.replace(tmp,target)
     finally:
         if os.path.exists(tmp): os.unlink(tmp)
 def save_settings(name,icon,path=None):
     name=clean_name(name)
     if icon not in ICONS: raise ValueError('Please select an available business icon.')
-    data=load_settings(path); data.update(business_name=name,business_icon=icon); _write(data,path); return name
-def save_name(name,path=None): return save_settings(name,load_settings(path)['business_icon'],path)
+    data=load_settings(path,strict=True); data.update(business_name=name,business_icon=icon); _write(data,path); return name
+def save_name(name,path=None): return save_settings(name,load_settings(path,strict=True)['business_icon'],path)
 def set_pin(pin,path=None):
-    if not pin.isascii() or not pin.isdigit() or not 6<=len(pin)<=12: raise ValueError('Use a PIN of 6–12 digits.')
+    if not isinstance(pin,str) or not pin.isascii() or not pin.isdigit() or not 6<=len(pin)<=12: raise ValueError('Use a PIN of 6–12 digits.')
     salt=os.urandom(16); digest=hashlib.pbkdf2_hmac('sha256',pin.encode(),salt,300000)
-    data=load_settings(path); data.update(pin_salt=salt.hex(),pin_hash=digest.hex()); _write(data,path)
+    data=load_settings(path,strict=True); data.update(pin_salt=salt.hex(),pin_hash=digest.hex(),failed_attempts=0,lockout_until_epoch=0); _write(data,path)
 def pin_is_set(path=None):
-    d=load_settings(path); return bool(d.get('pin_salt') and d.get('pin_hash'))
-def verify_pin(pin,path=None):
-    d=load_settings(path)
+    """Return True if a valid PIN is configured. Raises CorruptedSettingsError (fails closed) if settings.json is damaged."""
+    d=load_settings(path,strict=True); return bool(d.get('pin_salt') and d.get('pin_hash'))
+def lockout_remaining(path=None,now=None):
+    current=time.time() if now is None else float(now)
+    d=load_settings(path,strict=True)
+    until=d.get('lockout_until_epoch',0)
+    try: until_f=float(until)
+    except (ValueError,TypeError): return 0.0
+    # Clamp implausible far-future clock jumps to PIN_LOCKOUT_SECONDS
+    if until_f>current+PIN_LOCKOUT_SECONDS*10:
+        until_f=current+PIN_LOCKOUT_SECONDS
+    return max(0.0,until_f-current)
+def verify_pin(pin,path=None,record_failure=True,now=None):
+    current=time.time() if now is None else float(now)
+    d=load_settings(path,strict=True)
+    if record_failure and lockout_remaining(path,now=current)>0:
+        return False
     try:
-        digest=hashlib.pbkdf2_hmac('sha256',pin.encode(),bytes.fromhex(d['pin_salt']),300000).hex()
-        return hmac.compare_digest(digest,d['pin_hash'])
-    except (KeyError,ValueError,TypeError): return False
+        ok=isinstance(pin,str) and hmac.compare_digest(
+            hashlib.pbkdf2_hmac('sha256',pin.encode('utf-8'),bytes.fromhex(d['pin_salt']),300000).hex(),
+            d['pin_hash'],
+        )
+    except (KeyError,ValueError,TypeError):
+        ok=False
+    if record_failure and d.get('pin_salt') and d.get('pin_hash'):
+        if ok:
+            if d.get('failed_attempts',0) or d.get('lockout_until_epoch',0):
+                d['failed_attempts']=0; d['lockout_until_epoch']=0
+                try: _write(d,path)
+                except OSError: pass
+        else:
+            fails=int(d.get('failed_attempts',0) or 0)+1
+            if fails>=PIN_MAX_ATTEMPTS:
+                d['failed_attempts']=0
+                d['lockout_until_epoch']=current+PIN_LOCKOUT_SECONDS
+            else:
+                d['failed_attempts']=fails
+            try: _write(d,path)
+            except OSError: pass
+    return ok
 def parse_price_list(text):
     prices=[]; seen=set()
     for num,line in enumerate(text.splitlines(),1):
@@ -72,4 +160,4 @@ def parse_price_list(text):
 def save_prices(currency,text,path=None):
     currency=currency.strip()
     if not currency or len(currency)>8 or any(c in currency for c in '\n\r|'): raise ValueError('Enter a currency symbol or code, up to 8 characters.')
-    prices=parse_price_list(text); data=load_settings(path); data.update(currency=currency,prices=prices); _write(data,path); return prices
+    prices=parse_price_list(text); data=load_settings(path,strict=True); data.update(currency=currency,prices=prices); _write(data,path); return prices

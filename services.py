@@ -10,9 +10,43 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as PDFImage, PageBreak, HRFlowable, Table, TableStyle
 from templates import COLORS
+import settings_store
 
-def _atomic_write(destination, write):
+MAX_IMAGE_PIXELS=50_000_000
+MAX_IMAGE_FILE_BYTES=60*1024*1024
+MAX_IMAGE_FRAMES=300
+MAX_PDF_PAGES=2000
+Image.MAX_IMAGE_PIXELS=MAX_IMAGE_PIXELS
+
+def assert_safe_user_output(destination, data_dir=None):
+    """Refuse to write user exports over Café Desk's internal settings/sales/recovery directory."""
+    if settings_store.is_internal_path(destination, data_dir=data_dir):
+        raise ValueError('Cannot save inside the Café Desk internal configuration, sales or recovery folder. Choose another folder.')
+
+def open_safe_image(path):
+    """Open an untrusted image with file-size and pixel-count bounds."""
+    p=Path(path)
+    if not p.is_file():
+        raise ValueError(f'Image not found: {p.name}')
+    if p.stat().st_size>MAX_IMAGE_FILE_BYTES:
+        raise ValueError(f'“{p.name}” exceeds the {MAX_IMAGE_FILE_BYTES//(1024*1024)} MB image size limit.')
+    try:
+        im=Image.open(p)
+    except Image.DecompressionBombError as exc:
+        raise ValueError(f'“{p.name}” has too many pixels to process safely.') from exc
+    except Exception as exc:
+        raise ValueError(f'Could not open image: {p.name}') from exc
+    if im.width*im.height>MAX_IMAGE_PIXELS:
+        im.close()
+        raise ValueError(f'“{p.name}” exceeds the {MAX_IMAGE_PIXELS:,}-pixel safety limit.')
+    return im
+
+def _atomic_write(destination, write, allow_internal=False):
+    if not allow_internal:
+        assert_safe_user_output(destination)
     target=Path(destination)
+    if target.is_symlink():
+        raise ValueError('Cannot overwrite a symbolic link.')
     target.parent.mkdir(parents=True,exist_ok=True)
     fd, tmp=tempfile.mkstemp(prefix='.cafedesk-',suffix=target.suffix,dir=str(target.parent)); os.close(fd)
     try:
@@ -25,6 +59,8 @@ def _reader(path):
     reader=PdfReader(str(path))
     if reader.is_encrypted and reader.decrypt('') == 0:
         raise ValueError(f'“{Path(path).name}” is password-protected. Remove its password before using it here.')
+    if len(reader.pages)>MAX_PDF_PAGES:
+        raise ValueError(f'“{Path(path).name}” has more than {MAX_PDF_PAGES} pages.')
     return reader
 
 def _different(source_paths, destination):
@@ -74,6 +110,7 @@ def extract_pdf(source,spec,destination):
     return len(pages)
 
 def split_each_page(source,folder):
+    assert_safe_user_output(folder)
     reader=_reader(source); root=Path(folder); stem=Path(source).stem
     targets=[root / f'{stem}_page_{i+1:03d}.pdf' for i in range(len(reader.pages))]
     if not targets: raise ValueError('The selected PDF has no pages.')
@@ -99,10 +136,15 @@ def images_to_pdf(paths,destination):
     if not paths: raise ValueError('Add at least one image.')
     _different(paths,destination)
     def build(temp):
-        story=[]; buffers=[]
+        story=[]; buffers=[]; total_frames=0
         for path in paths:
-            with Image.open(path) as source:
+            with open_safe_image(path) as source:
                 for frame in ImageSequence.Iterator(source):
+                    total_frames+=1
+                    if total_frames>MAX_IMAGE_FRAMES:
+                        raise ValueError(f'Too many image frames (maximum {MAX_IMAGE_FRAMES}).')
+                    if frame.width*frame.height>MAX_IMAGE_PIXELS:
+                        raise ValueError(f'Frame in “{Path(path).name}” exceeds the {MAX_IMAGE_PIXELS:,}-pixel safety limit.')
                     image=ImageOps.exif_transpose(frame.copy())
                     if image.mode in ('RGBA','LA') or 'transparency' in image.info:
                         image=image.convert('RGBA'); background=Image.new('RGB',image.size,'white'); background.paste(image,mask=image.getchannel('A')); image=background
@@ -125,7 +167,9 @@ def export_document_pdf(text,destination,category,index,photo_path=None):
         import cv_renderer
         _atomic_write(destination,lambda temp:cv_renderer.render(text,temp,index,photo_path))
         return
-    body=ParagraphStyle('body',fontName='Helvetica',fontSize=10.5,leading=16,spaceAfter=3,splitLongWords=1)
+    import pdf_fonts
+    reg_font,_=pdf_fonts.font_pair('Helvetica')
+    body=ParagraphStyle('body',fontName=reg_font,fontSize=10.5,leading=16,spaceAfter=3,splitLongWords=1)
     def build(temp):
         story=[Paragraph(escape(line),body) if line.strip() else Spacer(1,7) for line in text.splitlines()]
         SimpleDocTemplate(temp,pagesize=A4,leftMargin=55,rightMargin=55,topMargin=50,bottomMargin=50,title=category).build(story)
@@ -172,6 +216,41 @@ def export_card_pdf(destination,kind,template_index,fields,sheet_index=0,photo_p
     import cards_renderer
     _atomic_write(destination,lambda temp:cards_renderer.render_card_pdf(temp,kind,template_index,fields,sheet_index=sheet_index,photo_path=photo_path,crop_marks=crop_marks))
 
+def export_form_pdf(spec,destination):
+    """Export printable or interactive AcroForm A4 PDF atomically."""
+    import forms_renderer
+    validated=forms_renderer.validate_form_spec(spec)
+    _atomic_write(destination,lambda temp:forms_renderer.render_form_pdf(validated,temp))
+
+def render_form_preview(spec,page=1,max_size=(340,481)):
+    """Rasterize a Form Creator page to a PIL RGB image for live A4 preview."""
+    import math, pypdfium2 as pdfium, forms_renderer
+    validated=forms_renderer.validate_form_spec(spec)
+    max_w,max_h=max_size
+    with tempfile.TemporaryDirectory(prefix='cafedesk-formprev-') as tmpdir:
+        pdf_path=Path(tmpdir)/'form.pdf'
+        # Render flat preview so values and borders appear crisply in pdfium thumbnail
+        preview_spec=dict(validated,fillable=False)
+        forms_renderer.render_form_pdf(preview_spec,pdf_path)
+        doc=pdfium.PdfDocument(str(pdf_path))
+        try:
+            total=len(doc)
+            if total<1: raise ValueError('Form preview produced an empty PDF.')
+            pnum=max(1,min(int(page),total))
+            page_obj=doc[pnum-1]
+            try:
+                w,h=page_obj.get_size()
+                scale=min(3.0,max_w/w,max_h/h)
+                bitmap=page_obj.render(scale=scale)
+                try:
+                    return bitmap.to_pil().convert('RGB').copy(),pnum,total
+                finally:
+                    bitmap.close()
+            finally:
+                page_obj.close()
+        finally:
+            doc.close()
+
 def render_card_preview(kind,template_index,fields,sheet_index=0,photo_path=None,crop_marks=True,single_card=True,max_size=(380,260)):
     """Rasterize either a single card close-up or the full A4 print sheet to a PIL RGB image."""
     import math, pypdfium2 as pdfium, cards_renderer
@@ -202,9 +281,9 @@ def render_card_preview(kind,template_index,fields,sheet_index=0,photo_path=None
 
 def save_custom_logo(source,destination):
     """Copy and normalize a logo into the per-user config folder."""
-    with Image.open(source) as src:
+    with open_safe_image(source) as src:
         image=ImageOps.exif_transpose(src).convert('RGBA'); image.thumbnail((256,256))
-        _atomic_write(destination,lambda temp:image.save(temp,format='PNG'))
+        _atomic_write(destination,lambda temp:image.save(temp,format='PNG'),allow_internal=True)
 
 TESSERACT_DOWNLOAD_URL='https://github.com/UB-Mannheim/tesseract/wiki'
 TESSERACT_WINDOWS_INSTALLER_URL='https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe'
@@ -232,7 +311,7 @@ def load_ocr_preview(source,max_size=(260,300)):
     p=Path(source)
     if not p.is_file(): raise ValueError(f'Image not found: {p.name}')
     try:
-        with Image.open(p) as src:
+        with open_safe_image(p) as src:
             image=ImageOps.exif_transpose(src).convert('RGB')
             image.thumbnail(max_size,Image.Resampling.LANCZOS)
             return image.copy()
@@ -262,6 +341,9 @@ def run_ocr(source):
             candidate=(Path(base)/'Programs'/'Tesseract-OCR'/'tesseract.exe') if env_key=='LOCALAPPDATA' else (Path(base)/'Tesseract-OCR'/'tesseract.exe')
             if candidate.exists(): executable=str(candidate); break
     if not executable: raise ValueError('Tesseract OCR was not found. Open Help & privacy and click the direct Tesseract OCR download link to install it (with English language data), then restart the app.')
+    if Path(source).is_file():
+        with open_safe_image(source):
+            pass
     try:
         p=subprocess.run([str(executable),str(source),'stdout','-l','eng'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120,check=False)
     except (OSError,subprocess.TimeoutExpired) as exc: raise ValueError('OCR could not run or timed out. Check that Tesseract is installed correctly.') from exc

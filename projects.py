@@ -2,10 +2,12 @@
 import hashlib,io,json,math,os,re,shutil,uuid,zipfile
 from pathlib import Path
 from PIL import Image
-import services,collage
+import services,collage,settings_store
 from templates import LABELS,CATEGORIES,NAMES,CV_NAMES
 
-FORMAT='cafe-desk-project';VERSION=1;MAX_ASSET=20*1024*1024;MAX_TOTAL=80*1024*1024;MAX_MANIFEST=2*1024*1024;MAX_ITEMS=200
+FORMAT='cafe-desk-project';VERSION=1;SUPPORTED_VERSIONS=(1,2)
+KNOWN_FEATURES={'crop_rect','custom_mm'}
+MAX_ASSET=20*1024*1024;MAX_TOTAL=80*1024*1024;MAX_MANIFEST=2*1024*1024;MAX_ITEMS=200
 HEX=re.compile(r'^[0-9a-f]{64}$')
 
 def _image(path):
@@ -14,7 +16,10 @@ def _image(path):
     data=p.read_bytes()
     if len(data)>MAX_ASSET:raise ValueError('Each image must be 20 MB or smaller for a project.')
     try:
-        with Image.open(io.BytesIO(data)) as image:image.verify()
+        with Image.open(io.BytesIO(data)) as image:
+            if image.width*image.height>services.MAX_IMAGE_PIXELS:
+                raise ValueError()
+            image.verify()
     except Exception as exc:raise ValueError(f'Could not read image: {p.name}') from exc
     return data
 
@@ -28,9 +33,9 @@ def _text(value,name,limit):
     if not isinstance(value,str) or len(value)>limit:raise ValueError(f'Invalid or oversized {name}.')
     return value
 
-def save(kind,data,destination):
+def save(kind,data,destination,allow_internal=False):
     if kind not in ('career','sheet'):raise ValueError('Unknown project type.')
-    assets={};paths=[]
+    assets={};paths=[];features=[]
     if kind=='career':
         category=data.get('category');template=data.get('template')
         if category not in CATEGORIES or template not in (CV_NAMES if category==CATEGORIES[0] else NAMES):raise ValueError('Invalid document type or template.')
@@ -41,20 +46,25 @@ def save(kind,data,destination):
         sheet=data;items=sheet.get('items',[])
         if not isinstance(items,list) or len(items)>MAX_ITEMS:raise ValueError('Too many pictures in the project.')
         paths=[x.get('path') for x in items]
-        saved=[]
+        saved=[];has_crop=False
         for item in items:
-            entry={k:item.get(k) for k in ('page','x','y','w','h','rotation')};entry['asset']=_asset(item.get('path'),assets);entry['crop']=collage.validate_crop(item.get('crop',[0,0,1,1]));saved.append(entry)
+            crop=collage.validate_crop(item.get('crop',[0,0,1,1]))
+            if crop!=[0.0,0.0,1.0,1.0]:has_crop=True
+            entry={k:item.get(k) for k in ('page','x','y','w','h','rotation')};entry['asset']=_asset(item.get('path'),assets);entry['crop']=crop;saved.append(entry)
+        if has_crop:features.append('crop_rect')
+        if sheet.get('preset')=='Custom size (mm)':features.append('custom_mm')
         payload={'items':saved,'preset':sheet.get('preset'),'page':sheet.get('page',0),'mode':sheet.get('mode'),'brightness':sheet.get('brightness'),'gray':sheet.get('gray'),'width_mm':str(sheet.get('width_mm','')),'height_mm':str(sheet.get('height_mm',''))}
         _validate_sheet(payload)
     services._different([p for p in paths if p],destination)
-    manifest={'format':FORMAT,'version':VERSION,'kind':kind,'data':payload}
+    version=2 if features else VERSION
+    manifest={'format':FORMAT,'version':version,'features':features,'kind':kind,'data':payload}
     encoded=json.dumps(manifest,ensure_ascii=False,separators=(',',':')).encode('utf-8')
     if len(encoded)>MAX_MANIFEST:raise ValueError('The project contains too much text.')
     def write(tmp):
         with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
             z.writestr('manifest.json',encoded)
             for key,value in assets.items():z.writestr('assets/'+key,value)
-    services._atomic_write(destination,write)
+    services._atomic_write(destination,write,allow_internal=allow_internal)
 
 def _valid_asset(key):return key is None or (isinstance(key,str) and HEX.fullmatch(key) is not None)
 
@@ -76,7 +86,9 @@ def _validate_sheet(sheet):
         if not(0<=item['x']<1 and 0<=item['y']<1 and 0<item['w']<=1 and 0<item['h']<=1 and item['x']+item['w']<=1.00001 and item['y']+item['h']<=1.00001):raise ValueError('Picture placement is outside the page.')
     return sheet
 
-def load(source,session_dir):
+def load(source,session_dir,allow_internal=False):
+    if not allow_internal and settings_store.is_internal_path(source):
+        raise ValueError('Projects inside the Café Desk recovery or configuration folder can only be opened via Staff recovery.')
     try:
         with zipfile.ZipFile(source,'r') as z:
             infos=z.infolist();names=[x.filename for x in infos]
@@ -86,7 +98,10 @@ def load(source,session_dir):
             info=z.getinfo('manifest.json')
             if info.file_size>MAX_MANIFEST:raise ValueError('Project manifest is too large.')
             manifest=json.loads(z.read(info).decode('utf-8'))
-            if not isinstance(manifest,dict) or manifest.get('format')!=FORMAT or manifest.get('version')!=VERSION:raise ValueError('Unsupported project format or version.')
+            if not isinstance(manifest,dict) or manifest.get('format')!=FORMAT or manifest.get('version') not in SUPPORTED_VERSIONS:raise ValueError('Unsupported project format or version.')
+            feats=manifest.get('features',[])
+            if not isinstance(feats,list) or any(not isinstance(f,str) or f not in KNOWN_FEATURES for f in feats):
+                raise ValueError('This project uses newer features not supported by this version of Café Desk.')
             kind=manifest.get('kind');payload=manifest.get('data')
             if not isinstance(payload,dict):raise ValueError('Invalid project data.')
             if kind=='career':
@@ -106,7 +121,10 @@ def load(source,session_dir):
                 raw=z.read(info)
                 if hashlib.sha256(raw).hexdigest()!=key:raise ValueError('A project image is damaged.')
                 try:
-                    with Image.open(io.BytesIO(raw)) as img:img.verify()
+                    with Image.open(io.BytesIO(raw)) as img:
+                        if img.width*img.height>services.MAX_IMAGE_PIXELS:
+                            raise ValueError()
+                        img.verify()
                 except Exception as exc:raise ValueError('A project image is invalid.') from exc
                 decoded[key]=raw
     except (zipfile.BadZipFile,UnicodeError,json.JSONDecodeError,KeyError,OSError) as exc:raise ValueError('Could not read the project. It may be damaged or unsupported.') from exc
