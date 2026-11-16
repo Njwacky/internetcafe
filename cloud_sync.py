@@ -30,7 +30,7 @@ from typing import Callable
 
 import license_guard
 
-APP_VERSION = '0.8.0'
+APP_VERSION = '0.8.2'
 
 # Default PUBLIC Supabase project endpoint & anon key (safe for client builds — RLS + RPC enforced; NEVER put service_role here!).
 PUBLIC_PROJECT_SUPABASE_URL = 'https://rmtkppzqzxuuuhbeufjy.supabase.co'
@@ -510,6 +510,90 @@ def sync_multi_pc_sales(settings: dict, sync_secret: str, local_sales: list[dict
         err = res.get('error') if isinstance(res, dict) else 'Could not sync shop sales.'
         raise RuntimeError(str(err))
     return res
+
+
+ALLOWED_TELEMETRY_SCREENS = frozenset({
+    'Home',
+    'Price list',
+    'PDF tools',
+    'Bluetooth files',
+    'Scan & images',
+    'A4 picture sheets',
+    'Career documents',
+    'Cards & invitations',
+    'Forms creator',
+    'Receipts',
+    'Sales reports',
+    'Price settings',
+    'Business settings',
+    'AI settings',
+    'Projects & recovery',
+    'About & contact',
+    'Help & privacy',
+})
+
+
+def send_workspace_telemetry(
+    settings: dict | None,
+    *,
+    current_screen: str = 'Home',
+    screen_counts: dict[str, int] | None = None,
+    machine_id: str | None = None,
+    app_version: str = APP_VERSION,
+    os_platform: str | None = None,
+    timeout: float = 5.0,
+) -> dict:
+    """Send strictly anonymized screen-visit counts & heartbeat to Supabase.
+
+    Privacy guarantee: Only whitelisted screen names (`ALLOWED_TELEMETRY_SCREENS`),
+    integer counts, Machine ID, Shop/Station/City labels, and app version are sent.
+    Never sends document contents, filenames, or customer personal data.
+    Silently returns `{'ok': False}` when offline so shop work is never interrupted.
+    """
+    cfg = settings or {}
+    url, key = resolve_client_supabase(cfg)
+    if not url or not key:
+        return {'ok': False, 'reason': 'unconfigured'}
+    try:
+        mid = license_guard.normalize_machine_id(machine_id or license_guard.get_machine_id())
+        lic = license_guard.current_license_status()
+        shop_id = str(cfg.get('shop_id') or lic.get('shop_id') or '').strip().upper()[:40]
+        shop_name = str(cfg.get('business_name') or lic.get('customer') or 'Café Desk Station').strip()[:80]
+        station_name = str(cfg.get('station_name') or lic.get('seat_label') or default_station_name()).strip()[:40]
+        city_label = str(cfg.get('city_label') or '').strip()[:60]
+        cur_scr = current_screen if current_screen in ALLOWED_TELEMETRY_SCREENS else 'Home'
+        clean_counts: dict[str, int] = {}
+        for k, v in (screen_counts or {}).items():
+            if k in ALLOWED_TELEMETRY_SCREENS:
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if iv > 0:
+                    clean_counts[k] = min(iv, 5000)
+        import sys as _sys
+        plat = str(os_platform or _sys.platform)[:32]
+        res = _supabase_request(
+            url,
+            key,
+            'POST',
+            '/rest/v1/rpc/record_workspace_telemetry',
+            payload={
+                'p_machine_id': mid,
+                'p_shop_id': shop_id,
+                'p_shop_name': shop_name,
+                'p_station_name': station_name,
+                'p_city_label': city_label,
+                'p_app_version': str(app_version or APP_VERSION)[:24],
+                'p_os_platform': plat,
+                'p_current_screen': cur_scr,
+                'p_screen_counts': clean_counts,
+            },
+            timeout=timeout,
+        )
+        return res if isinstance(res, dict) else {'ok': False}
+    except Exception as exc:
+        return {'ok': False, 'error': str(exc)}
 
 
 # ---------------------------------------------------------------------------

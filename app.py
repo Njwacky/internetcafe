@@ -64,7 +64,7 @@ import cloud_sync
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.8.0'
+APP_BUILD='0.8.2'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -86,7 +86,7 @@ class CafeDesk(ctk.CTk):
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick)
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._last_telemetry_flush=0.0; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick)
         if settings_corrupted:
             self.status.set('⚠ Settings file damaged • staff access locked fail-closed until restored')
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
@@ -246,6 +246,11 @@ class CafeDesk(ctk.CTk):
         sh_in.insert(0,mp_cfg.get('shop_id') or lic_cur.get('shop_id') or '')
         sh_in.pack(fill='x')
 
+        label(mp_box,'Shop City / Suburb / Branch Area (optional — shown on Owner Cloud Analytics)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        city_in=entry(mp_box,'e.g. Benoni, Gauteng  or  Johannesburg CBD')
+        if mp_cfg.get('city_label'): city_in.insert(0,mp_cfg['city_label'])
+        city_in.pack(fill='x',padx=20,pady=(0,10))
+
         label(mp_box,'Optional Shared LAN / USB Sync Folder (for offline multi-PC sales sync)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         lan_row=ctk.CTkFrame(mp_box,fg_color='transparent'); lan_row.pack(fill='x',padx=20,pady=(0,10))
         lan_in=entry(lan_row,'e.g. \\\\COUNTER-PC\\CafeDeskSync or D:\\ShopSync')
@@ -274,9 +279,11 @@ class CafeDesk(ctk.CTk):
                     lan_sync_folder=lan_in.get(),
                     supabase_url=sb_url_in.get(),
                     supabase_anon_key=sb_key_in.get(),
+                    city_label=city_in.get(),
                 )
                 self.status.set(f"Saved Multi-PC station '{saved['station_name']}'" + (f" • Shop {saved['shop_id']}" if saved.get('shop_id') else ''))
                 messagebox.showinfo('Multi-PC & Cloud Settings Saved',f"Saved settings for station: {saved['station_name']}",parent=self)
+                self._flush_telemetry_async(force=True)
             except Exception as exc:
                 messagebox.showerror('Could not save settings',str(exc),parent=self)
 
@@ -312,7 +319,7 @@ class CafeDesk(ctk.CTk):
 
         def cloud_push_prices():
             try:
-                saved=settings_store.save_multi_pc_settings(st_in.get(),shop_id=sh_in.get(),lan_sync_folder=lan_in.get(),supabase_url=sb_url_in.get(),supabase_anon_key=sb_key_in.get())
+                saved=settings_store.save_multi_pc_settings(st_in.get(),shop_id=sh_in.get(),lan_sync_folder=lan_in.get(),supabase_url=sb_url_in.get(),supabase_anon_key=sb_key_in.get(),city_label=city_in.get())
             except Exception as exc:
                 return messagebox.showerror('Check settings',str(exc),parent=self)
             if not saved.get('shop_id') or not cloud_sync.is_supabase_configured(saved):
@@ -323,7 +330,7 @@ class CafeDesk(ctk.CTk):
 
         def cloud_pull_prices():
             try:
-                saved=settings_store.save_multi_pc_settings(st_in.get(),shop_id=sh_in.get(),lan_sync_folder=lan_in.get(),supabase_url=sb_url_in.get(),supabase_anon_key=sb_key_in.get())
+                saved=settings_store.save_multi_pc_settings(st_in.get(),shop_id=sh_in.get(),lan_sync_folder=lan_in.get(),supabase_url=sb_url_in.get(),supabase_anon_key=sb_key_in.get(),city_label=city_in.get())
             except Exception as exc:
                 return messagebox.showerror('Check settings',str(exc),parent=self)
             if not saved.get('shop_id') or not cloud_sync.is_supabase_configured(saved):
@@ -1001,6 +1008,47 @@ class CafeDesk(ctk.CTk):
         for child in self.container.winfo_children(): child.destroy()
         self.body=ctk.CTkScrollableFrame(self.container,fg_color='transparent',corner_radius=0); self.body.pack(fill='both',expand=True)
         {'Home':self.home,'Projects & recovery':self.projects_screen,'Help & privacy':self.help_screen,'About & contact':self.about_screen,'Price list':self.price_list_screen,'PDF tools':self.pdf_screen,'Bluetooth files':self.bluetooth_screen,'Scan & images':self.scan_screen,'A4 picture sheets':lambda:PictureSheet(self,self.body,card,label,button),'Career documents':self.career_screen,'Cards & invitations':lambda:show_cards(self,self.body,card,label,button,entry),'Forms creator':lambda:show_forms(self,self.body,card,label,button,entry),'Receipts':self.receipt_screen,'Sales reports':lambda:show_reports(self,self.body,card,label,button,entry),'Price settings':self.price_screen,'Business settings':self.business_screen,'AI settings':self.settings_screen}[name]()
+        self._note_screen_visit(name)
+
+    def _note_screen_visit(self, screen_name):
+        if screen_name not in cloud_sync.ALLOWED_TELEMETRY_SCREENS:
+            return
+        with self._telemetry_lock:
+            self._telemetry_counts[screen_name]=self._telemetry_counts.get(screen_name,0)+1
+            total_queued=sum(self._telemetry_counts.values())
+        now_m=time.monotonic()
+        if self._last_telemetry_flush==0.0 or total_queued>=5 or (now_m-self._last_telemetry_flush)>=60.0:
+            self._flush_telemetry_async()
+
+    def _flush_telemetry_async(self, force=False):
+        with self._telemetry_lock:
+            if self._telemetry_inflight:
+                return
+            snapshot=dict(self._telemetry_counts)
+            if not snapshot and not force:
+                return
+            self._telemetry_counts.clear()
+            self._telemetry_inflight=True
+            self._last_telemetry_flush=time.monotonic()
+        cur_screen=self.current or 'Home'
+        def _bg():
+            try:
+                cfg=settings_store.load_settings()
+                res=cloud_sync.send_workspace_telemetry(cfg,current_screen=cur_screen,screen_counts=snapshot,app_version=APP_BUILD)
+                if not res.get('ok') and snapshot:
+                    with self._telemetry_lock:
+                        for k,v in snapshot.items():
+                            self._telemetry_counts[k]=min(5000,self._telemetry_counts.get(k,0)+v)
+            except Exception:
+                pass
+            finally:
+                with self._telemetry_lock:
+                    self._telemetry_inflight=False
+        threading.Thread(target=_bg,daemon=True).start()
+
+    def _telemetry_tick(self):
+        self._flush_telemetry_async(force=True)
+        self.after(90000,self._telemetry_tick)
     def heading(self,parent,title,subtitle):
         label(parent,title,size=24,bold=True).pack(anchor='w',pady=(2,3)); label(parent,subtitle,size=13,color=MUTED,wraplength=740,justify='left').pack(anchor='w',pady=(0,18))
     def home(self):

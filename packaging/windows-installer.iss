@@ -1,6 +1,6 @@
 ; Build the portable app first using build-windows.bat, then compile with Inno Setup 6.
 #define MyAppName "Cafe Desk"
-#define MyAppVersion "0.8.0"
+#define MyAppVersion "0.8.2"
 [Setup]
 AppId={{4B36D389-A2D2-4A1C-9CC7-F2AF905552E7}
 AppName={#MyAppName}

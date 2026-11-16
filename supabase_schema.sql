@@ -458,3 +458,162 @@ drop policy if exists "Owner upload to cafedesk-releases" on storage.objects;
 create policy "Owner upload to cafedesk-releases"
     on storage.objects for insert to authenticated
     with check (bucket_id = 'cafedesk-releases' and public.is_cafedesk_owner());
+
+drop policy if exists "Owner update cafedesk-releases" on storage.objects;
+create policy "Owner update cafedesk-releases"
+    on storage.objects for update to authenticated
+    using (bucket_id = 'cafedesk-releases' and public.is_cafedesk_owner())
+    with check (bucket_id = 'cafedesk-releases' and public.is_cafedesk_owner());
+
+-- -----------------------------------------------------------------------------
+-- 7. ANONYMIZED WORKSPACE TELEMETRY & LIVE STATION PULSE (v0.8.2+)
+-- -----------------------------------------------------------------------------
+-- Privacy-by-design: NEVER accepts filenames, document text, customer names, or
+-- personal info. Only counts which sidebar screen/tool was opened and basic
+-- station/city/shop heartbeat metadata so the Owner Dashboard shows Most-Visited
+-- Places/Tools, Active Cities, and Online PCs.
+
+create table if not exists public.station_heartbeats (
+    machine_id      text primary key,
+    shop_id         text not null default '',
+    shop_name       text not null default '',
+    station_name    text not null default '',
+    city_label      text not null default '',
+    app_version     text not null default '',
+    os_platform     text not null default '',
+    current_screen  text not null default 'Home',
+    total_visits    bigint not null default 0,
+    first_seen_at   timestamptz not null default now(),
+    last_seen_at    timestamptz not null default now()
+);
+
+create index if not exists idx_station_heartbeats_seen on public.station_heartbeats (last_seen_at desc);
+create index if not exists idx_station_heartbeats_city on public.station_heartbeats (city_label);
+
+alter table public.station_heartbeats enable row level security;
+
+drop policy if exists "Owner full access to station_heartbeats" on public.station_heartbeats;
+create policy "Owner full access to station_heartbeats"
+    on public.station_heartbeats for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+create table if not exists public.workspace_tool_visits (
+    visit_date      date not null default current_date,
+    machine_id      text not null,
+    shop_id         text not null default '',
+    shop_name       text not null default '',
+    city_label      text not null default '',
+    screen_name     text not null,
+    visit_count     integer not null default 1 check (visit_count >= 1),
+    last_visited_at timestamptz not null default now(),
+    primary key (visit_date, machine_id, screen_name)
+);
+
+create index if not exists idx_workspace_tool_visits_date on public.workspace_tool_visits (visit_date desc);
+create index if not exists idx_workspace_tool_visits_screen on public.workspace_tool_visits (screen_name);
+
+alter table public.workspace_tool_visits enable row level security;
+
+drop policy if exists "Owner full access to workspace_tool_visits" on public.workspace_tool_visits;
+create policy "Owner full access to workspace_tool_visits"
+    on public.workspace_tool_visits for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+drop policy if exists "Owner read access to shop_sync_profiles" on public.shop_sync_profiles;
+create policy "Owner read access to shop_sync_profiles"
+    on public.shop_sync_profiles for select to authenticated
+    using (public.is_cafedesk_owner());
+
+drop policy if exists "Owner read access to shop_sync_sales" on public.shop_sync_sales;
+create policy "Owner read access to shop_sync_sales"
+    on public.shop_sync_sales for select to authenticated
+    using (public.is_cafedesk_owner());
+
+create or replace function public.record_workspace_telemetry(
+    p_machine_id text,
+    p_shop_id text default '',
+    p_shop_name text default '',
+    p_station_name text default '',
+    p_city_label text default '',
+    p_app_version text default '',
+    p_os_platform text default '',
+    p_current_screen text default 'Home',
+    p_screen_counts jsonb default '{}'::jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_mid text := upper(trim(coalesce(p_machine_id, '')));
+    v_shop text := left(regexp_replace(upper(coalesce(p_shop_id, '')), '[^A-Z0-9_-]', '', 'g'), 40);
+    v_bname text := left(trim(coalesce(p_shop_name, 'Café Desk Station')), 80);
+    v_stat text := left(trim(coalesce(p_station_name, 'Counter PC 1')), 40);
+    v_city text := left(trim(coalesce(p_city_label, '')), 60);
+    v_ver text := left(trim(coalesce(p_app_version, '')), 24);
+    v_os text := left(trim(coalesce(p_os_platform, '')), 32);
+    v_cur text := left(trim(coalesce(p_current_screen, 'Home')), 48);
+    v_key text;
+    v_val integer;
+    v_added bigint := 0;
+    v_allowed constant text[] := array[
+        'Home', 'Price list', 'PDF tools', 'Bluetooth files', 'Scan & images',
+        'A4 picture sheets', 'Career documents', 'Cards & invitations', 'Forms creator',
+        'Receipts', 'Sales reports', 'Price settings', 'Business settings',
+        'AI settings', 'Projects & recovery', 'About & contact', 'Help & privacy'
+    ];
+begin
+    if v_mid !~ '^CD-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$' then
+        return jsonb_build_object('ok', false, 'error', 'Invalid Machine ID format.');
+    end if;
+
+    if not (v_cur = any(v_allowed)) then
+        v_cur := 'Home';
+    end if;
+
+    if jsonb_typeof(p_screen_counts) = 'object' then
+        for v_key, v_val in
+            select key, least(greatest(coalesce(nullif(regexp_replace(value::text, '[^0-9]', '', 'g'), '')::integer, 0), 0), 5000)
+            from jsonb_each_text(p_screen_counts)
+        loop
+            if v_val > 0 and (v_key = any(v_allowed)) then
+                insert into public.workspace_tool_visits (
+                    visit_date, machine_id, shop_id, shop_name, city_label, screen_name, visit_count, last_visited_at
+                ) values (
+                    current_date, v_mid, v_shop, v_bname, v_city, v_key, v_val, now()
+                )
+                on conflict (visit_date, machine_id, screen_name) do update set
+                    visit_count = public.workspace_tool_visits.visit_count + excluded.visit_count,
+                    shop_id = case when excluded.shop_id <> '' then excluded.shop_id else public.workspace_tool_visits.shop_id end,
+                    shop_name = case when excluded.shop_name <> '' then excluded.shop_name else public.workspace_tool_visits.shop_name end,
+                    city_label = case when excluded.city_label <> '' then excluded.city_label else public.workspace_tool_visits.city_label end,
+                    last_visited_at = now();
+                v_added := v_added + v_val;
+            end if;
+        end loop;
+    end if;
+
+    insert into public.station_heartbeats (
+        machine_id, shop_id, shop_name, station_name, city_label,
+        app_version, os_platform, current_screen, total_visits, first_seen_at, last_seen_at
+    ) values (
+        v_mid, v_shop, v_bname, v_stat, v_city,
+        v_ver, v_os, v_cur, greatest(v_added, 1), now(), now()
+    )
+    on conflict (machine_id) do update set
+        shop_id = case when excluded.shop_id <> '' then excluded.shop_id else public.station_heartbeats.shop_id end,
+        shop_name = case when excluded.shop_name <> '' then excluded.shop_name else public.station_heartbeats.shop_name end,
+        station_name = case when excluded.station_name <> '' then excluded.station_name else public.station_heartbeats.station_name end,
+        city_label = case when excluded.city_label <> '' then excluded.city_label else public.station_heartbeats.city_label end,
+        app_version = excluded.app_version,
+        os_platform = excluded.os_platform,
+        current_screen = excluded.current_screen,
+        total_visits = public.station_heartbeats.total_visits + greatest(v_added, 0),
+        last_seen_at = now();
+
+    return jsonb_build_object('ok', true, 'recorded_visits', v_added);
+end;
+$$;
+
+grant execute on function public.record_workspace_telemetry(text, text, text, text, text, text, text, text, jsonb) to anon, authenticated;

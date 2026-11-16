@@ -2,810 +2,2014 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Café Desk — Owner Cloud Control Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#070b14">
+<title>Café Desk — Owner Cloud Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-  :root {
-    --bg: #0c1220;
-    --panel: #151f33;
-    --panel-alt: #1b2842;
-    --border: #2c3d5e;
-    --ink: #f3f6fc;
-    --muted: #9aabc7;
-    --lime: #b9ff70;
-    --lime-ink: #122116;
-    --amber: #ffd27d;
-    --red: #ff9488;
-    --blue: #7ab3ff;
+  :root{
+    --bg:#070b14; --bg-2:#0a1020;
+    --panel:rgba(19,27,45,.74); --panel-solid:#111a2b; --panel-2:rgba(26,36,58,.62);
+    --line:rgba(124,152,204,.14); --line-2:rgba(124,152,204,.26);
+    --ink:#eef4ff; --muted:#8ea1c1; --dim:#64799a;
+    --lime:#b9ff70; --lime-2:#7ee787; --lime-ink:#0a1708;
+    --blue:#7ab3ff; --violet:#b79dff; --amber:#ffd27d; --red:#ff9488; --teal:#6ee7d0; --pink:#ff9ecb;
+    --r:16px; --r-sm:11px;
+    --shadow:0 18px 44px rgba(2,6,16,.55);
+    --shadow-sm:0 8px 20px rgba(2,6,16,.35);
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-    background: var(--bg);
-    color: var(--ink);
-    line-height: 1.45;
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+    background:
+      radial-gradient(900px 520px at 12% -8%, rgba(185,255,112,.10), transparent 60%),
+      radial-gradient(820px 460px at 88% -4%, rgba(122,179,255,.12), transparent 62%),
+      radial-gradient(700px 500px at 50% 108%, rgba(183,157,255,.09), transparent 65%),
+      var(--bg);
+    color:var(--ink); line-height:1.45; -webkit-font-smoothing:antialiased;
+    letter-spacing:-0.006em;
   }
-  .topbar {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    background: rgba(12, 18, 32, 0.94);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--border);
-    padding: 14px 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .brand { display: flex; align-items: center; gap: 10px; }
-  .brand-dot {
-    width: 12px; height: 12px; border-radius: 50%;
-    background: var(--lime); box-shadow: 0 0 12px var(--lime);
-  }
-  .brand h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
-  .brand span { font-size: 12px; color: var(--lime); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
-  .user-pill { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
-  .container { max-width: 1340px; margin: 0 auto; padding: 22px 16px 64px; }
+  h1,h2,h3,h4{margin:0; letter-spacing:-0.024em}
+  a{color:inherit}
+  .hidden{display:none !important}
+  .mono{font-family:"JetBrains Mono",Consolas,monospace}
+  ::selection{background:rgba(185,255,112,.28)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:rgba(124,152,204,.26);border-radius:20px;border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-track{background:transparent}
 
-  /* Login Gate */
-  .auth-wrap {
-    max-width: 460px; margin: 54px auto; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 18px; padding: 28px 24px;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.45);
-  }
-  .auth-tag { color: var(--lime); font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-  .auth-wrap h2 { margin: 6px 0 8px; font-size: 22px; }
-  .auth-wrap p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; }
-  .tabs-mini { display: flex; gap: 6px; margin-bottom: 16px; background: #0d1424; padding: 4px; border-radius: 10px; }
-  .tabs-mini button {
-    flex: 1; padding: 8px 10px; border: none; border-radius: 8px; cursor: pointer;
-    background: transparent; color: var(--muted); font-weight: 700; font-size: 12.5px;
-  }
-  .tabs-mini button.active { background: var(--panel-alt); color: var(--lime); }
+  /* ---------- boot ---------- */
+  #bootScreen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;z-index:200;background:var(--bg)}
+  .boot-ring{width:44px;height:44px;border-radius:50%;border:2px solid rgba(124,152,204,.22);border-top-color:var(--lime);animation:spin .9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
 
-  label { display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin: 12px 0 5px; }
-  input, select, textarea {
-    width: 100%; padding: 11px 12px; border-radius: 10px;
-    border: 1px solid var(--border); background: #0d1424; color: var(--ink);
-    font-size: 14px; font-family: inherit;
+  /* ---------- auth ---------- */
+  .auth-view{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:26px 16px}
+  .auth-card{
+    width:100%;max-width:452px;background:var(--panel);backdrop-filter:blur(18px);
+    border:1px solid var(--line-2);border-radius:24px;padding:32px 28px;box-shadow:var(--shadow);
+    animation:rise .5s cubic-bezier(.2,.8,.2,1) both;
   }
-  textarea { resize: vertical; min-height: 78px; font-family: Consolas, monospace; font-size: 13px; }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--lime); }
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .auth-badge{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;background:rgba(185,255,112,.1);border:1px solid rgba(185,255,112,.28);color:var(--lime);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+  .auth-card h2{font-size:25px;margin:14px 0 7px;font-weight:800}
+  .auth-card p.lead{margin:0 0 20px;color:var(--muted);font-size:13.5px}
+  .seg{display:flex;gap:4px;padding:4px;border-radius:12px;background:rgba(7,11,20,.7);border:1px solid var(--line);margin-bottom:6px}
+  .seg button{flex:1;padding:9px 10px;border:0;border-radius:9px;background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:.18s}
+  .seg button.active{background:rgba(124,152,204,.16);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-2)}
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--muted);margin:14px 0 6px;letter-spacing:.02em}
+  input,select,textarea{
+    width:100%;padding:12px 13px;border-radius:12px;border:1px solid var(--line-2);
+    background:rgba(6,10,19,.72);color:var(--ink);font:inherit;font-size:14px;transition:.18s;
+  }
+  textarea{resize:vertical;min-height:84px;font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px;line-height:1.6}
+  input::placeholder,textarea::placeholder{color:#5b6c8b}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:rgba(185,255,112,.65);box-shadow:0 0 0 4px rgba(185,255,112,.1)}
+  select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,#8ea1c1 50%),linear-gradient(135deg,#8ea1c1 50%,transparent 50%);background-position:calc(100% - 18px) 19px,calc(100% - 13px) 19px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+  .field-hint{font-size:11.5px;color:var(--dim);margin-top:6px}
 
-  .btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 10px 16px; border-radius: 10px; border: 1px solid transparent;
-    font-weight: 700; font-size: 13.5px; cursor: pointer; transition: 0.15s;
-    text-decoration: none; white-space: nowrap;
+  /* ---------- buttons ---------- */
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 15px;border-radius:12px;
+    border:1px solid transparent;font:inherit;font-size:13px;font-weight:650;cursor:pointer;
+    text-decoration:none;white-space:nowrap;transition:transform .14s,background .18s,box-shadow .18s,border-color .18s;
   }
-  .btn-primary { background: var(--lime); color: var(--lime-ink); }
-  .btn-primary:hover { background: #a8f15c; }
-  .btn-secondary { background: var(--panel-alt); color: var(--ink); border-color: var(--border); }
-  .btn-secondary:hover { background: #263759; }
-  .btn-wa { background: #25D366; color: #092012; }
-  .btn-danger { background: rgba(255,148,136,0.14); color: var(--red); border-color: rgba(255,148,136,0.35); }
-  .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
-  .btn-block { width: 100%; margin-top: 16px; padding: 12px; }
+  .btn:active{transform:translateY(1px) scale(.995)}
+  .btn[disabled]{opacity:.55;cursor:not-allowed}
+  .btn-primary{background:linear-gradient(180deg,#c8ff8a,#a9f65c);color:var(--lime-ink);box-shadow:0 8px 22px rgba(140,255,90,.18)}
+  .btn-primary:hover{box-shadow:0 10px 26px rgba(140,255,90,.3)}
+  .btn-ghost{background:rgba(124,152,204,.1);color:var(--ink);border-color:var(--line-2)}
+  .btn-ghost:hover{background:rgba(124,152,204,.18)}
+  .btn-danger{background:rgba(255,148,136,.12);color:#ffb0a6;border-color:rgba(255,148,136,.32)}
+  .btn-danger:hover{background:rgba(255,148,136,.2)}
+  .btn-wa{background:#25d366;color:#052b12;box-shadow:0 8px 20px rgba(37,211,102,.2)}
+  .btn-sm{padding:6px 11px;font-size:11.8px;border-radius:9px;font-weight:600}
+  .btn-block{width:100%;margin-top:16px;padding:13px}
+  .btn-icon{width:38px;height:38px;padding:0;border-radius:11px}
+  .btn svg{width:15px;height:15px;flex:none}
 
-  /* Stats Grid */
-  .stats-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 12px; margin-bottom: 20px;
+  /* ---------- shell ---------- */
+  .shell{min-height:100dvh;display:flex}
+  .sidebar{
+    position:fixed;inset:0 auto 0 0;width:264px;z-index:60;display:flex;flex-direction:column;gap:8px;
+    padding:22px 16px 18px;background:linear-gradient(180deg,rgba(12,18,32,.96),rgba(8,12,22,.98));
+    border-right:1px solid var(--line);backdrop-filter:blur(18px);transition:transform .3s cubic-bezier(.2,.8,.2,1);
   }
-  .stat-card {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 14px; padding: 16px 18px;
+  .brand{display:flex;align-items:center;gap:11px;padding:2px 8px 20px}
+  .brand-mark{
+    width:38px;height:38px;border-radius:12px;display:grid;place-items:center;
+    background:linear-gradient(145deg,rgba(185,255,112,.95),rgba(110,231,208,.85));color:#08150a;
+    font-weight:800;font-size:17px;box-shadow:0 8px 22px rgba(140,255,90,.25);
   }
-  .stat-card .k { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
-  .stat-card .v { font-size: 28px; font-weight: 800; margin-top: 4px; color: var(--ink); }
-  .stat-card.lime .v { color: var(--lime); }
-  .stat-card.amber .v { color: var(--amber); }
-  .stat-card.blue .v { color: var(--blue); }
+  .brand-name{font-size:14.5px;font-weight:750;letter-spacing:-.02em}
+  .brand-sub{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.12em;font-weight:700;margin-top:2px}
+  .nav-label{font-size:9.5px;font-weight:800;color:var(--dim);letter-spacing:.14em;text-transform:uppercase;padding:14px 10px 6px}
+  .nav-item{
+    display:flex;align-items:center;gap:11px;padding:10px 11px;border-radius:12px;border:1px solid transparent;
+    background:transparent;color:var(--muted);font:inherit;font-size:13.2px;font-weight:600;cursor:pointer;
+    text-align:left;width:100%;transition:.18s;position:relative;
+  }
+  .nav-item:hover{background:rgba(124,152,204,.08);color:var(--ink)}
+  .nav-item.active{background:linear-gradient(90deg,rgba(185,255,112,.16),rgba(185,255,112,.03));border-color:rgba(185,255,112,.26);color:var(--ink)}
+  .nav-item.active::before{content:"";position:absolute;left:-16px;top:50%;transform:translateY(-50%);width:3px;height:20px;border-radius:0 4px 4px 0;background:var(--lime);box-shadow:0 0 14px var(--lime)}
+  .nav-item svg{width:17px;height:17px;flex:none;opacity:.9}
+  .nav-item .count{margin-left:auto;min-width:20px;padding:1px 6px;border-radius:999px;background:rgba(255,210,125,.16);color:var(--amber);font-size:10.5px;font-weight:800;text-align:center}
+  .side-spacer{flex:1}
+  .side-card{
+    border:1px solid var(--line);border-radius:14px;padding:12px;background:linear-gradient(160deg,rgba(185,255,112,.09),rgba(122,179,255,.05));
+  }
+  .side-card .t{font-size:11.5px;font-weight:750}
+  .side-card .s{font-size:10.8px;color:var(--muted);margin:2px 0 9px}
+  .owner-chip{display:flex;align-items:center;gap:9px;padding:10px 8px;border-top:1px solid var(--line);margin-top:10px}
+  .avatar{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:rgba(124,152,204,.16);border:1px solid var(--line-2);font-weight:800;font-size:12.5px;color:var(--lime)}
+  .owner-meta{min-width:0;flex:1}
+  .owner-meta .n{font-size:11.8px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .owner-meta .e{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .icon-btn{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;border:1px solid var(--line);background:rgba(124,152,204,.08);color:var(--muted);cursor:pointer;transition:.16s}
+  .icon-btn:hover{color:var(--ink);background:rgba(124,152,204,.18)}
+  .icon-btn svg{width:14px;height:14px}
 
-  /* Navigation Tabs */
-  .nav-tabs {
-    display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 18px;
+  .main{flex:1;min-width:0;margin-left:264px;display:flex;flex-direction:column}
+  .topbar{
+    position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:16px 28px;background:rgba(7,11,20,.76);backdrop-filter:blur(20px) saturate(140%);
+    border-bottom:1px solid var(--line);
   }
-  .nav-tabs button {
-    padding: 10px 16px; border-radius: 11px; border: 1px solid var(--border);
-    background: var(--panel); color: var(--muted); font-weight: 700; font-size: 13.5px;
-    cursor: pointer; white-space: nowrap;
-  }
-  .nav-tabs button.active {
-    background: var(--lime); color: var(--lime-ink); border-color: var(--lime);
-  }
+  .page-title{min-width:0;flex:1}
+  .page-title h1{font-size:21px;font-weight:800}
+  .page-title p{margin:2px 0 0;font-size:12.2px;color:var(--muted)}
+  .top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .live-pill{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;background:rgba(110,231,208,.1);border:1px solid rgba(110,231,208,.28);color:var(--teal);font-size:11.5px;font-weight:700}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 0 rgba(110,231,208,.55);animation:pulse 2s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 7px rgba(110,231,208,0)}100%{box-shadow:0 0 0 0 rgba(110,231,208,0)}}
+  .hamburger{display:none}
 
-  .card {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 16px; padding: 20px; margin-bottom: 18px;
-  }
-  .card h3 { margin: 0 0 4px; font-size: 17px; }
-  .card .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .content{padding:24px 28px 96px;max-width:1560px;width:100%;margin:0 auto}
+  .view{animation:fade .32s ease both}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
-  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  /* ---------- cards ---------- */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--shadow-sm);backdrop-filter:blur(14px)}
+  .card-h{display:flex;align-items:flex-start;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px}
+  .card-h h3{font-size:15px;font-weight:750;display:flex;align-items:center;gap:8px}
+  .card-h .sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .card-h .actions{display:flex;gap:7px;flex-wrap:wrap}
+  .grid{display:grid;gap:16px}
+  .g-kpi{grid-template-columns:repeat(auto-fit,minmax(178px,1fr))}
+  .g-2{grid-template-columns:1.55fr 1fr}
+  .g-2e{grid-template-columns:1fr 1fr}
+  .g-3{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .stack{display:flex;flex-direction:column;gap:16px}
+  .mt16{margin-top:16px}.mt20{margin-top:20px}
 
-  .badge {
-    display: inline-block; padding: 3px 9px; border-radius: 999px;
-    font-size: 11px; font-weight: 800; white-space: nowrap;
-  }
-  .b-ok { background: rgba(185,255,112,0.15); color: var(--lime); border: 1px solid rgba(185,255,112,0.35); }
-  .b-warn { background: rgba(255,210,125,0.15); color: var(--amber); border: 1px solid rgba(255,210,125,0.35); }
-  .b-exp { background: rgba(255,148,136,0.15); color: var(--red); border: 1px solid rgba(255,148,136,0.35); }
-  .b-blue { background: rgba(122,179,255,0.15); color: var(--blue); border: 1px solid rgba(122,179,255,0.35); }
+  /* ---------- KPI ---------- */
+  .kpi{position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 17px;transition:.22s;box-shadow:var(--shadow-sm)}
+  .kpi:hover{transform:translateY(-2px);border-color:var(--line-2);box-shadow:0 16px 34px rgba(2,6,16,.5)}
+  .kpi::after{content:"";position:absolute;inset:0;background:radial-gradient(220px 120px at 100% 0%,var(--glow,rgba(185,255,112,.13)),transparent 70%);pointer-events:none}
+  .kpi .ico{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:rgba(124,152,204,.12);border:1px solid var(--line-2);color:var(--accent,var(--lime));margin-bottom:12px}
+  .kpi .ico svg{width:16px;height:16px}
+  .kpi .k{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  .kpi .v{font-size:27px;font-weight:800;letter-spacing:-.03em;margin-top:3px;font-variant-numeric:tabular-nums}
+  .kpi .s{font-size:11.5px;color:var(--dim);margin-top:4px;display:flex;align-items:center;gap:5px}
+  .kpi .s b{color:var(--accent,var(--lime));font-weight:700}
+  .kpi.lime{--accent:var(--lime);--glow:rgba(185,255,112,.16)}
+  .kpi.blue{--accent:var(--blue);--glow:rgba(122,179,255,.16)}
+  .kpi.violet{--accent:var(--violet);--glow:rgba(183,157,255,.16)}
+  .kpi.amber{--accent:var(--amber);--glow:rgba(255,210,125,.16)}
+  .kpi.red{--accent:var(--red);--glow:rgba(255,148,136,.16)}
+  .kpi.teal{--accent:var(--teal);--glow:rgba(110,231,208,.16)}
 
-  .table-wrap { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; min-width: 780px; }
-  th, td { padding: 11px 10px; text-align: left; border-bottom: 1px solid #22314d; font-size: 13px; vertical-align: middle; }
-  th { color: var(--lime); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; background: #111a2c; }
-  .mono { font-family: Consolas, monospace; }
-  .mid-txt { color: var(--lime); font-weight: 700; font-family: Consolas, monospace; white-space: nowrap; }
+  /* ---------- badges ---------- */
+  .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:10.5px;font-weight:750;white-space:nowrap;letter-spacing:.01em}
+  .b-ok{background:rgba(185,255,112,.13);color:var(--lime);border:1px solid rgba(185,255,112,.3)}
+  .b-warn{background:rgba(255,210,125,.13);color:var(--amber);border:1px solid rgba(255,210,125,.3)}
+  .b-exp{background:rgba(255,148,136,.13);color:var(--red);border:1px solid rgba(255,148,136,.3)}
+  .b-blue{background:rgba(122,179,255,.13);color:var(--blue);border:1px solid rgba(122,179,255,.3)}
+  .b-violet{background:rgba(183,157,255,.13);color:var(--violet);border:1px solid rgba(183,157,255,.3)}
+  .b-mute{background:rgba(124,152,204,.1);color:var(--muted);border:1px solid var(--line-2)}
 
-  .toast {
-    position: fixed; bottom: 20px; right: 20px; z-index: 100;
-    background: #1b2c20; border: 1px solid var(--lime); color: var(--ink);
-    padding: 12px 18px; border-radius: 12px; font-size: 13.5px; font-weight: 600;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.5); display: none; max-width: 380px;
-  }
-  .toast.err { background: #361d22; border-color: var(--red); color: #ffd4cf; }
+  /* ---------- tables ---------- */
+  .table-wrap{overflow-x:auto;margin:0 -4px;padding:0 4px}
+  table{width:100%;border-collapse:separate;border-spacing:0;min-width:720px}
+  th{position:sticky;top:0;z-index:2;text-align:left;padding:9px 12px;font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);background:rgba(10,16,28,.94);border-bottom:1px solid var(--line-2);white-space:nowrap}
+  td{padding:12px;border-bottom:1px solid rgba(124,152,204,.08);font-size:12.6px;vertical-align:middle}
+  tbody tr{transition:background .16s}
+  tbody tr:hover{background:rgba(124,152,204,.055)}
+  tbody tr:last-child td{border-bottom:0}
+  .mid{font-family:"JetBrains Mono",monospace;font-weight:700;color:var(--lime);white-space:nowrap;font-size:12px}
+  .cell-sub{font-size:10.8px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row-actions{display:flex;gap:6px;flex-wrap:wrap}
 
-  .result-box {
-    margin-top: 16px; padding: 16px; border-radius: 12px;
-    background: #0d1526; border: 1px solid var(--lime); display: none;
+  /* ---------- charts / bars ---------- */
+  .bar-row{display:grid;grid-template-columns:132px 1fr 74px;align-items:center;gap:11px;padding:5px 0}
+  .bar-name{font-size:12.2px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar-name span{color:var(--dim);font-weight:500;font-size:10.8px;display:block}
+  .bar-track{height:9px;border-radius:99px;background:rgba(124,152,204,.12);overflow:hidden;position:relative}
+  .bar-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,rgba(185,255,112,.85),rgba(110,231,208,.85));transition:width .7s cubic-bezier(.2,.8,.2,1)}
+  .bar-fill.blue{background:linear-gradient(90deg,rgba(122,179,255,.9),rgba(183,157,255,.9))}
+  .bar-fill.violet{background:linear-gradient(90deg,rgba(183,157,255,.9),rgba(255,158,203,.9))}
+  .bar-val{font-size:12px;font-weight:750;text-align:right;font-variant-numeric:tabular-nums}
+  .bar-val span{color:var(--dim);font-weight:500;font-size:10.5px;display:block}
+
+  .chart-svg{width:100%;height:auto;display:block;overflow:visible}
+  .chart-svg .grid-line{stroke:rgba(124,152,204,.14);stroke-width:1;stroke-dasharray:3 5}
+  .chart-svg .axis-txt{fill:#64799a;font-size:10px;font-family:inherit}
+  .chart-svg .pt{fill:#0a1020;stroke:currentColor;stroke-width:2;transition:.14s;opacity:0}
+  .chart-svg .pt:hover{opacity:1;r:5}
+
+  .donut-wrap{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+  .donut{position:relative;flex:none}
+  .donut-mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none}
+  .donut-mid .n{font-size:22px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+  .donut-mid .l{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;font-weight:700}
+  .legend{flex:1;min-width:170px;display:flex;flex-direction:column;gap:7px}
+  .legend-row{display:flex;align-items:center;gap:8px;font-size:12px}
+  .legend-dot{width:8px;height:8px;border-radius:3px;flex:none}
+  .legend-row .nm{flex:1;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .legend-row .vl{font-weight:700;font-variant-numeric:tabular-nums}
+  .legend-row .pc{color:var(--dim);font-size:10.5px;width:34px;text-align:right}
+
+  .rank-row{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid rgba(124,152,204,.07)}
+  .rank-row:last-child{border-bottom:0}
+  .rank-no{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;font-size:11px;font-weight:800;background:rgba(124,152,204,.1);color:var(--muted);flex:none}
+  .rank-row:nth-child(1) .rank-no{background:rgba(185,255,112,.16);color:var(--lime)}
+  .rank-row:nth-child(2) .rank-no{background:rgba(122,179,255,.16);color:var(--blue)}
+  .rank-row:nth-child(3) .rank-no{background:rgba(183,157,255,.16);color:var(--violet)}
+  .rank-main{flex:1;min-width:0}
+  .rank-main .t{font-size:12.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rank-main .s{font-size:10.8px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rank-val{text-align:right;flex:none}
+  .rank-val .n{font-size:12.6px;font-weight:750;font-variant-numeric:tabular-nums}
+  .rank-val .u{font-size:10px;color:var(--dim)}
+
+  .live-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(124,152,204,.07)}
+  .live-row:last-child{border-bottom:0}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.on{background:var(--lime);box-shadow:0 0 9px rgba(185,255,112,.75)}
+  .dot.idle{background:var(--amber)}
+  .dot.off{background:#4a5975}
+  .live-main{flex:1;min-width:0}
+  .live-main .t{font-size:12.4px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .live-main .s{font-size:10.6px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .live-time{font-size:10.6px;color:var(--dim);flex:none}
+
+  .seg-tabs{display:inline-flex;gap:3px;padding:3px;border-radius:11px;background:rgba(6,10,19,.62);border:1px solid var(--line)}
+  .seg-tabs button{border:0;background:transparent;color:var(--dim);font:inherit;font-size:11.5px;font-weight:700;padding:6px 11px;border-radius:8px;cursor:pointer;transition:.16s}
+  .seg-tabs button.active{background:rgba(185,255,112,.16);color:var(--lime);box-shadow:inset 0 0 0 1px rgba(185,255,112,.22)}
+
+  /* ---------- download ---------- */
+  .dl-hero{position:relative;overflow:hidden;border:1px solid rgba(185,255,112,.24);background:linear-gradient(135deg,rgba(185,255,112,.13),rgba(110,231,208,.05) 45%,rgba(122,179,255,.1));border-radius:var(--r);padding:22px}
+  .dl-hero::after{content:"";position:absolute;right:-60px;top:-70px;width:230px;height:230px;border-radius:50%;background:radial-gradient(circle,rgba(185,255,112,.22),transparent 65%)}
+  .dl-hero h3{font-size:17px;font-weight:800}
+  .dl-hero p{margin:5px 0 0;color:var(--muted);font-size:12.5px;max-width:540px}
+  .dl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:18px}
+  .dl-card{background:rgba(9,14,25,.62);border:1px solid var(--line-2);border-radius:14px;padding:15px;display:flex;flex-direction:column;gap:9px;transition:.2s}
+  .dl-card:hover{border-color:rgba(185,255,112,.36);transform:translateY(-2px)}
+  .dl-card .top{display:flex;align-items:center;gap:9px}
+  .dl-ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:rgba(185,255,112,.13);color:var(--lime);flex:none}
+  .dl-ico.blue{background:rgba(122,179,255,.13);color:var(--blue)}
+  .dl-ico svg{width:17px;height:17px}
+  .dl-card .nm{font-size:13px;font-weight:700}
+  .dl-card .ds{font-size:11px;color:var(--dim);margin-top:1px}
+  .dl-card .meta{font-size:10.8px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+  .hash-row{display:flex;align-items:center;gap:7px;margin-top:2px}
+  .hash{font-family:"JetBrains Mono",monospace;font-size:9.6px;color:var(--dim);background:rgba(124,152,204,.09);border:1px solid var(--line);padding:3px 6px;border-radius:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+
+  /* ---------- modal / toast ---------- */
+  .modal{position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(3,6,12,.72);backdrop-filter:blur(8px);animation:fade .2s ease both}
+  .modal-card{width:100%;max-width:640px;max-height:90dvh;overflow:auto;background:linear-gradient(180deg,#131c2e,#0d1524);border:1px solid var(--line-2);border-radius:20px;box-shadow:0 30px 70px rgba(0,0,0,.6);animation:rise .28s cubic-bezier(.2,.8,.2,1) both}
+  .modal-head{display:flex;align-items:flex-start;gap:12px;justify-content:space-between;padding:20px 22px 14px;border-bottom:1px solid var(--line);position:sticky;top:0;background:linear-gradient(180deg,#131c2e,rgba(19,28,46,.96));z-index:2}
+  .modal-body{padding:18px 22px 22px}
+  .modal-head h3{font-size:16.5px;font-weight:780}
+  .modal-head p{margin:3px 0 0;font-size:11.8px;color:var(--muted)}
+  .toast-wrap{position:fixed;bottom:22px;right:22px;z-index:200;display:flex;flex-direction:column;gap:9px;max-width:min(400px,92vw)}
+  .toast{
+    display:flex;align-items:flex-start;gap:9px;padding:12px 15px;border-radius:13px;font-size:12.8px;font-weight:600;
+    background:rgba(18,32,24,.97);border:1px solid rgba(185,255,112,.36);color:#e8ffe0;
+    box-shadow:0 16px 40px rgba(0,0,0,.55);animation:toastIn .26s cubic-bezier(.2,.8,.2,1) both;
   }
-  .hidden { display: none !important; }
-  @media (max-width: 640px) {
-    .topbar { padding: 12px 14px; }
-    .card { padding: 15px; }
+  .toast.err{background:rgba(40,18,22,.97);border-color:rgba(255,148,136,.42);color:#ffd8d2}
+  .toast.info{background:rgba(14,24,40,.97);border-color:rgba(122,179,255,.4);color:#dcebff}
+  .toast .ic{font-weight:800;line-height:1.3}
+  @keyframes toastIn{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
+  .empty{padding:26px 12px;text-align:center;color:var(--dim);font-size:12.4px}
+  .skel{height:14px;border-radius:7px;background:linear-gradient(90deg,rgba(124,152,204,.09),rgba(124,152,204,.18),rgba(124,152,204,.09));background-size:220% 100%;animation:shim 1.3s infinite linear;margin:7px 0}
+  @keyframes shim{to{background-position:-220% 0}}
+
+  .note{display:flex;gap:9px;padding:11px 13px;border-radius:12px;background:rgba(122,179,255,.07);border:1px solid rgba(122,179,255,.22);font-size:11.8px;color:#c8dbf7;line-height:1.55}
+  .note b{color:var(--blue)}
+  .note.warn{background:rgba(255,210,125,.07);border-color:rgba(255,210,125,.24);color:#ffe9c2}
+  .note.warn b{color:var(--amber)}
+  .result-box{margin-top:16px;padding:14px;border-radius:13px;background:rgba(6,10,19,.6);border:1px solid rgba(185,255,112,.3)}
+  .result-box .ok{font-weight:800;color:var(--lime);margin-bottom:10px;font-size:12.8px}
+  .issued-item{background:rgba(16,25,42,.9);border:1px solid var(--line);border-radius:11px;padding:11px;margin-bottom:8px}
+  .issued-item .hd{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px}
+  .issued-item input{font-size:10.6px;padding:7px 9px}
+
+  .bottomnav{display:none}
+  @media (max-width:1150px){ .g-2,.g-2e{grid-template-columns:1fr} }
+  @media (max-width:1024px){
+    .sidebar{transform:translateX(-100%);box-shadow:0 0 60px rgba(0,0,0,.6)}
+    .sidebar.open{transform:none}
+    .main{margin-left:0}
+    .hamburger{display:grid}
+    .content{padding:18px 15px 108px}
+    .topbar{padding:12px 15px}
+    .page-title h1{font-size:18px}
+    .page-title p{display:none}
+    .bottomnav{
+      display:flex;position:fixed;left:0;right:0;bottom:0;z-index:70;padding:8px 8px calc(8px + env(safe-area-inset-bottom));
+      background:rgba(9,14,25,.94);backdrop-filter:blur(20px);border-top:1px solid var(--line);gap:2px;
+    }
+    .bottomnav button{flex:1;border:0;background:transparent;color:var(--dim);font:inherit;font-size:9.8px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 2px;border-radius:11px;cursor:pointer}
+    .bottomnav button svg{width:19px;height:19px}
+    .bottomnav button.active{color:var(--lime);background:rgba(185,255,112,.08)}
+    .toast-wrap{right:12px;left:12px;bottom:78px;max-width:none}
+    .modal-card{max-width:100%}
+    .bar-row{grid-template-columns:104px 1fr 62px;gap:8px}
+    .bar-name{font-size:11.5px}
   }
+  .backdrop{display:none;position:fixed;inset:0;z-index:55;background:rgba(3,6,12,.6);backdrop-filter:blur(3px)}
+  .backdrop.show{display:block}
+  @media (min-width:1025px){ .backdrop{display:none !important} }
 </style>
 </head>
 <body>
 
-<header class="topbar">
-  <div class="brand">
-    <div class="brand-dot"></div>
-    <div>
-      <h1>Café Desk — Owner Dashboard</h1>
-      <span>Mobile &amp; Laptop Cloud Control Panel</span>
-    </div>
-  </div>
-  <div class="user-pill hidden" id="userBar">
-    <span id="ownerEmailBadge"></span>
-    <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↻ Refresh</button>
-    <button class="btn btn-secondary btn-sm" onclick="openPasswordModal()">🔒 Set Password</button>
-    <button class="btn btn-danger btn-sm" onclick="signOutOwner()">Sign Out</button>
-  </div>
-</header>
+<!-- ==================== BOOT ==================== -->
+<div id="bootScreen">
+  <div class="boot-ring"></div>
+  <div style="font-size:12.5px;color:#64799a;font-weight:600;letter-spacing:.02em">Securing owner session…</div>
+</div>
 
-<!-- ==================== LOGIN GATE ==================== -->
-<main id="authSection" class="container">
-  <div class="auth-wrap">
-    <div class="auth-tag">Strictly Private • Owner Only</div>
-    <h2>Sign in to Café Desk Cloud</h2>
-    <p>Signups are disabled. Only your verified owner email (<strong>njwayelodlamini@gmail.com</strong>) can unlock this dashboard or sign keys.</p>
+<!-- ==================== AUTH ==================== -->
+<main id="authView" class="auth-view hidden">
+  <div class="auth-card">
+    <div class="auth-badge"><span style="width:6px;height:6px;border-radius:50%;background:#b9ff70;display:inline-block"></span> Private · Owner only</div>
+    <h2>Welcome back, Njwayo</h2>
+    <p class="lead">Sign in with your verified owner email <b style="color:#dbe6f7">njwayelodlamini@gmail.com</b>. Sign-ups are disabled.</p>
 
-    <div class="tabs-mini">
-      <button id="modeOtpBtn" class="active" onclick="switchAuthMode('otp')">Email Code / Magic Link</button>
-      <button id="modePwdBtn" onclick="switchAuthMode('password')">Email + Password</button>
+    <div class="seg">
+      <button id="modeOtpBtn" class="active" onclick="switchAuthMode('otp')">Email code / link</button>
+      <button id="modePwdBtn" onclick="switchAuthMode('password')">Email + password</button>
     </div>
 
-    <label for="loginEmail">Owner Email</label>
+    <label for="loginEmail">Owner email</label>
     <input id="loginEmail" type="email" value="njwayelodlamini@gmail.com" autocomplete="email">
 
     <div id="pwdBox" class="hidden">
-      <label for="loginPassword">Owner Password</label>
-      <input id="loginPassword" type="password" placeholder="Enter your password" autocomplete="current-password">
-      <button class="btn btn-primary btn-block" onclick="signInWithPassword()">Sign In with Password</button>
+      <label for="loginPassword">Password</label>
+      <input id="loginPassword" type="password" placeholder="Your owner password" autocomplete="current-password">
+      <button class="btn btn-primary btn-block" onclick="signInWithPassword()">Sign in securely</button>
     </div>
 
     <div id="otpBox">
-      <button class="btn btn-primary btn-block" id="sendOtpBtn" onclick="sendEmailOtp()">✉ Send Login Code / Link to My Email</button>
-      <div id="otpVerifyArea" class="hidden" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
-        <label for="otpCodeInput">8-Digit Code from Email (or click the link in your email)</label>
-        <input id="otpCodeInput" type="text" placeholder="e.g. 12345678" inputmode="numeric">
-        <button class="btn btn-primary btn-block" onclick="verifyEmailOtp()">✓ Verify Code &amp; Open Dashboard</button>
+      <button class="btn btn-primary btn-block" id="sendOtpBtn" onclick="sendEmailOtp()">✉ Send login code to my email</button>
+      <div id="otpVerifyArea" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+        <label for="otpCodeInput">8-digit code from email (or tap the link)</label>
+        <input id="otpCodeInput" type="text" inputmode="numeric" placeholder="12345678" autocomplete="one-time-code">
+        <button class="btn btn-primary btn-block" onclick="verifyEmailOtp()">Verify &amp; open console</button>
       </div>
     </div>
-    <p id="authMsg" style="margin-top:14px; margin-bottom:0; font-size:13px; color:var(--lime);"></p>
+    <p id="authMsg" style="margin:14px 0 0;font-size:12.4px;color:var(--lime);min-height:17px"></p>
   </div>
 </main>
 
-<!-- ==================== OWNER DASHBOARD ==================== -->
-<main id="appSection" class="container hidden">
+<!-- ==================== APP ==================== -->
+<div id="appView" class="shell hidden">
+  <div class="backdrop" id="backdrop" onclick="toggleSidebar(false)"></div>
 
-  <!-- KPI Summary Cards -->
-  <div class="stats-grid">
-    <div class="stat-card lime">
-      <div class="k">Active Computers</div>
-      <div class="v" id="statActive">0</div>
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">C</div>
+      <div>
+        <div class="brand-name">Café Desk</div>
+        <div class="brand-sub">Owner Console</div>
+      </div>
     </div>
-    <div class="stat-card blue">
-      <div class="k">Multi-PC Shops</div>
-      <div class="v" id="statShops">0</div>
+
+    <div class="nav-label">Monitor</div>
+    <button class="nav-item active" data-nav="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
+      Overview
+    </button>
+    <button class="nav-item" data-nav="analytics">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16l3.6-4.6 3 2.4L20 7"/></svg>
+      Analytics &amp; places
+    </button>
+
+    <div class="nav-label">Operate</div>
+    <button class="nav-item" data-nav="keys">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="15.5" r="4"/><path d="M11.4 12.6L20 4"/><path d="M16.5 7.5l2.4 2.4"/><path d="M19 5l1.6 1.6"/></svg>
+      Issue &amp; sign keys
+    </button>
+    <button class="nav-item" data-nav="requests">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 13.5l2.4-7.2A2 2 0 018.3 5h7.4a2 2 0 011.9 1.3L20 13.5V18a1 1 0 01-1 1H5a1 1 0 01-1-1z"/><path d="M4 13.5h4.2l1.3 2h5l1.3-2H20"/></svg>
+      Pending requests
+      <span class="count hidden" id="navReqCount">0</span>
+    </button>
+    <button class="nav-item" data-nav="fleet">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2c3.6 1.9 5.4 5.2 5.4 9l-2.6 2.6-5.4-5.4L12 3.2z"/><path d="M9.4 9.4L4.6 14.2l-1.2 4.4 4.4-1.2 4.8-4.8"/><circle cx="14.6" cy="8" r="1.1"/></svg>
+      Fleet &amp; updates
+    </button>
+
+    <div class="side-spacer"></div>
+
+    <div class="side-card">
+      <div class="t">⬇ Café Desk for Windows</div>
+      <div class="s">Installer + USB portable build</div>
+      <button class="btn btn-primary btn-sm" style="width:100%" onclick="openDownloadHub()">Get the app</button>
     </div>
-    <div class="stat-card">
-      <div class="k">PDF Unlock Add-ons</div>
-      <div class="v" id="statAddons">0</div>
+
+    <div class="owner-chip">
+      <div class="avatar" id="avatarInitial">N</div>
+      <div class="owner-meta">
+        <div class="n" id="ownerName">Owner</div>
+        <div class="e" id="ownerEmailSide">—</div>
+      </div>
+      <button class="icon-btn" title="Set password" onclick="openPasswordModal()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V8a4 4 0 018 0v2.5"/></svg>
+      </button>
+      <button class="icon-btn" title="Sign out" onclick="signOutOwner()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M15 4.5h2.5A2.5 2.5 0 0120 7v10a2.5 2.5 0 01-2.5 2.5H15"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9"/></svg>
+      </button>
     </div>
-    <div class="stat-card amber">
-      <div class="k">Expiring ≤ 30 Days</div>
-      <div class="v" id="statExpiring">0</div>
-    </div>
-    <div class="stat-card amber">
-      <div class="k">Pending Requests</div>
-      <div class="v" id="statPending">0</div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn hamburger" onclick="toggleSidebar(true)" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg>
+      </button>
+      <div class="page-title">
+        <h1 id="pageTitle">Overview</h1>
+        <p id="pageSub">Live pulse of every Café Desk station</p>
+      </div>
+      <div class="top-actions">
+        <span class="live-pill"><i class="live-dot"></i><span id="liveLabel">Live</span></span>
+        <button class="btn btn-ghost btn-icon" title="Refresh data" onclick="refreshAll(true)" id="refreshBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.6 6"/><path d="M20 5v6h-6"/></svg>
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="openDownloadHub()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19h14"/></svg>
+          Download app
+        </button>
+      </div>
+    </header>
+
+    <div class="content">
+      <section class="view" id="view-overview">
+        <div class="grid g-kpi" id="kpiGrid"></div>
+
+        <div class="mt20 dl-hero">
+          <h3>Café Desk for Windows — ready to install</h3>
+          <p>Download the signed Windows 10/11 installer or the plug-and-play USB folder and hand it straight to a customer. Every build is published automatically from GitHub with SHA-256 verification.</p>
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:14px">
+            <button class="btn btn-primary" onclick="openDownloadHub('exe')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19h14"/></svg>
+              Windows installer (.exe)
+            </button>
+            <button class="btn btn-ghost" onclick="openDownloadHub('zip')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5V7a1 1 0 011-1h14a1 1 0 011 1v1.5"/><path d="M4 8.5h16V18a1 1 0 01-1 1H5a1 1 0 01-1-1z"/><path d="M10 12h4"/></svg>
+              Portable USB (.zip)
+            </button>
+            <button class="btn btn-ghost" onclick="openDownloadHub()">Download hub →</button>
+          </div>
+        </div>
+
+        <div class="grid g-2 mt20">
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Activity trend</h3>
+                <div class="sub" id="trendSub">Tool opens across all stations</div>
+              </div>
+              <div class="seg-tabs" id="rangeTabs">
+                <button data-days="7" onclick="setRange(7)">7d</button>
+                <button data-days="14" class="active" onclick="setRange(14)">14d</button>
+                <button data-days="30" onclick="setRange(30)">30d</button>
+                <button data-days="90" onclick="setRange(90)">90d</button>
+              </div>
+            </div>
+            <div id="trendChart"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Most visited tools</h3>
+                <div class="sub">Last 14 days</div>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="switchView('analytics')">Explore</button>
+            </div>
+            <div id="topTools"></div>
+          </div>
+        </div>
+
+        <div class="grid g-2 mt16">
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Live stations</h3>
+                <div class="sub">Heartbeat from every counter PC</div>
+              </div>
+              <span class="badge b-mute" id="stationCount">0 stations</span>
+            </div>
+            <div id="liveStations"></div>
+          </div>
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Recently issued</h3>
+                <div class="sub">Latest signed machine keys</div>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="switchView('keys')">All keys</button>
+            </div>
+            <div id="recentKeys"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view hidden" id="view-analytics">
+        <div class="grid g-kpi" id="analyticsKpis"></div>
+
+        <div class="grid g-2 mt20">
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Most visited places</h3>
+                <div class="sub" id="placesSub">Every Café Desk tool, ranked by how often it's opened</div>
+              </div>
+              <div class="seg-tabs" id="rangeTabs2">
+                <button data-days="7" onclick="setRange(7)">7d</button>
+                <button data-days="14" class="active" onclick="setRange(14)">14d</button>
+                <button data-days="30" onclick="setRange(30)">30d</button>
+                <button data-days="90" onclick="setRange(90)">90d</button>
+              </div>
+            </div>
+            <div id="placesBars"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Tool mix</h3>
+                <div class="sub">Share of visits by category</div>
+              </div>
+            </div>
+            <div id="toolMix"></div>
+          </div>
+        </div>
+
+        <div class="grid g-2 mt16">
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Visits by city / area</h3>
+                <div class="sub">Where the busiest walk-in traffic is</div>
+              </div>
+            </div>
+            <div id="cityBars"></div>
+          </div>
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Online right now</h3>
+                <div class="sub">Seen in the last 5 minutes</div>
+              </div>
+              <span class="live-pill"><i class="live-dot"></i><span id="onlineCountTxt">0</span></span>
+            </div>
+            <div id="onlineList"></div>
+          </div>
+        </div>
+
+        <div class="grid g-2 mt16">
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Active computers</h3>
+                <div class="sub">Ranked by visits in range</div>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Station</th><th>Shop / area</th><th>Top tool</th><th style="text-align:right">Visits</th><th>Last seen</th></tr></thead>
+                <tbody id="machineTable"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Shop sales overview</h3>
+                <div class="sub">Synced from each shop's sales ledger</div>
+              </div>
+            </div>
+            <div id="salesOverview"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view hidden" id="view-keys">
+        <div class="card">
+          <div class="card-h">
+            <div>
+              <h3>Issue &amp; sign license keys</h3>
+              <div class="sub">Ed25519 <code class="mono">CDLIC1</code> / <code class="mono">CDADD1</code> keys are signed in your cloud vault and pushed live to Supabase — no private key ever leaves the server.</div>
+            </div>
+          </div>
+
+          <div class="grid g-3" style="gap:12px">
+            <div>
+              <label>Customer / internet café</label>
+              <input id="genCustomer" type="text" placeholder="e.g. Sunrise Cyber Café">
+            </div>
+            <div>
+              <label>Package</label>
+              <select id="genMode">
+                <option value="license">Standard 1-year license (CDLIC1)</option>
+                <option value="addon">Paid add-on only — PDF password remover</option>
+                <option value="combo">Combo — license + PDF remover</option>
+                <option value="multi_seat1">Multi-PC — PDF unlock on seat 1 only</option>
+                <option value="multi_all">Multi-PC — PDF unlock on all seats</option>
+              </select>
+            </div>
+            <div>
+              <label>Validity (days)</label>
+              <input id="genDays" type="number" value="365" min="1" max="3650">
+            </div>
+            <div>
+              <label>Shop ID (optional, for 2+ PCs)</label>
+              <input id="genShopId" type="text" placeholder="Auto, e.g. SHOP-SUNRISE">
+            </div>
+          </div>
+
+          <label>Machine ID(s)</label>
+          <textarea id="genMachines" placeholder="CD-8F3A-91BC-204E=Counter PC 1&#10;CD-4411-8899-AA22=Desk 2"></textarea>
+          <div class="field-hint">Enter one Machine ID, or paste 2–20 IDs one per line / comma-separated. Optional <code class="mono">=Desk name</code> labels each seat.</div>
+
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:16px">
+            <button class="btn btn-primary" id="genSubmitBtn" onclick="issueKeysNow()">⚡ Sign &amp; activate in cloud</button>
+          </div>
+
+          <div id="issuedResultBox" class="result-box hidden"></div>
+        </div>
+
+        <div class="card mt16">
+          <div class="card-h">
+            <div>
+              <h3>All machines &amp; shops</h3>
+              <div class="sub">Search by shop, machine ID or license ID. Revoke to lock a PC remotely; WhatsApp to send renewals.</div>
+            </div>
+            <div class="actions">
+              <button class="btn btn-ghost btn-sm" onclick="exportCsv()">⬇ Export CSV</button>
+            </div>
+          </div>
+
+          <div class="grid g-3" style="gap:12px;margin-bottom:14px">
+            <div style="grid-column:span 2;min-width:0">
+              <input id="searchKeys" type="search" placeholder="Search machine ID, shop, shop ID or license ID…" oninput="renderKeysTable()">
+            </div>
+            <div>
+              <select id="filterKeys" onchange="renderKeysTable()">
+                <option value="all">All statuses</option>
+                <option value="active">Active</option>
+                <option value="expiring">Expiring ≤ 30 days</option>
+                <option value="expired">Expired</option>
+                <option value="revoked">Revoked</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Machine ID</th><th>Shop / seat</th><th>Type</th><th>Expires</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="keysTbody"><tr><td colspan="6" class="empty">Loading keys…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view hidden" id="view-requests">
+        <div class="card">
+          <div class="card-h">
+            <div>
+              <h3>Customer activation requests</h3>
+              <div class="sub">When a shop clicks “Request activation”, their Machine ID and station land here. Approve to unlock the PC over the internet instantly.</div>
+            </div>
+            <span class="badge b-warn" id="reqPageCount">0 pending</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Requested</th><th>Machine ID</th><th>Shop &amp; station</th><th>Wants</th><th>Contact</th><th>Action</th></tr></thead>
+              <tbody id="reqsTbody"><tr><td colspan="6" class="empty">No pending requests right now.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view hidden" id="view-fleet">
+        <div class="card">
+          <div class="card-h">
+            <div>
+              <h3>Publish an over-the-air update</h3>
+              <div class="sub">Upload a new <code class="mono">CafeDesk-Setup.exe</code> (or paste a GitHub Release link). SHA-256 is computed in your browser before publishing.</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="openDownloadHub()">Download current build</button>
+          </div>
+
+          <div class="grid g-2e" style="gap:12px">
+            <div>
+              <label>New version (e.g. 0.8.3)</label>
+              <input id="relVersion" type="text" placeholder="0.8.3">
+            </div>
+            <div>
+              <label>Installer file (.exe / .zip)</label>
+              <input id="relFile" type="file" accept=".exe,.zip" onchange="handleReleaseFilePicked(this)">
+            </div>
+            <div>
+              <label>HTTPS download URL</label>
+              <input id="relUrl" type="url" placeholder="https://github.com/Njwacky/internetcafe/releases/download/v0.8.3/CafeDesk-Setup.exe">
+            </div>
+            <div>
+              <label>SHA-256 checksum (64 hex)</label>
+              <input id="relSha" type="text" class="mono" placeholder="Auto-calculated">
+            </div>
+          </div>
+
+          <label>Release notes</label>
+          <textarea id="relNotes" style="min-height:64px;font-family:inherit" placeholder="Faster PDF preview, new templates, bug fixes…"></textarea>
+
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:15px">
+            <button class="btn btn-primary" id="pubRelBtn" onclick="publishReleaseNow()">🚀 Upload &amp; publish</button>
+            <button class="btn btn-ghost" onclick="syncGithubRelease()">🔄 Sync latest GitHub build</button>
+          </div>
+        </div>
+
+        <div class="card mt16">
+          <div class="card-h">
+            <div><h3>Published releases</h3><div class="sub">Auto-update offers these to every customer PC</div></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Version</th><th>Published</th><th>Checksum</th><th>Notes</th><th>Download</th></tr></thead>
+              <tbody id="releasesTbody"><tr><td colspan="5" class="empty">No remote updates published yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card mt16">
+          <div class="card-h"><div><h3>Kill switch</h3><div class="sub">Instantly revoke a stolen or unpaid PC</div></div></div>
+          <div class="note">Revoking takes effect the next time that PC checks in online. Restore at any time from <b>Issue &amp; sign keys</b>.</div>
+          <div class="table-wrap mt16">
+            <table>
+              <thead><tr><th>Machine ID</th><th>Shop</th><th>Expires</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="killTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 
-  <!-- Navigation Tabs -->
-  <nav class="nav-tabs">
-    <button class="active" data-tab="tabIssue" onclick="showTab('tabIssue', this)">⚡ Issue Single / Multi-PC Keys</button>
-    <button data-tab="tabKeys" onclick="showTab('tabKeys', this)">🔑 All Machines &amp; Shops</button>
-    <button data-tab="tabRequests" onclick="showTab('tabRequests', this)">📥 Pending Requests <span id="reqCountBadge"></span></button>
-    <button data-tab="tabReleases" onclick="showTab('tabReleases', this)">🚀 Remote App Updates</button>
+  <nav class="bottomnav">
+    <button class="active" data-nav="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
+      Overview
+    </button>
+    <button data-nav="analytics">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16l3.6-4.6 3 2.4L20 7"/></svg>
+      Places
+    </button>
+    <button data-nav="keys">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="15.5" r="4"/><path d="M11.4 12.6L20 4"/><path d="M16.5 7.5l2.4 2.4"/></svg>
+      Keys
+    </button>
+    <button data-nav="requests">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 13.5l2.4-7.2A2 2 0 018.3 5h7.4a2 2 0 011.9 1.3L20 13.5V18a1 1 0 01-1 1H5a1 1 0 01-1-1z"/><path d="M4 13.5h4.2l1.3 2h5l1.3-2H20"/></svg>
+      Requests
+    </button>
+    <button data-nav="fleet">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2c3.6 1.9 5.4 5.2 5.4 9l-2.6 2.6-5.4-5.4L12 3.2z"/><path d="M9.4 9.4L4.6 14.2l-1.2 4.4 4.4-1.2 4.8-4.8"/></svg>
+      Fleet
+    </button>
   </nav>
+</div>
 
-  <!-- TAB 1: ISSUE SINGLE OR MULTI-PC KEYS -->
-  <section id="tabIssue" class="tab-pane">
-    <div class="card">
-      <h3>Generate &amp; Cloud-Activate License or Paid Add-on Keys</h3>
-      <div class="sub">Signs genuine Ed25519 <code>CDLIC1</code> / <code>CDADD1</code> keys on your secure cloud vault and saves them live to Supabase — so the customer can just click <strong>"☁ Check Online Approval"</strong> on their PC (or you can WhatsApp the key in 1 tap).</div>
-
-      <div class="form-grid">
-        <div>
-          <label>Customer / Internet Café Name</label>
-          <input id="genCustomer" type="text" placeholder="e.g. Sunrise Cyber Café">
-        </div>
-        <div>
-          <label>Key / Package Type</label>
-          <select id="genMode">
-            <option value="license">Standard 1-Year License (CDLIC1)</option>
-            <option value="addon">PAID ADD-ON ONLY: PDF Password Remover (CDADD1)</option>
-            <option value="combo">Combo: 1-Year License + PDF Password Remover</option>
-            <option value="multi_seat1">Multi-PC Shop: PDF Unlock on Seat 1 (Cashier) Only</option>
-            <option value="multi_all">Multi-PC Shop: PDF Unlock on ALL Seats</option>
-          </select>
-        </div>
-        <div>
-          <label>Validity (Days)</label>
-          <input id="genDays" type="number" value="365" min="1" max="3650">
-        </div>
-        <div>
-          <label>Optional Shop ID (for 2+ PCs)</label>
-          <input id="genShopId" type="text" placeholder="Auto e.g. SHOP-SUNRISE">
-        </div>
+<!-- ==================== DOWNLOAD HUB ==================== -->
+<div id="dlModal" class="modal hidden" onclick="if(event.target===this)closeModal('dlModal')">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <h3>Download Café Desk for Windows</h3>
+        <p id="dlVersionLine">Checking the latest published build…</p>
       </div>
-
-      <label>Machine ID(s) — Enter 1 Machine ID, or paste 2–20 Machine IDs (one per line or comma-separated; optional <code>=Desk Name</code>)</label>
-      <textarea id="genMachines" placeholder="CD-8F3A-91BC-204E=Counter PC 1&#10;CD-4411-8899-AA22=Desk 2"></textarea>
-
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <button class="btn btn-primary" id="genSubmitBtn" onclick="issueKeysNow()">⚡ Sign &amp; Activate in Cloud Now</button>
-      </div>
-
-      <div id="issuedResultBox" class="result-box"></div>
+      <button class="icon-btn" onclick="closeModal('dlModal')" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
     </div>
-  </section>
-
-  <!-- TAB 2: ALL ISSUED KEYS & SHOPS -->
-  <section id="tabKeys" class="tab-pane hidden">
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
-        <div>
-          <h3 style="margin:0;">Issued Machine IDs, Multi-PC Seats &amp; Kill-Switch</h3>
-          <div class="sub" style="margin:2px 0 0;">Search by Shop name, Shop ID, or Machine ID. Click <strong>Revoke</strong> to block a PC remotely, or <strong>WhatsApp</strong> to send renewal reminders.</div>
-        </div>
-        <button class="btn btn-secondary btn-sm" onclick="exportCsv()">⬇ Download Excel CSV</button>
+    <div class="modal-body">
+      <div id="dlHubBody"></div>
+      <div class="note mt16">
+        <span>🛡️</span>
+        <div>Every build is compiled by GitHub Actions from this repository and published with a SHA-256 checksum. Windows SmartScreen may ask for confirmation on first run — choose <b>More info → Run anyway</b>.</div>
       </div>
-
-      <input id="searchKeys" type="search" placeholder="Search Machine ID (CD-...), Shop name, Shop ID, or License ID..." oninput="renderKeysTable()" style="margin-bottom:14px;">
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Machine ID</th>
-              <th>Shop / Seat</th>
-              <th>Type</th>
-              <th>Expires</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="keysTbody">
-            <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">Loading keys…</td></tr>
-          </tbody>
-        </table>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+        <button class="btn btn-ghost btn-sm" onclick="copyDownloadLink()">⧉ Copy download link</button>
+        <a class="btn btn-wa btn-sm" id="dlWhatsapp" target="_blank" rel="noopener" href="#">💬 Share on WhatsApp</a>
+        <a class="btn btn-ghost btn-sm" id="dlReleasePage" target="_blank" rel="noopener" href="#">All releases ↗</a>
+        <button class="btn btn-ghost btn-sm" onclick="syncGithubRelease()">🔄 Sync to auto-update</button>
       </div>
-    </div>
-  </section>
-
-  <!-- TAB 3: PENDING ACTIVATION REQUESTS -->
-  <section id="tabRequests" class="tab-pane hidden">
-    <div class="card">
-      <h3>Customer Online Activation Requests</h3>
-      <div class="sub">When a shop clicks to request activation, their Machine ID and Computer Name land here. Click <strong>✓ Approve &amp; Sign</strong> to unlock their PC immediately over the internet.</div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Requested</th>
-              <th>Machine ID</th>
-              <th>Shop &amp; Station</th>
-              <th>Wants</th>
-              <th>Contact</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="reqsTbody">
-            <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No pending requests right now.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- TAB 4: PUBLISH REMOTE APP UPDATES -->
-  <section id="tabReleases" class="tab-pane hidden">
-    <div class="card">
-      <h3>Publish Over-the-Internet App Update (Zero Shop Visits)</h3>
-      <div class="sub">Upload a new <code>CafeDesk-Setup.exe</code> (or paste a GitHub Releases HTTPS link). Your browser automatically calculates the <strong>SHA-256 security checksum</strong> and publishes it to all customer PCs.</div>
-
-      <div class="form-grid">
-        <div>
-          <label>New Version Number (must be higher than shop's current version, e.g. 0.8.1)</label>
-          <input id="relVersion" type="text" placeholder="0.8.1">
-        </div>
-        <div>
-          <label>Pick Installer File (.exe / .zip) — Auto-computes SHA-256 &amp; uploads to Supabase Storage</label>
-          <input id="relFile" type="file" accept=".exe,.zip" onchange="handleReleaseFilePicked(this)">
-        </div>
-      </div>
-
-      <div class="form-grid">
-        <div>
-          <label>HTTPS Download URL (auto-filled on upload, or paste GitHub Release URL)</label>
-          <input id="relUrl" type="url" placeholder="https://rmtkppzqzxuuuhbeufjy.supabase.co/storage/v1/object/public/cafedesk-releases/...">
-        </div>
-        <div>
-          <label>64-Character SHA-256 Checksum (auto-computed)</label>
-          <input id="relSha" type="text" class="mono" placeholder="Auto-calculated when you choose a file above">
-        </div>
-      </div>
-
-      <label>What's New / Release Notes (shown to shop staff before updating)</label>
-      <textarea id="relNotes" style="min-height:64px; font-family:inherit;" placeholder="e.g. Faster PDF preview, new templates, and bug fixes."></textarea>
-
-      <div style="margin-top:14px;">
-        <button class="btn btn-primary" id="pubRelBtn" onclick="publishReleaseNow()">🚀 Upload &amp; Publish Remote Update</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>Published Releases</h3>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Version</th>
-              <th>Published</th>
-              <th>SHA-256 Checksum</th>
-              <th>Release Notes</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody id="releasesTbody"></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-</main>
-
-<!-- Set Password Modal -->
-<div id="pwdModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px;">
-  <div class="card" style="max-width:400px;width:100%;margin:0;">
-    <h3>Set / Update Owner Password</h3>
-    <div class="sub">Set a password so next time on your phone or laptop you can log in directly with Email + Password.</div>
-    <label>New Password (8+ characters)</label>
-    <input id="newOwnerPwd" type="password" placeholder="Choose a strong password">
-    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
-      <button class="btn btn-secondary" onclick="document.getElementById('pwdModal').classList.add('hidden')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveOwnerPassword()">Save Password</button>
     </div>
   </div>
 </div>
 
-<div id="toast" class="toast"></div>
+<!-- ==================== PASSWORD MODAL ==================== -->
+<div id="pwdModal" class="modal hidden" onclick="if(event.target===this)closeModal('pwdModal')">
+  <div class="modal-card" style="max-width:430px">
+    <div class="modal-head">
+      <div><h3>Set owner password</h3><p>Sign in in one tap from your phone or laptop.</p></div>
+      <button class="icon-btn" onclick="closeModal('pwdModal')" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <label>New password (8+ characters)</label>
+      <input id="newOwnerPwd" type="password" placeholder="Choose a strong password" autocomplete="new-password">
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-ghost" onclick="closeModal('pwdModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveOwnerPassword()">Save password</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
 
 <script>
-  const SUPABASE_URL = "https://rmtkppzqzxuuuhbeufjy.supabase.co";
-  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtdGtwcHpxenh1dXVoYmV1Zmp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ4NDg5ODksImV4cCI6MjExMDQyNDk4OX0.FES1qZBI3btnS3Z96x17pXh3hCneM37mz-tKW7jU2cc";
-  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+/* ============================================================
+   Café Desk — Owner Cloud Console
+   Single-file dashboard: auth, licensing, telemetry analytics,
+   1-click Windows downloads.
+   ============================================================ */
+const SUPABASE_URL = "https://rmtkppzqzxuuuhbeufjy.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtdGtwcHpxenh1dXVoYmV1Zmp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ4NDg5ODksImV4cCI6MjExMDQyNDk4OX0.FES1qZBI3btnS3Z96x17pXh3hCneM37mz-tKW7jU2cc";
+const OWNER_EMAIL = "njwayelodlamini@gmail.com";
+const REPO = "Njwacky/internetcafe";
+const DL_EXE = `https://github.com/${REPO}/releases/latest/download/CafeDesk-Setup.exe`;
+const DL_ZIP = `https://github.com/${REPO}/releases/latest/download/CafeDesk-Windows-USB-Portable.zip`;
+const DL_SUMS = `https://github.com/${REPO}/releases/latest/download/CafeDesk-Release-Checksums.json`;
+const DL_PAGE = `https://github.com/${REPO}/releases/latest`;
 
-  let allKeys = [];
-  let allReqs = [];
-  let allReleases = [];
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  function notify(msg, isErr = false) {
-    const el = document.getElementById("toast");
-    el.textContent = msg;
-    el.className = isErr ? "toast err" : "toast";
-    el.style.display = "block";
-    clearTimeout(window._toastTimer);
-    window._toastTimer = setTimeout(() => { el.style.display = "none"; }, 4200);
+const state = {
+  keys: [], reqs: [], releases: [], visits: [], stations: [], sales: [],
+  gh: null, sums: null, days: 14, view: "overview", email: "",
+  lastSync: null, telemetryError: false, loading: false,
+};
+
+const TOOL_GROUPS = {
+  "Documents": ["PDF tools", "Scan & images", "A4 picture sheets", "Career documents"],
+  "Print & pricing": ["Price list", "Price settings", "Receipts"],
+  "Design": ["Cards & invitations", "Forms creator"],
+  "Business ops": ["Business settings", "Sales reports", "AI settings"],
+  "Files & devices": ["Bluetooth files", "Projects & recovery"],
+  "Support": ["About & contact", "Help & privacy"],
+  "Home": ["Home"],
+};
+const GROUP_COLORS = {
+  "Documents": "#b9ff70", "Print & pricing": "#7ab3ff", "Design": "#b79dff",
+  "Business ops": "#ffd27d", "Files & devices": "#6ee7d0", "Support": "#ff9ecb", "Home": "#8ea1c1",
+};
+const TOOL_TO_GROUP = {};
+for (const [g, list] of Object.entries(TOOL_GROUPS)) for (const t of list) TOOL_TO_GROUP[t] = g;
+
+/* ---------------- tiny helpers ---------------- */
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const nf = new Intl.NumberFormat("en-ZA");
+
+function esc(v) {
+  const d = document.createElement("div");
+  d.textContent = v == null ? "" : String(v);
+  return d.innerHTML;
+}
+function attr(v) { return esc(v).replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+function num(v) { return nf.format(Math.round(Number(v) || 0)); }
+function money(cents, cur = "R") {
+  const val = (Number(cents) || 0) / 100;
+  return cur + val.toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function isoDay(d) {
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return z.toISOString().slice(0, 10);
+}
+function relTime(iso) {
+  if (!iso) return "never";
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return "—";
+  const diff = Math.max(0, Date.now() - t);
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  const d = Math.floor(h / 24);
+  if (d < 30) return d + "d ago";
+  return new Date(iso).toLocaleDateString("en-ZA", { day: "2-digit", month: "short" });
+}
+function shortId(v, n = 12) { const s = String(v || ""); return s.length > n ? s.slice(0, n) + "…" : s; }
+
+function toast(msg, kind = "ok") {
+  const wrap = $("#toastWrap");
+  if (!wrap) return;
+  const el = document.createElement("div");
+  el.className = "toast" + (kind === "err" ? " err" : kind === "info" ? " info" : "");
+  el.innerHTML = `<span class="ic">${kind === "err" ? "!" : kind === "info" ? "i" : "✓"}</span><div>${esc(msg)}</div>`;
+  wrap.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = "opacity .3s, transform .3s";
+    el.style.opacity = "0";
+    el.style.transform = "translateX(16px)";
+    setTimeout(() => el.remove(), 320);
+  }, 4600);
+}
+
+/* ---------------- icons ---------------- */
+const ICONS = {
+  monitor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9 20h6"/><path d="M12 16.5V20"/></svg>',
+  shop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 9.5V19a1 1 0 001 1h14a1 1 0 001-1V9.5"/><path d="M3 9.5L5.2 5h13.6L21 9.5"/><path d="M9 20v-5h6v5"/></svg>',
+  pulse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.2-5 3.4 10L15 12h6"/></svg>',
+  cash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="6" width="18" height="12" rx="2.4"/><circle cx="12" cy="12" r="2.6"/><path d="M6.5 9.5v5"/><path d="M17.5 9.5v5"/></svg>',
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 13.5l2.4-7.2A2 2 0 018.3 5h7.4a2 2 0 011.9 1.3L20 13.5V18a1 1 0 01-1 1H5a1 1 0 01-1-1z"/><path d="M4 13.5h4.2l1.3 2h5l1.3-2H20"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6V12l3 1.8"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 21s6.5-6.1 6.5-10.5A6.5 6.5 0 105.5 10.5C5.5 14.9 12 21 12 21z"/><circle cx="12" cy="10.3" r="2.4"/></svg>',
+  sparkle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3.5l1.9 4.9 4.9 1.9-4.9 1.9L12 17.1l-1.9-4.9L5.2 10.3l4.9-1.9z"/></svg>',
+};
+
+/* ---------------- auth ---------------- */
+function switchAuthMode(mode) {
+  $("#modeOtpBtn").classList.toggle("active", mode === "otp");
+  $("#modePwdBtn").classList.toggle("active", mode === "password");
+  $("#otpBox").classList.toggle("hidden", mode !== "otp");
+  $("#pwdBox").classList.toggle("hidden", mode !== "password");
+}
+
+async function sendEmailOtp() {
+  const email = $("#loginEmail").value.trim();
+  const btn = $("#sendOtpBtn");
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + window.location.pathname },
+  });
+  btn.disabled = false;
+  btn.textContent = "✉ Resend login code";
+  if (error) return toast(error.message, "err");
+  $("#otpVerifyArea").classList.remove("hidden");
+  $("#authMsg").textContent = "Check " + email + " for your sign-in link or 8-digit code.";
+  toast("Login code sent to " + email, "info");
+}
+
+async function verifyEmailOtp() {
+  const email = $("#loginEmail").value.trim();
+  const token = $("#otpCodeInput").value.trim();
+  if (!token) return toast("Enter the code from your email.", "err");
+  const { error } = await sb.auth.verifyOtp({ email, token, type: "email" });
+  if (error) return toast(error.message, "err");
+  toast("Welcome back!");
+}
+
+async function signInWithPassword() {
+  const email = $("#loginEmail").value.trim();
+  const password = $("#loginPassword").value;
+  if (!password) return toast("Enter your password.", "err");
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) return toast(error.message, "err");
+  toast("Signed in!");
+}
+
+async function signOutOwner() {
+  await sb.auth.signOut();
+  toast("Signed out.", "info");
+}
+
+function openPasswordModal() { $("#pwdModal").classList.remove("hidden"); }
+function closeModal(id) { document.getElementById(id).classList.add("hidden"); }
+
+async function saveOwnerPassword() {
+  const pwd = $("#newOwnerPwd").value;
+  if (!pwd || pwd.length < 8) return toast("Use at least 8 characters.", "err");
+  const { error } = await sb.auth.updateUser({ password: pwd });
+  if (error) return toast(error.message, "err");
+  closeModal("pwdModal");
+  $("#newOwnerPwd").value = "";
+  toast("Owner password saved. You can now sign in with email + password.");
+}
+
+/* ---------------- navigation ---------------- */
+const VIEW_META = {
+  overview: ["Overview", "Live pulse of every Café Desk station"],
+  analytics: ["Analytics & places", "What tools and places customers use most"],
+  keys: ["Issue & sign keys", "Sign new licenses and manage every machine"],
+  requests: ["Pending requests", "Approve activation requests in one tap"],
+  fleet: ["Fleet & updates", "Publish app updates and control every PC"],
+};
+
+function switchView(view) {
+  state.view = view;
+  $$(".view").forEach((v) => v.classList.add("hidden"));
+  const el = $("#view-" + view);
+  if (el) el.classList.remove("hidden");
+  $$("[data-nav]").forEach((b) => b.classList.toggle("active", b.dataset.nav === view));
+  const meta = VIEW_META[view] || ["Overview", ""];
+  $("#pageTitle").textContent = meta[0];
+  $("#pageSub").textContent = meta[1];
+  toggleSidebar(false);
+  renderCurrentView();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function toggleSidebar(open) {
+  $("#sidebar").classList.toggle("open", open);
+  $("#backdrop").classList.toggle("show", open);
+}
+
+$$("[data-nav]").forEach((btn) => btn.addEventListener("click", () => switchView(btn.dataset.nav)));
+
+function renderCurrentView() {
+  if (state.view === "overview") renderOverview();
+  else if (state.view === "analytics") renderAnalytics();
+  else if (state.view === "keys") renderKeysTable();
+  else if (state.view === "requests") renderReqsTable();
+  else if (state.view === "fleet") renderFleet();
+}
+
+/* ---------------- owner API ---------------- */
+async function callOwnerAdmin(payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error("Please sign in first.");
+  const resp = await fetch(`${SUPABASE_URL}/functions/v1/owner-admin`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  let json = {};
+  try { json = await resp.json(); } catch (_) {}
+  if (!resp.ok || !json.ok) throw new Error(json.error || "Owner API request failed.");
+  return json;
+}
+
+/* ---------------- data loading ---------------- */
+async function fetchPaged(build, maxPages = 12) {
+  const size = 1000;
+  const out = [];
+  for (let p = 0; p < maxPages; p++) {
+    const { data, error } = await build().range(p * size, p * size + size - 1);
+    if (error) throw error;
+    if (!data || !data.length) break;
+    out.push(...data);
+    if (data.length < size) break;
   }
+  return out;
+}
 
-  function esc(s) {
-    const d = document.createElement("div");
-    d.textContent = s == null ? "" : String(s);
-    return d.innerHTML;
-  }
-
-  function switchAuthMode(mode) {
-    document.getElementById("modeOtpBtn").classList.toggle("active", mode === "otp");
-    document.getElementById("modePwdBtn").classList.toggle("active", mode === "password");
-    document.getElementById("otpBox").classList.toggle("hidden", mode !== "otp");
-    document.getElementById("pwdBox").classList.toggle("hidden", mode !== "password");
-  }
-
-  async function sendEmailOtp() {
-    const email = document.getElementById("loginEmail").value.trim();
-    const btn = document.getElementById("sendOtpBtn");
-    btn.disabled = true;
-    const { error } = await sb.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false, emailRedirectTo: window.location.href.split("#")[0] },
+async function loadGithubRelease() {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+      headers: { Accept: "application/vnd.github+json" },
+      cache: "no-store",
     });
-    btn.disabled = false;
-    if (error) return notify(error.message, true);
-    document.getElementById("otpVerifyArea").classList.remove("hidden");
-    document.getElementById("authMsg").textContent = "Check " + email + " for your sign-in link or 8-digit code!";
-    notify("Login code & link sent to " + email);
+    state.gh = r.ok ? await r.json() : null;
+  } catch (_) {
+    state.gh = null;
   }
-
-  async function verifyEmailOtp() {
-    const email = document.getElementById("loginEmail").value.trim();
-    const token = document.getElementById("otpCodeInput").value.trim();
-    if (!token) return notify("Enter the code from your email.", true);
-    const { error } = await sb.auth.verifyOtp({ email, token, type: "email" });
-    if (error) return notify(error.message, true);
-    notify("Welcome back!");
-  }
-
-  async function signInWithPassword() {
-    const email = document.getElementById("loginEmail").value.trim();
-    const password = document.getElementById("loginPassword").value;
-    const { error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) return notify(error.message, true);
-    notify("Signed in!");
-  }
-
-  async function signOutOwner() {
-    await sb.auth.signOut();
-  }
-
-  function openPasswordModal() {
-    document.getElementById("pwdModal").classList.remove("hidden");
-  }
-
-  async function saveOwnerPassword() {
-    const pwd = document.getElementById("newOwnerPwd").value;
-    if (!pwd || pwd.length < 8) return notify("Use at least 8 characters.", true);
-    const { error } = await sb.auth.updateUser({ password: pwd });
-    if (error) return notify(error.message, true);
-    document.getElementById("pwdModal").classList.add("hidden");
-    document.getElementById("newOwnerPwd").value = "";
-    notify("Owner password saved! You can now sign in anytime with Email + Password.");
-  }
-
-  function showTab(tabId, btnEl) {
-    document.querySelectorAll(".tab-pane").forEach((p) => p.classList.add("hidden"));
-    document.getElementById(tabId).classList.remove("hidden");
-    document.querySelectorAll(".nav-tabs button").forEach((b) => b.classList.remove("active"));
-    if (btnEl) btnEl.classList.add("active");
-  }
-
-  async function callOwnerAdmin(payload) {
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) throw new Error("Please sign in first.");
-    const resp = await fetch(`${SUPABASE_URL}/functions/v1/owner-admin`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const json = await resp.json();
-    if (!resp.ok || !json.ok) throw new Error(json.error || "Owner API request failed.");
-    return json;
-  }
-
-  async function refreshAll() {
-    const [kRes, rRes, aRes] = await Promise.all([
-      sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).limit(1000),
-      sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
-      sb.from("app_releases").select("*").order("published_at", { ascending: false }).limit(30),
-    ]);
-    if (kRes.error) return notify(kRes.error.message, true);
-    allKeys = kRes.data || [];
-    allReqs = rRes.data || [];
-    allReleases = aRes.data || [];
-    updateKpis();
-    renderKeysTable();
-    renderReqsTable();
-    renderReleasesTable();
-  }
-
-  function daysLeftFrom(expStr) {
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const exp = new Date(expStr + "T00:00:00Z");
-    return Math.round((exp - today) / 86400000);
-  }
-
-  function updateKpis() {
-    let activeMids = new Set();
-    let shops = new Set();
-    let addons = 0;
-    let expiring = 0;
-    for (const k of allKeys) {
-      const d = daysLeftFrom(k.expires_at);
-      if (!k.revoked && d >= 0) {
-        activeMids.add(k.machine_id);
-        if (k.shop_id) shops.add(k.shop_id);
-        if (k.key_type === "addon" || k.key_type === "combo") addons++;
-        if (d <= 30) expiring++;
-      }
-    }
-    document.getElementById("statActive").textContent = activeMids.size;
-    document.getElementById("statShops").textContent = shops.size;
-    document.getElementById("statAddons").textContent = addons;
-    document.getElementById("statExpiring").textContent = expiring;
-    document.getElementById("statPending").textContent = allReqs.length;
-    document.getElementById("reqCountBadge").textContent = allReqs.length ? `(${allReqs.length})` : "";
-  }
-
-  async function issueKeysNow(prefillReqId = null) {
-    const customer = document.getElementById("genCustomer").value.trim() || "Licensed Café";
-    const mode = document.getElementById("genMode").value;
-    const days = parseInt(document.getElementById("genDays").value || "365", 10);
-    const shop_id = document.getElementById("genShopId").value.trim();
-    const machines = document.getElementById("genMachines").value.trim();
-    if (!machines) return notify("Paste at least one Machine ID (CD-XXXX-XXXX-XXXX).", true);
-
-    const btn = document.getElementById("genSubmitBtn");
-    btn.disabled = true;
-    btn.textContent = "Signing & pushing to cloud…";
+  state.sums = null;
+  if (state.gh) {
     try {
-      const res = await callOwnerAdmin({ action: "sign_keys", customer, mode, days, shop_id, machines, request_id: prefillReqId });
-      const box = document.getElementById("issuedResultBox");
-      box.style.display = "block";
-      let html = `<div style="font-weight:800;color:var(--lime);margin-bottom:8px;">✓ Signed &amp; Live in Supabase (${res.issued.length} computer key(s)) — Customer can click "☁ Check Online Approval" right now!</div>`;
-      for (const item of res.issued) {
-        const seatTxt = item.seat_no ? ` [Seat ${item.seat_no}/${item.seat_max} • ${esc(item.seat_label)}]` : "";
-        const waMsg = encodeURIComponent(
-          `Hi ${item.customer}! Your Café Desk key for Machine ID ${item.machine_id}${seatTxt} (valid until ${item.expires_at}) is active!\n\n` +
-          `Option 1 (Easiest): Open Café Desk and click "Check Online Approval".\n` +
-          `Option 2 (Offline key):\n${item.token}`
-        );
-        html += `
-          <div style="background:#131f35;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-              <span><strong class="mid-txt">${esc(item.machine_id)}</strong> ${seatTxt} <span class="badge b-blue">${esc(item.key_type)}</span></span>
-              <div style="display:flex;gap:6px;">
-                <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${esc(item.token)}');notify('Key copied!')">⧉ Copy Key</button>
-                <a class="btn btn-wa btn-sm" target="_blank" href="https://wa.me/?text=${waMsg}">💬 Send via WhatsApp</a>
-              </div>
-            </div>
-            <input readonly value="${esc(item.token)}" class="mono" style="font-size:11.5px;padding:7px;" onclick="this.select()">
-          </div>`;
-      }
-      box.innerHTML = html;
-      notify(`Issued ${res.issued.length} key(s) for ${customer}!`);
-      await refreshAll();
-    } catch (e) {
-      notify(e.message, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "⚡ Sign & Activate in Cloud Now";
-    }
+      const c = await fetch(DL_SUMS, { cache: "no-store" });
+      if (c.ok) state.sums = await c.json();
+    } catch (_) {}
+  }
+}
+
+async function refreshAll(manual = false) {
+  if (state.loading) return;
+  state.loading = true;
+  const btn = $("#refreshBtn");
+  if (btn) btn.style.opacity = ".5";
+
+  const since = new Date(Date.now() - 120 * 86400000);
+  const sinceIso = since.toISOString();
+
+  const [keysRes, reqRes, relRes, visitsRes, stationsRes, salesRes] = await Promise.all([
+    sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).limit(1000),
+    sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
+    sb.from("app_releases").select("*").order("published_at", { ascending: false }).limit(30),
+    fetchPaged(() => sb.from("workspace_tool_visits")
+      .select("visit_date,machine_id,shop_id,shop_name,city_label,screen_name,visit_count,last_visited_at")
+      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true })).catch(() => null),
+    fetchPaged(() => sb.from("station_heartbeats").select("*").order("last_seen_at", { ascending: false }), 3).catch(() => null),
+    fetchPaged(() => sb.from("shop_sync_sales")
+      .select("shop_id,created_at,station,total_cents,currency,voided_at")
+      .gte("created_at", sinceIso).order("created_at", { ascending: false })).catch(() => null),
+  ]);
+
+  if (keysRes.error) toast(keysRes.error.message, "err");
+  state.keys = keysRes.data || [];
+  state.reqs = reqRes.data || [];
+  state.releases = relRes.data || [];
+
+  state.telemetryError = visitsRes === null;
+  state.visits = visitsRes || [];
+  state.stations = stationsRes || [];
+  state.sales = salesRes || [];
+
+  await loadGithubRelease();
+  state.lastSync = new Date();
+
+  $("#navReqCount").textContent = state.reqs.length;
+  $("#navReqCount").classList.toggle("hidden", !state.reqs.length);
+
+  state.loading = false;
+  if (btn) btn.style.opacity = "1";
+  renderCurrentView();
+  if (manual) toast("Dashboard refreshed.", "info");
+}
+
+function setRange(days) {
+  state.days = days;
+  $$("#rangeTabs button, #rangeTabs2 button").forEach((b) => b.classList.toggle("active", Number(b.dataset.days) === days));
+  if (state.view === "overview") renderOverview();
+  else if (state.view === "analytics") renderAnalytics();
+}
+
+/* ---------------- KPI + aggregation ---------------- */
+function daysAgoKey(n) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - (n - 1));
+  return isoDay(d);
+}
+
+function buildAnalytics() {
+  const days = state.days;
+  const fromKey = daysAgoKey(days);
+  const inRange = state.visits.filter((v) => String(v.visit_date) >= fromKey);
+  const todayKey = isoDay(new Date());
+
+  const byTool = new Map();
+  const byCity = new Map();
+  const byShop = new Map();
+  const byMachine = new Map();
+  const byDay = new Map();
+  let total = 0;
+  let today = 0;
+
+  for (const v of inRange) {
+    const c = Number(v.visit_count) || 0;
+    total += c;
+    if (String(v.visit_date) === todayKey) today += c;
+
+    byTool.set(v.screen_name, (byTool.get(v.screen_name) || 0) + c);
+    byDay.set(String(v.visit_date), (byDay.get(String(v.visit_date)) || 0) + c);
+
+    const city = (v.city_label || "").trim() || "Unassigned";
+    const cityRow = byCity.get(city) || { visits: 0, machines: new Set(), shops: new Set() };
+    cityRow.visits += c;
+    cityRow.machines.add(v.machine_id);
+    if (v.shop_name) cityRow.shops.add(v.shop_name);
+    byCity.set(city, cityRow);
+
+    const shopName = (v.shop_name || "").trim() || "Unassigned shop";
+    const shopRow = byShop.get(shopName) || { visits: 0, machines: new Set(), city };
+    shopRow.visits += c;
+    shopRow.machines.add(v.machine_id);
+    byShop.set(shopName, shopRow);
+
+    const mRow = byMachine.get(v.machine_id) || { visits: 0, tools: new Map(), city, shopName, last: "" };
+    mRow.visits += c;
+    mRow.tools.set(v.screen_name, (mRow.tools.get(v.screen_name) || 0) + c);
+    if (v.city_label) mRow.city = v.city_label;
+    if (v.shop_name) mRow.shopName = v.shop_name;
+    if (v.last_visited_at && String(v.last_visited_at) > mRow.last) mRow.last = v.last_visited_at;
+    byMachine.set(v.machine_id, mRow);
   }
 
-  function renderKeysTable() {
-    const q = (document.getElementById("searchKeys").value || "").toLowerCase().trim();
-    const rows = allKeys.filter((k) => {
-      if (!q) return true;
-      return [k.machine_id, k.customer, k.shop_id, k.seat_label, k.key_type, k.license_id]
-        .some((v) => String(v || "").toLowerCase().includes(q));
-    });
-    const tb = document.getElementById("keysTbody");
-    if (!rows.length) {
-      tb.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No matching keys found.</td></tr>`;
-      return;
+  const series = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const k = isoDay(d);
+    series.push({ key: k, label: d.toLocaleDateString("en-ZA", { day: "numeric", month: "short" }), value: byDay.get(k) || 0 });
+  }
+
+  // group totals
+  const byGroup = new Map();
+  for (const [tool, count] of byTool.entries()) {
+    const g = TOOL_TO_GROUP[tool] || "Other";
+    byGroup.set(g, (byGroup.get(g) || 0) + count);
+  }
+
+  // sales
+  const fromIso = fromKey;
+  const salesInRange = state.sales.filter((s) => String(s.created_at || "").slice(0, 10) >= fromIso && !s.voided_at);
+  const todaySales = salesInRange.filter((s) => String(s.created_at || "").slice(0, 10) === todayKey);
+  const revenueToday = todaySales.reduce((a, s) => a + (Number(s.total_cents) || 0), 0);
+  const revenueRange = salesInRange.reduce((a, s) => a + (Number(s.total_cents) || 0), 0);
+  const salesByShop = new Map();
+  for (const s of salesInRange) {
+    const row = salesByShop.get(s.shop_id) || { cents: 0, count: 0, currency: s.currency || "R" };
+    row.cents += Number(s.total_cents) || 0;
+    row.count += 1;
+    salesByShop.set(s.shop_id, row);
+  }
+
+  const online = state.stations.filter((s) => Date.now() - new Date(s.last_seen_at).getTime() < 5 * 60000);
+  const activeComputers = new Set(state.keys.filter((k) => !k.revoked && daysLeft(k.expires_at) >= 0).map((k) => k.machine_id));
+  const activeShops = new Set(state.keys.filter((k) => !k.revoked && k.shop_id && daysLeft(k.expires_at) >= 0).map((k) => k.shop_id));
+  const expiring = state.keys.filter((k) => !k.revoked && daysLeft(k.expires_at) >= 0 && daysLeft(k.expires_at) <= 30).length;
+
+  return {
+    days, inRange, total, today, series, byTool, byGroup, byCity, byShop, byMachine,
+    online, activeComputers, activeShops, expiring,
+    revenueToday, revenueRange, salesInRange, salesByShop,
+    todaySalesCount: todaySales.length,
+    cities: byCity.size,
+  };
+}
+
+function daysLeft(expStr) {
+  if (!expStr) return -9999;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const exp = new Date(String(expStr).slice(0, 10) + "T00:00:00Z");
+  return Math.round((exp - today) / 86400000);
+}
+
+/* ---------------- chart helpers ---------------- */
+let gradSeq = 0;
+function trendChart(series, color = "#b9ff70") {
+  const W = 720, H = 210, pad = { l: 34, r: 10, t: 16, b: 24 };
+  const n = series.length;
+  const max = Math.max(1, ...series.map((p) => p.value));
+  const niceMax = max <= 4 ? 4 : Math.ceil(max / 4) * 4;
+  const x = (i) => pad.l + (n <= 1 ? 0 : (i * (W - pad.l - pad.r)) / (n - 1));
+  const y = (v) => H - pad.b - (v / niceMax) * (H - pad.t - pad.b);
+  const pts = series.map((p, i) => [x(i), y(p.value)]);
+
+  let d = "";
+  if (pts.length === 1) {
+    d = `M ${pts[0][0]} ${pts[0][1]}`;
+  } else {
+    d = `M ${pts[0][0]} ${pts[0][1]}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
     }
-    tb.innerHTML = rows.map((k) => {
-      const d = daysLeftFrom(k.expires_at);
-      let badge = `<span class="badge b-ok">ACTIVE • ${d}d left</span>`;
-      if (k.revoked) badge = `<span class="badge b-exp">REVOKED</span>`;
-      else if (d < 0) badge = `<span class="badge b-exp">EXPIRED • ${Math.abs(d)}d ago</span>`;
-      else if (d <= 30) badge = `<span class="badge b-warn">EXPIRING • ${d}d left</span>`;
+  }
+  const area = `${d} L ${x(n - 1).toFixed(1)} ${H - pad.b} L ${x(0).toFixed(1)} ${H - pad.b} Z`;
+  const gid = "grad" + ++gradSeq;
 
-      const seatMeta = k.seat_no ? `<div style="font-size:11.5px;color:var(--muted);">${esc(k.shop_id)} • Seat ${k.seat_no}/${k.seat_max} (${esc(k.seat_label)})</div>` : (k.shop_id ? `<div style="font-size:11.5px;color:var(--muted);">${esc(k.shop_id)}</div>` : "");
-      const toggleBtn = k.revoked
-        ? `<button class="btn btn-secondary btn-sm" onclick="toggleRevoke('${esc(k.license_id)}', false)">Restore</button>`
-        : `<button class="btn btn-danger btn-sm" onclick="toggleRevoke('${esc(k.license_id)}', true)">Revoke</button>`;
+  let grid = "";
+  for (let i = 0; i <= 4; i++) {
+    const val = (niceMax / 4) * i;
+    const gy = y(val);
+    grid += `<line class="grid-line" x1="${pad.l}" y1="${gy.toFixed(1)}" x2="${W - pad.r}" y2="${gy.toFixed(1)}"/>`;
+    grid += `<text class="axis-txt" x="${pad.l - 8}" y="${(gy + 3.5).toFixed(1)}" text-anchor="end">${num(val)}</text>`;
+  }
 
-      return `
-        <tr>
-          <td class="mid-txt">${esc(k.machine_id)}</td>
-          <td><strong>${esc(k.customer)}</strong>${seatMeta}</td>
-          <td><span class="badge b-blue">${esc(k.key_type)}</span></td>
-          <td class="mono">${esc(k.expires_at)}</td>
-          <td>${badge}</td>
-          <td style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${esc(k.token)}');notify('Copied key for ${esc(k.machine_id)}')">Copy Key</button>
-            ${toggleBtn}
-          </td>
+  const step = Math.max(1, Math.ceil(n / 7));
+  let labels = "";
+  series.forEach((p, i) => {
+    if (i % step !== 0 && i !== n - 1) return;
+    labels += `<text class="axis-txt" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${esc(p.label)}</text>`;
+  });
+
+  const dots = series.map((p, i) =>
+    `<circle class="pt" style="color:${color}" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3.4"><title>${esc(p.label)} — ${num(p.value)} visits</title></circle>`
+  ).join("");
+
+  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">
+    <defs>
+      <linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${color}" stop-opacity=".32"/>
+        <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    ${grid}
+    <path d="${area}" fill="url(#${gid})"/>
+    <path d="${d}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    ${dots}
+    ${labels}
+  </svg>`;
+}
+
+function donutChart(rows, total) {
+  const R = 54, C = 2 * Math.PI * R, size = 148;
+  let offset = 0;
+  const arcs = rows.map((r) => {
+    const share = total ? r.value / total : 0;
+    let len = C * share;
+    const gap = rows.length > 1 && len > 6 ? 3 : 0;
+    const arc = `<circle cx="74" cy="74" r="${R}" fill="none" stroke="${r.color}" stroke-width="15"
+      stroke-dasharray="${Math.max(0, len - gap).toFixed(2)} ${(C - Math.max(0, len - gap)).toFixed(2)}"
+      stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 74 74)" stroke-linecap="butt">
+      <title>${esc(r.label)} — ${num(r.value)} (${(share * 100).toFixed(1)}%)</title></circle>`;
+    offset += len;
+    return arc;
+  }).join("");
+
+  return `<div class="donut-wrap">
+    <div class="donut" style="width:${size}px;height:${size}px">
+      <svg viewBox="0 0 148 148" style="width:100%;height:100%">
+        <circle cx="74" cy="74" r="${R}" fill="none" stroke="rgba(124,152,204,.1)" stroke-width="15"/>
+        ${arcs}
+      </svg>
+      <div class="donut-mid"><div class="n">${num(total)}</div><div class="l">visits</div></div>
+    </div>
+    <div class="legend">
+      ${rows.map((r) => `<div class="legend-row">
+        <span class="legend-dot" style="background:${r.color}"></span>
+        <span class="nm">${esc(r.label)}</span>
+        <span class="vl">${num(r.value)}</span>
+        <span class="pc">${total ? ((r.value / total) * 100).toFixed(0) : 0}%</span>
+      </div>`).join("")}
+    </div>
+  </div>`;
+}
+
+function barRow(name, sub, value, max, pct, cls = "") {
+  const w = max ? Math.max(2, (value / max) * 100) : 0;
+  return `<div class="bar-row">
+    <div class="bar-name">${esc(name)}${sub ? `<span>${esc(sub)}</span>` : ""}</div>
+    <div class="bar-track"><div class="bar-fill ${cls}" style="width:${w.toFixed(1)}%"></div></div>
+    <div class="bar-val">${num(value)}${pct ? `<span>${pct}</span>` : ""}</div>
+  </div>`;
+}
+
+function rankRow(i, title, sub, value, unit) {
+  return `<div class="rank-row">
+    <div class="rank-no">${i}</div>
+    <div class="rank-main"><div class="t">${esc(title)}</div><div class="s">${esc(sub)}</div></div>
+    <div class="rank-val"><div class="n">${num(value)}</div><div class="u">${esc(unit)}</div></div>
+  </div>`;
+}
+
+function liveRow(st) {
+  const age = Date.now() - new Date(st.last_seen_at).getTime();
+  const cls = age < 5 * 60000 ? "on" : age < 60 * 60000 ? "idle" : "off";
+  const label = cls === "on" ? "Online" : cls === "idle" ? "Idle" : "Offline";
+  return `<div class="live-row">
+    <span class="dot ${cls}"></span>
+    <div class="live-main">
+      <div class="t">${esc(st.station_name || "Counter PC")} · <span style="color:var(--muted);font-weight:500">${esc(st.shop_name || "Unnamed shop")}</span></div>
+      <div class="s">${esc(st.city_label || "No city set")} · ${esc(st.current_screen || "Home")} · v${esc(st.app_version || "?")}</div>
+    </div>
+    <div class="live-time">${label} · ${relTime(st.last_seen_at)}</div>
+  </div>`;
+}
+
+/* ---------------- render: overview ---------------- */
+function renderOverview() {
+  const a = buildAnalytics();
+  const onlineNow = a.online.length;
+  const pending = state.reqs.length;
+
+  const kpis = [
+    { cls: "lime", ico: "monitor", label: "Active computers", value: num(a.activeComputers.size), sub: `<b>${num(onlineNow)}</b> online right now` },
+    { cls: "blue", ico: "shop", label: "Active shops", value: num(a.activeShops.size), sub: `${num(a.cities)} cities / areas` },
+    { cls: "violet", ico: "pulse", label: "Tool opens today", value: num(a.today), sub: `${num(a.total)} in last ${a.days} days` },
+    { cls: "teal", ico: "cash", label: "Sales today", value: money(a.revenueToday), sub: `${num(a.todaySalesCount)} recorded sales` },
+    { cls: "amber", ico: "inbox", label: "Pending requests", value: num(pending), sub: pending ? "Needs your approval" : "All clear" },
+    { cls: "red", ico: "clock", label: "Expiring soon", value: num(a.expiring), sub: "Within 30 days" },
+  ];
+
+  $("#kpiGrid").innerHTML = kpis.map((k) => `
+    <div class="kpi ${k.cls}">
+      <div class="ico">${ICONS[k.ico]}</div>
+      <div class="k">${k.label}</div>
+      <div class="v">${k.value}</div>
+      <div class="s">${k.sub}</div>
+    </div>`).join("");
+
+  $("#trendSub").textContent = `Tool opens across all stations · last ${a.days} days`;
+  $("#trendChart").innerHTML = trendChart(a.series);
+  $$("#rangeTabs button").forEach((b) => b.classList.toggle("active", Number(b.dataset.days) === a.days));
+  $$("#rangeTabs2 button").forEach((b) => b.classList.toggle("active", Number(b.dataset.days) === a.days));
+
+  const tools = [...a.byTool.entries()].sort((x, y) => y[1] - x[1]).slice(0, 7);
+  const maxTool = tools.length ? tools[0][1] : 1;
+  $("#topTools").innerHTML = tools.length
+    ? tools.map(([name, v]) => barRow(name, TOOL_TO_GROUP[name] || "", v, maxTool, a.total ? ((v / a.total) * 100).toFixed(0) + "%" : "")).join("")
+    : `<div class="empty">No tool usage recorded yet.<br><span style="font-size:11.5px">Stations running Café Desk v0.8.2+ report anonymised tool counts automatically.</span></div>`;
+
+  $("#stationCount").textContent = `${state.stations.length} station${state.stations.length === 1 ? "" : "s"}`;
+  $("#liveStations").innerHTML = state.stations.length
+    ? state.stations.slice(0, 6).map(liveRow).join("")
+    : `<div class="empty">No station heartbeats yet.<br><span style="font-size:11.5px">They appear the first time a PC opens Café Desk v0.8.2+.</span></div>`;
+
+  $("#recentKeys").innerHTML = state.keys.length
+    ? state.keys.slice(0, 6).map((k) => {
+        const d = daysLeft(k.expires_at);
+        const badge = k.revoked ? '<span class="badge b-exp">Revoked</span>' : d < 0 ? '<span class="badge b-exp">Expired</span>' : d <= 30 ? `<span class="badge b-warn">${d}d left</span>` : `<span class="badge b-ok">${d}d left</span>`;
+        return `<div class="live-row">
+          <span class="dot ${k.revoked ? "off" : "on"}"></span>
+          <div class="live-main">
+            <div class="t mono" style="font-size:11.5px;color:var(--lime)">${esc(k.machine_id)}</div>
+            <div class="s">${esc(k.customer || "Licensed café")} · ${esc(k.key_type || "license")}</div>
+          </div>
+          <div class="live-time">${badge}</div>
+        </div>`;
+      }).join("")
+    : `<div class="empty">No keys issued yet.</div>`;
+}
+
+/* ---------------- render: analytics ---------------- */
+function renderAnalytics() {
+  const a = buildAnalytics();
+
+  const onlineNow = a.online.length;
+  const topCity = [...a.byCity.entries()].sort((x, y) => y[1].visits - x[1].visits)[0];
+  const topTool = [...a.byTool.entries()].sort((x, y) => y[1] - x[1])[0];
+  const avgPerPc = a.byMachine.size ? Math.round(a.total / a.byMachine.size) : 0;
+
+  const kpis = [
+    { cls: "lime", ico: "pulse", label: "Total tool opens", value: num(a.total), sub: `Last ${a.days} days` },
+    { cls: "blue", ico: "pin", label: "Busiest place", value: topCity ? esc(topCity[0]) : "—", sub: topCity ? `${num(topCity[1].visits)} visits · ${num(topCity[1].machines.size)} PCs` : "No data yet", small: true },
+    { cls: "violet", ico: "sparkle", label: "Most used tool", value: topTool ? esc(topTool[0]) : "—", sub: topTool ? `${num(topTool[1])} opens` : "No data yet", small: true },
+    { cls: "teal", ico: "monitor", label: "Avg per computer", value: num(avgPerPc), sub: `${num(a.byMachine.size)} reporting PCs` },
+  ];
+  $("#analyticsKpis").innerHTML = kpis.map((k) => `
+    <div class="kpi ${k.cls}">
+      <div class="ico">${ICONS[k.ico]}</div>
+      <div class="k">${k.label}</div>
+      <div class="v" style="${k.small ? "font-size:18px;line-height:1.25" : ""}">${k.value}</div>
+      <div class="s">${k.sub}</div>
+    </div>`).join("");
+
+  $("#placesSub").textContent = `Every Café Desk tool ranked by opens · last ${a.days} days`;
+  $$("#rangeTabs2 button").forEach((b) => b.classList.toggle("active", Number(b.dataset.days) === a.days));
+
+  const toolRows = [...a.byTool.entries()].sort((x, y) => y[1] - x[1]);
+  const maxTool = toolRows.length ? toolRows[0][1] : 1;
+  $("#placesBars").innerHTML = toolRows.length
+    ? toolRows.slice(0, 12).map(([name, v]) => barRow(name, TOOL_TO_GROUP[name] || "", v, maxTool, a.total ? ((v / a.total) * 100).toFixed(0) + "%" : "")).join("")
+    : `<div class="empty">No telemetry yet. Stations on v0.8.2+ start reporting anonymous tool counts within a minute of use.</div>`;
+
+  const groups = [...a.byGroup.entries()].sort((x, y) => y[1] - x[1])
+    .map(([label, value]) => ({ label, value, color: GROUP_COLORS[label] || "#8ea1c1" }));
+  $("#toolMix").innerHTML = groups.length
+    ? donutChart(groups, a.total)
+    : `<div class="empty">Nothing to chart yet.</div>`;
+
+  const cityRows = [...a.byCity.entries()].sort((x, y) => y[1].visits - x[1].visits).slice(0, 8);
+  const maxCity = cityRows.length ? cityRows[0][1].visits : 1;
+  $("#cityBars").innerHTML = cityRows.length
+    ? cityRows.map(([city, row], i) => `
+        <div class="rank-row">
+          <div class="rank-no">${i + 1}</div>
+          <div class="rank-main"><div class="t">${esc(city)}</div><div class="s">${num(row.machines.size)} PC${row.machines.size === 1 ? "" : "s"} · ${num(row.shops.size)} shop${row.shops.size === 1 ? "" : "s"}</div></div>
+          <div style="width:38%;min-width:80px"><div class="bar-track"><div class="bar-fill blue" style="width:${Math.max(3, (row.visits / maxCity) * 100).toFixed(1)}%"></div></div></div>
+          <div class="rank-val"><div class="n">${num(row.visits)}</div><div class="u">visits</div></div>
+        </div>`).join("")
+    : `<div class="empty">No city data yet. Add a City / Area in each PC's Business settings.</div>`;
+
+  $("#onlineCountTxt").textContent = num(onlineNow) + " online";
+  $("#onlineList").innerHTML = a.online.length
+    ? a.online.slice(0, 8).map(liveRow).join("")
+    : `<div class="empty">No PC has checked in during the last 5 minutes.</div>`;
+
+  const machines = [...a.byMachine.entries()].sort((x, y) => y[1].visits - x[1].visits).slice(0, 12);
+  const stByMid = new Map(state.stations.map((s) => [s.machine_id, s]));
+  $("#machineTable").innerHTML = machines.length
+    ? machines.map(([mid, row]) => {
+        const st = stByMid.get(mid);
+        const top = [...row.tools.entries()].sort((x, y) => y[1] - x[1])[0];
+        return `<tr>
+          <td><div class="mono" style="color:var(--lime);font-size:11.2px">${esc(mid)}</div><div class="cell-sub">${esc(st ? st.station_name : "—")}</div></td>
+          <td>${esc(row.shopName || "—")}<div class="cell-sub">${esc(row.city || "No city")}</div></td>
+          <td><span class="badge b-blue">${esc(top ? top[0] : "—")}</span></td>
+          <td style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${num(row.visits)}</td>
+          <td style="color:var(--dim);font-size:11.5px">${st ? relTime(st.last_seen_at) : relTime(row.last)}</td>
         </tr>`;
-    }).join("");
-  }
+      }).join("")
+    : `<tr><td colspan="5" class="empty">No machines reporting yet.</td></tr>`;
 
-  async function toggleRevoke(licenseId, revokeNow) {
-    const verb = revokeNow ? "REVOKE (remotely lock)" : "RESTORE";
-    if (!confirm(`Are you sure you want to ${verb} License ID ${licenseId}?`)) return;
+  const shops = [...a.salesByShop.entries()].sort((x, y) => y[1].cents - x[1].cents).slice(0, 8);
+  const maxSales = shops.length ? shops[0][1].cents : 1;
+  $("#salesOverview").innerHTML = (shops.length
+    ? `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">
+         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Range revenue</div><div style="font-size:21px;font-weight:800">${money(a.revenueRange)}</div></div>
+         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Sales</div><div style="font-size:21px;font-weight:800">${num(a.salesInRange.length)}</div></div>
+         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Avg ticket</div><div style="font-size:21px;font-weight:800">${money(a.salesInRange.length ? a.revenueRange / a.salesInRange.length : 0)}</div></div>
+       </div>` : "") +
+    (shops.length
+      ? shops.map(([sid, row]) => `
+          <div class="rank-row">
+            <div class="rank-main"><div class="t">${esc(sid)}</div><div class="s">${num(row.count)} sales</div></div>
+            <div style="width:34%;min-width:70px"><div class="bar-track"><div class="bar-fill" style="width:${Math.max(3, (row.cents / maxSales) * 100).toFixed(1)}%"></div></div></div>
+            <div class="rank-val"><div class="n">${money(row.cents, row.currency || "R")}</div></div>
+          </div>`).join("")
+      : `<div class="empty">No shop sales synced yet.<br><span style="font-size:11.5px">Shops appear here once a station uses “Sync sales” in the desktop app.</span></div>`);
+}
+
+/* ---------------- render: keys ---------------- */
+function renderKeysTable() {
+  const q = ($("#searchKeys").value || "").toLowerCase().trim();
+  const filter = $("#filterKeys").value;
+  const rows = state.keys.filter((k) => {
+    const d = daysLeft(k.expires_at);
+    if (filter === "active" && (k.revoked || d < 0)) return false;
+    if (filter === "expiring" && (k.revoked || d < 0 || d > 30)) return false;
+    if (filter === "expired" && (k.revoked || d >= 0)) return false;
+    if (filter === "revoked" && !k.revoked) return false;
+    if (!q) return true;
+    return [k.machine_id, k.customer, k.shop_id, k.seat_label, k.key_type, k.license_id]
+      .some((v) => String(v || "").toLowerCase().includes(q));
+  });
+
+  const tb = $("#keysTbody");
+  if (!rows.length) {
+    tb.innerHTML = `<tr><td colspan="6" class="empty">No matching keys.</td></tr>`;
+    return;
+  }
+  tb.innerHTML = rows.map((k) => {
+    const d = daysLeft(k.expires_at);
+    let badge = `<span class="badge b-ok">Active · ${d}d</span>`;
+    if (k.revoked) badge = `<span class="badge b-exp">Revoked</span>`;
+    else if (d < 0) badge = `<span class="badge b-exp">Expired ${Math.abs(d)}d ago</span>`;
+    else if (d <= 30) badge = `<span class="badge b-warn">${d}d left</span>`;
+
+    const seatMeta = k.seat_no
+      ? `${esc(k.shop_id || "")} · seat ${k.seat_no}/${k.seat_max} ${k.seat_label ? "(" + esc(k.seat_label) + ")" : ""}`
+      : (k.shop_id ? esc(k.shop_id) : "—");
+
+    return `<tr>
+      <td><div class="mid">${esc(k.machine_id)}</div><div class="cell-sub">${esc(shortId(k.license_id, 16))}</div></td>
+      <td><div style="font-weight:650">${esc(k.customer || "—")}</div><div class="cell-sub">${seatMeta}</div></td>
+      <td><span class="badge b-blue">${esc(k.key_type || "license")}</span></td>
+      <td class="mono" style="font-size:11.6px">${esc(String(k.expires_at || "").slice(0, 10))}</td>
+      <td>${badge}</td>
+      <td>
+        <div class="row-actions">
+          <button class="btn btn-ghost btn-sm" data-copy="${attr(k.token)}">Copy key</button>
+          <button class="btn btn-ghost btn-sm" data-wa="${attr(k.machine_id)}" data-token="${attr(k.token)}" data-cust="${attr(k.customer || "")}" data-exp="${attr(String(k.expires_at || "").slice(0, 10))}">WhatsApp</button>
+          ${k.revoked
+            ? `<button class="btn btn-ghost btn-sm" data-revoke="${attr(k.license_id)}" data-on="0">Restore</button>`
+            : `<button class="btn btn-danger btn-sm" data-revoke="${attr(k.license_id)}" data-on="1">Revoke</button>`}
+        </div>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+/* ---------------- render: requests ---------------- */
+function renderReqsTable() {
+  const tb = $("#reqsTbody");
+  $("#reqPageCount").textContent = `${state.reqs.length} pending`;
+  if (!state.reqs.length) {
+    tb.innerHTML = `<tr><td colspan="6" class="empty">No pending activation requests.</td></tr>`;
+    return;
+  }
+  tb.innerHTML = state.reqs.map((r) => `
+    <tr>
+      <td class="mono" style="font-size:11.4px">${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}</td>
+      <td class="mid">${esc(r.machine_id)}</td>
+      <td><div style="font-weight:650">${esc(r.shop_name || "Walk-in shop")}</div><div class="cell-sub">${esc(r.shop_id || "No shop ID")} ${r.station_name ? "· " + esc(r.station_name) : ""}</div></td>
+      <td><span class="badge b-warn">${esc(r.requested_kind || "license")}</span></td>
+      <td style="font-size:11.8px">${esc(r.contact_phone || "—")}</td>
+      <td>
+        <div class="row-actions">
+          <button class="btn btn-primary btn-sm" data-approve="${attr(r.id)}">✓ Approve &amp; sign</button>
+          <button class="btn btn-danger btn-sm" data-dismiss="${attr(r.id)}">Dismiss</button>
+        </div>
+      </td>
+    </tr>`).join("");
+}
+
+/* ---------------- render: fleet ---------------- */
+function renderFleet() {
+  const tb = $("#releasesTbody");
+  tb.innerHTML = state.releases.length
+    ? state.releases.map((r) => `<tr>
+        <td><strong style="color:var(--lime)">v${esc(r.version)}</strong>${r.mandatory ? ' <span class="badge b-warn">Mandatory</span>' : ""}</td>
+        <td class="mono" style="font-size:11.4px">${esc(String(r.published_at || "").slice(0, 10))}</td>
+        <td class="mono" style="font-size:10.6px;color:var(--dim)">${esc(shortId(r.sha256 || "", 14))}</td>
+        <td style="max-width:340px;font-size:11.8px;color:var(--muted)">${esc(r.release_notes || "—")}</td>
+        <td><a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${attr(r.download_url)}">Download</a></td>
+      </tr>`).join("")
+    : `<tr><td colspan="5" class="empty">No remote updates published yet. Builds from GitHub Actions publish automatically once synced.</td></tr>`;
+
+  const kt = state.keys.slice(0, 25);
+  $("#killTbody").innerHTML = kt.length
+    ? kt.map((k) => {
+        const d = daysLeft(k.expires_at);
+        const badge = k.revoked ? '<span class="badge b-exp">Revoked</span>' : d < 0 ? '<span class="badge b-exp">Expired</span>' : d <= 30 ? `<span class="badge b-warn">${d}d left</span>` : `<span class="badge b-ok">${d}d left</span>`;
+        return `<tr>
+          <td class="mid">${esc(k.machine_id)}</td>
+          <td>${esc(k.customer || "—")}</td>
+          <td class="mono" style="font-size:11.4px">${esc(String(k.expires_at || "").slice(0, 10))}</td>
+          <td>${badge}</td>
+          <td><button class="btn ${k.revoked ? "btn-ghost" : "btn-danger"} btn-sm" data-revoke="${attr(k.license_id)}" data-on="${k.revoked ? "0" : "1"}">${k.revoked ? "Restore" : "Revoke"}</button></td>
+        </tr>`;
+      }).join("")
+    : `<tr><td colspan="5" class="empty">No machines yet.</td></tr>`;
+}
+
+/* ---------------- delegated actions ---------------- */
+document.addEventListener("click", async (e) => {
+  const copyBtn = e.target.closest("[data-copy]");
+  if (copyBtn) {
     try {
-      await callOwnerAdmin({ action: "set_revoked", license_id: licenseId, revoked: revokeNow });
-      notify(revokeNow ? "License remotely revoked!" : "License restored!");
-      await refreshAll();
-    } catch (e) {
-      notify(e.message, true);
-    }
+      await navigator.clipboard.writeText(copyBtn.dataset.copy);
+      toast("License key copied.");
+    } catch (_) { toast("Copy failed — long-press the key instead.", "err"); }
+    return;
   }
 
-  function renderReqsTable() {
-    const tb = document.getElementById("reqsTbody");
-    if (!allReqs.length) {
-      tb.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No pending activation requests.</td></tr>`;
-      return;
-    }
-    tb.innerHTML = allReqs.map((r) => `
-      <tr>
-        <td class="mono">${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}</td>
-        <td class="mid-txt">${esc(r.machine_id)}</td>
-        <td><strong>${esc(r.shop_name || "Walk-in Shop")}</strong><div style="font-size:11.5px;color:var(--muted);">${esc(r.shop_id)} ${esc(r.station_name)}</div></td>
-        <td><span class="badge b-warn">${esc(r.requested_kind)}</span></td>
-        <td>${esc(r.contact_phone || "-")}</td>
-        <td style="display:flex;gap:6px;">
-          <button class="btn btn-primary btn-sm" onclick="approveRequest('${esc(r.id)}','${esc(r.machine_id)}','${esc(r.shop_name || "Licensed Café")}','${esc(r.shop_id || "")}','${esc(r.requested_kind)}')">✓ Approve &amp; Sign</button>
-          <button class="btn btn-danger btn-sm" onclick="dismissRequest('${esc(r.id)}')">Dismiss</button>
-        </td>
-      </tr>
-    `).join("");
+  const waBtn = e.target.closest("[data-wa]");
+  if (waBtn) {
+    const msg = `Hi ${waBtn.dataset.cust || ""}! Your Café Desk key for Machine ID ${waBtn.dataset.wa} is active until ${waBtn.dataset.exp}.\n\n` +
+      `Easiest: open Café Desk and click "Check Online Approval".\n\n` +
+      `Or paste this offline key:\n${waBtn.dataset.token}`;
+    window.open("https://wa.me/?text=" + encodeURIComponent(msg), "_blank");
+    return;
   }
 
-  async function approveRequest(reqId, mid, shopName, shopId, kind) {
-    document.getElementById("genCustomer").value = shopName;
-    document.getElementById("genShopId").value = shopId;
-    document.getElementById("genMachines").value = mid;
-    document.getElementById("genMode").value = kind === "pdf_unlock" ? "addon" : (kind === "combo" ? "combo" : "license");
-    showTab("tabIssue", document.querySelector('[data-tab="tabIssue"]'));
-    await issueKeysNow(reqId);
-  }
-
-  async function dismissRequest(reqId) {
+  const revokeBtn = e.target.closest("[data-revoke]");
+  if (revokeBtn) {
+    const lid = revokeBtn.dataset.revoke;
+    const on = revokeBtn.dataset.on === "1";
+    if (!confirm(`${on ? "REVOKE (remotely lock)" : "RESTORE"} license ${lid}?`)) return;
+    revokeBtn.disabled = true;
     try {
-      await callOwnerAdmin({ action: "update_request_status", request_id: reqId, status: "rejected" });
-      notify("Request dismissed.");
+      await callOwnerAdmin({ action: "set_revoked", license_id: lid, revoked: on });
+      toast(on ? "Machine revoked — it will lock on next check-in." : "License restored.");
       await refreshAll();
-    } catch (e) {
-      notify(e.message, true);
+    } catch (err) {
+      toast(err.message, "err");
+      revokeBtn.disabled = false;
     }
+    return;
   }
 
-  async function handleReleaseFilePicked(input) {
-    const file = input.files && input.files[0];
-    if (!file) return;
-    notify("Computing SHA-256 fingerprint…");
-    const buf = await file.arrayBuffer();
-    const hashBuf = await crypto.subtle.digest("SHA-256", buf);
-    const hex = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-    document.getElementById("relSha").value = hex;
-    const ver = (document.getElementById("relVersion").value || "latest").trim().replace(/[^a-zA-Z0-9._-]/g, "");
-    const objName = `v${ver}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-    document.getElementById("relUrl").value = `${SUPABASE_URL}/storage/v1/object/public/cafedesk-releases/${objName}`;
-    notify("SHA-256 computed! Click Upload & Publish when ready.");
+  const approveBtn = e.target.closest("[data-approve]");
+  if (approveBtn) {
+    const req = state.reqs.find((r) => String(r.id) === approveBtn.dataset.approve);
+    if (!req) return;
+    $("#genCustomer").value = req.shop_name || "Licensed Café";
+    $("#genShopId").value = req.shop_id || "";
+    $("#genMachines").value = req.machine_id || "";
+    $("#genMode").value = req.requested_kind === "pdf_unlock" ? "addon" : req.requested_kind === "combo" ? "combo" : "license";
+    switchView("keys");
+    await issueKeysNow(req.id);
+    return;
   }
 
-  async function publishReleaseNow() {
-    const version = document.getElementById("relVersion").value.trim().replace(/^v/i, "");
-    const fileInput = document.getElementById("relFile");
-    const file = fileInput.files && fileInput.files[0];
-    let download_url = document.getElementById("relUrl").value.trim();
-    const sha256 = document.getElementById("relSha").value.trim().toLowerCase();
-    const release_notes = document.getElementById("relNotes").value.trim();
-
-    if (!version) return notify("Enter a version number (e.g. 0.8.1).", true);
-    if (!/^[0-9a-f]{64}$/.test(sha256)) return notify("Valid 64-char SHA-256 checksum required (pick your .exe file above).", true);
-
-    const btn = document.getElementById("pubRelBtn");
-    btn.disabled = true;
+  const dismissBtn = e.target.closest("[data-dismiss]");
+  if (dismissBtn) {
+    dismissBtn.disabled = true;
     try {
-      if (file) {
-        btn.textContent = "Uploading installer to Supabase Storage…";
-        const objPath = `v${version}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-        const { error: upErr } = await sb.storage.from("cafedesk-releases").upload(objPath, file, { upsert: true });
-        if (upErr) throw new Error("Storage upload failed: " + upErr.message);
-        const { data: pubUrl } = sb.storage.from("cafedesk-releases").getPublicUrl(objPath);
-        download_url = pubUrl.publicUrl;
-        document.getElementById("relUrl").value = download_url;
-      }
-      if (!download_url.startsWith("https://")) throw new Error("Download URL must start with https://");
-
-      btn.textContent = "Publishing release record…";
-      const { error } = await sb.from("app_releases").upsert({
-        version, download_url, sha256, release_notes, mandatory: false, published_at: new Date().toISOString(),
-      });
-      if (error) throw new Error(error.message);
-      notify(`Published Café Desk v${version}! All shops can now update remotely.`);
+      await callOwnerAdmin({ action: "update_request_status", request_id: dismissBtn.dataset.dismiss, status: "rejected" });
+      toast("Request dismissed.", "info");
       await refreshAll();
-    } catch (e) {
-      notify(e.message, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "🚀 Upload & Publish Remote Update";
+    } catch (err) {
+      toast(err.message, "err");
+      dismissBtn.disabled = false;
     }
   }
+});
 
-  function renderReleasesTable() {
-    const tb = document.getElementById("releasesTbody");
-    if (!allReleases.length) {
-      tb.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px;">No remote updates published yet.</td></tr>`;
-      return;
-    }
-    tb.innerHTML = allReleases.map((r) => `
-      <tr>
-        <td><strong style="color:var(--lime);">v${esc(r.version)}</strong></td>
-        <td class="mono">${esc(String(r.published_at || "").slice(0, 10))}</td>
-        <td class="mono" style="font-size:11.5px;">${esc(String(r.sha256 || "").slice(0, 16))}…</td>
-        <td>${esc(r.release_notes || "-")}</td>
-        <td><a class="btn btn-secondary btn-sm" target="_blank" href="${esc(r.download_url)}">Download</a></td>
-      </tr>
-    `).join("");
+/* ---------------- issue keys ---------------- */
+async function issueKeysNow(prefillReqId = null) {
+  const customer = $("#genCustomer").value.trim() || "Licensed Café";
+  const mode = $("#genMode").value;
+  const days = parseInt($("#genDays").value || "365", 10);
+  const shop_id = $("#genShopId").value.trim();
+  const machines = $("#genMachines").value.trim();
+  if (!machines) return toast("Paste at least one Machine ID (CD-XXXX-XXXX-XXXX).", "err");
+
+  const btn = $("#genSubmitBtn");
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "Signing in cloud vault…";
+  try {
+    const res = await callOwnerAdmin({ action: "sign_keys", customer, mode, days, shop_id, machines, request_id: prefillReqId });
+    const box = $("#issuedResultBox");
+    box.classList.remove("hidden");
+    box.innerHTML = `<div class="ok">✓ Signed &amp; live in Supabase — ${res.issued.length} computer key(s). The customer can tap “Check Online Approval” right now.</div>` +
+      res.issued.map((item) => {
+        const seatTxt = item.seat_no ? ` · seat ${item.seat_no}/${item.seat_max} ${esc(item.seat_label || "")}` : "";
+        const waMsg = encodeURIComponent(
+          `Hi ${item.customer}! Your Café Desk key for Machine ID ${item.machine_id}${item.seat_no ? " (seat " + item.seat_no + "/" + item.seat_max + ")" : ""} is active until ${item.expires_at}.\n\n` +
+          `Easiest: open Café Desk and click "Check Online Approval".\n\nOr paste this offline key:\n${item.token}`
+        );
+        return `<div class="issued-item">
+          <div class="hd">
+            <span><strong class="mono" style="color:var(--lime)">${esc(item.machine_id)}</strong>${esc(seatTxt)} <span class="badge b-blue">${esc(item.key_type)}</span></span>
+            <span style="display:flex;gap:6px">
+              <button class="btn btn-ghost btn-sm" data-copy="${attr(item.token)}">⧉ Copy</button>
+              <a class="btn btn-wa btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text=${waMsg}">💬 WhatsApp</a>
+            </span>
+          </div>
+          <input readonly value="${attr(item.token)}" class="mono" onclick="this.select()">
+        </div>`;
+      }).join("");
+    toast(`Issued ${res.issued.length} key(s) for ${customer}.`);
+    await refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
   }
+}
 
-  function exportCsv() {
-    const header = ["Machine ID", "Customer", "Shop ID", "Seat", "Type", "Issued", "Expires", "Revoked", "License ID", "Token"];
-    const lines = [header.join(",")];
-    for (const k of allKeys) {
-      const seat = k.seat_no ? `Seat ${k.seat_no}/${k.seat_max} (${k.seat_label || ""})` : "";
-      const vals = [k.machine_id, k.customer, k.shop_id, seat, k.key_type, k.issued_at, k.expires_at, k.revoked, k.license_id, k.token]
-        .map((v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`);
-      lines.push(vals.join(","));
+/* ---------------- releases ---------------- */
+async function handleReleaseFilePicked(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  toast("Computing SHA-256 fingerprint…", "info");
+  const buf = await file.arrayBuffer();
+  const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+  const hex = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  $("#relSha").value = hex;
+  const ver = ($("#relVersion").value || "latest").trim().replace(/[^a-zA-Z0-9._-]/g, "");
+  const objName = `v${ver}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+  $("#relUrl").value = `${SUPABASE_URL}/storage/v1/object/public/cafedesk-releases/${objName}`;
+  toast("SHA-256 computed. Ready to publish.");
+}
+
+async function publishReleaseNow() {
+  const version = $("#relVersion").value.trim().replace(/^v/i, "");
+  const fileInput = $("#relFile");
+  const file = fileInput.files && fileInput.files[0];
+  let download_url = $("#relUrl").value.trim();
+  const sha256 = $("#relSha").value.trim().toLowerCase();
+  const release_notes = $("#relNotes").value.trim();
+
+  if (!version) return toast("Enter a version number (e.g. 0.8.3).", "err");
+  if (!/^[0-9a-f]{64}$/.test(sha256)) return toast("A valid 64-character SHA-256 is required (pick your installer file).", "err");
+
+  const btn = $("#pubRelBtn");
+  btn.disabled = true;
+  try {
+    if (file) {
+      btn.textContent = "Uploading installer…";
+      const objPath = `v${version}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const { error: upErr } = await sb.storage.from("cafedesk-releases").upload(objPath, file, { upsert: true });
+      if (upErr) throw new Error("Storage upload failed: " + upErr.message);
+      const { data: pubUrl } = sb.storage.from("cafedesk-releases").getPublicUrl(objPath);
+      download_url = pubUrl.publicUrl;
+      $("#relUrl").value = download_url;
     }
-    const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `cafedesk-cloud-keys-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
+    if (!download_url.startsWith("https://")) throw new Error("Download URL must start with https://");
+    btn.textContent = "Publishing…";
+    const { error } = await sb.from("app_releases").upsert({
+      version, download_url, sha256, release_notes, mandatory: false, published_at: new Date().toISOString(),
+    });
+    if (error) throw new Error(error.message);
+    toast(`Published Café Desk v${version} — every shop can update remotely.`);
+    await refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🚀 Upload & publish";
   }
+}
 
+async function syncGithubRelease() {
+  toast("Reading latest GitHub build…", "info");
+  try {
+    const res = await callOwnerAdmin({ action: "sync_github_release", repo: REPO });
+    toast(`Synced v${res.release.version} into auto-update.`);
+    await refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+/* ---------------- download hub ---------------- */
+let dlTarget = "exe";
+function openDownloadHub(target) {
+  dlTarget = target === "zip" ? "zip" : "exe";
+  $("#dlModal").classList.remove("hidden");
+  renderDownloadHub();
+  if (state.gh === null) {
+    loadGithubRelease().then(() => renderDownloadHub());
+  }
+}
+
+function findAsset(ext) {
+  const assets = (state.gh && Array.isArray(state.gh.assets)) ? state.gh.assets : [];
+  return assets.find((a) => String(a.name || "").toLowerCase().endsWith(ext)) || null;
+}
+
+function humanSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (!b) return "—";
+  if (b > 1024 * 1024 * 1024) return (b / 1073741824).toFixed(2) + " GB";
+  if (b > 1024 * 1024) return (b / 1048576).toFixed(1) + " MB";
+  return Math.max(1, Math.round(b / 1024)) + " KB";
+}
+
+function renderDownloadHub() {
+  const gh = state.gh;
+  const exe = findAsset(".exe");
+  const zip = findAsset(".zip");
+  const sums = state.sums || {};
+  const exeSha = (sums.setup_exe && sums.setup_exe.sha256) || "";
+  const zipSha = (sums.usb_zip && sums.usb_zip.sha256) || "";
+  const version = gh ? String(gh.tag_name || "").replace(/^v/i, "") || (gh.name || "") : "";
+  const published = gh && gh.published_at ? new Date(gh.published_at).toLocaleDateString("en-ZA", { day: "2-digit", month: "short", year: "numeric" }) : "";
+
+  $("#dlVersionLine").textContent = gh
+    ? `Latest build v${version || "—"} · published ${published} · ${gh.assets ? gh.assets.length : 0} files`
+    : "No GitHub build published yet — the first merge to main creates it automatically.";
+
+  const exeUrl = exe ? exe.browser_download_url : DL_EXE;
+  const zipUrl = zip ? zip.browser_download_url : DL_ZIP;
+
+  const card = (opts) => `
+    <div class="dl-card">
+      <div class="top">
+        <div class="dl-ico ${opts.tone || ""}">${opts.icon}</div>
+        <div>
+          <div class="nm">${opts.title}</div>
+          <div class="ds">${opts.desc}</div>
+        </div>
+      </div>
+      <div class="meta">
+        <span>${opts.size}</span>
+        <span>${opts.type}</span>
+        <span>${opts.arch || "Windows 10 / 11"}</span>
+      </div>
+      <a class="btn ${opts.primary ? "btn-primary" : "btn-ghost"}" href="${attr(opts.url)}" download rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19h14"/></svg>
+        ${opts.cta}
+      </a>
+      ${opts.sha ? `<div class="hash-row">
+        <span class="hash" title="${attr(opts.sha)}">SHA-256 ${esc(shortId(opts.sha, 34))}</span>
+        <button class="icon-btn" data-copy="${attr(opts.sha)}" title="Copy checksum">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5.5A1.5 1.5 0 0013.5 4H5.5A1.5 1.5 0 004 5.5v8A1.5 1.5 0 005.5 15"/></svg>
+        </button>
+      </div>` : `<div class="hash-row"><span class="hash">Checksum available after first build</span></div>`}
+    </div>`;
+
+  const installerIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9 20h6"/><path d="M12 16.5V20"/></svg>';
+  const zipIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5V7a1 1 0 011-1h14a1 1 0 011 1v1.5"/><path d="M4 8.5h16V18a1 1 0 01-1 1H5a1 1 0 01-1-1z"/><path d="M10 12h4"/></svg>';
+
+  $("#dlHubBody").innerHTML = `
+    <div class="dl-grid" style="margin-top:0">
+      ${card({
+        title: "Windows installer",
+        desc: "CafeDesk-Setup.exe · 1-year licensed edition",
+        icon: installerIcon,
+        size: exe ? humanSize(exe.size) : "Latest build",
+        type: "Installer · .exe",
+        arch: "x64 · 64-bit",
+        url: exeUrl,
+        cta: "Download installer",
+        primary: true,
+        sha: exeSha,
+      })}
+      ${card({
+        title: "USB portable edition",
+        desc: "Unzip on a flash drive, run CafeDesk.exe",
+        icon: zipIcon,
+        tone: "blue",
+        size: zip ? humanSize(zip.size) : "Latest build",
+        type: "Portable · .zip",
+        arch: "No install needed",
+        url: zipUrl,
+        cta: "Download portable ZIP",
+        primary: false,
+        sha: zipSha,
+      })}
+    </div>
+    ${gh ? `<div class="note" style="margin-top:14px"><span>📦</span><div><b>v${esc(version)}</b> was compiled automatically from the latest main branch. Installer and portable build are identical — pick whichever your customer prefers.</div></div>`
+        : `<div class="note warn" style="margin-top:14px"><span>⏳</span><div><b>First build in progress.</b> GitHub Actions publishes <code>CafeDesk-Setup.exe</code> and the portable ZIP a couple of minutes after the first merge to <b>main</b>. Tap the download buttons — the links start working the moment the build finishes.</div></div>`}
+  `;
+
+  $("#dlWhatsapp").href = "https://wa.me/?text=" + encodeURIComponent(
+    `Café Desk ${version ? "v" + version + " " : ""}for Windows 10/11 — download here:\n${DL_PAGE}`
+  );
+  $("#dlReleasePage").href = DL_PAGE;
+
+  // Prefer the card the user clicked
+  if (dlTarget === "zip") {
+    const z = document.querySelectorAll("#dlHubBody a.btn")[1];
+    if (z) z.style.boxShadow = "0 0 0 3px rgba(122,179,255,.22)";
+  }
+}
+
+async function copyDownloadLink() {
+  const text = `${DL_PAGE}\n\nInstaller: ${DL_EXE}\nPortable: ${DL_ZIP}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Download links copied.");
+  } catch (_) {
+    toast("Could not access clipboard.", "err");
+  }
+}
+
+/* ---------------- CSV export ---------------- */
+function exportCsv() {
+  const header = ["Machine ID", "Customer", "Shop ID", "Seat", "Type", "Issued", "Expires", "Revoked", "License ID", "Token"];
+  const lines = [header.join(",")];
+  for (const k of state.keys) {
+    const seat = k.seat_no ? `Seat ${k.seat_no}/${k.seat_max} (${k.seat_label || ""})` : "";
+    lines.push([k.machine_id, k.customer, k.shop_id, seat, k.key_type, k.issued_at, k.expires_at, k.revoked, k.license_id, k.token]
+      .map((v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","));
+  }
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `cafedesk-keys-${isoDay(new Date())}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+/* ---------------- realtime + boot ---------------- */
+let liveTimer = null;
+function startLive() {
+  if (liveTimer) clearInterval(liveTimer);
+  liveTimer = setInterval(async () => {
+    if (document.visibilityState !== "visible" || state.loading) return;
+    try {
+      const [stRes, reqRes] = await Promise.all([
+        sb.from("station_heartbeats").select("*").order("last_seen_at", { ascending: false }).limit(500),
+        sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
+      ]);
+      if (!stRes.error) state.stations = stRes.data || [];
+      if (!reqRes.error) state.reqs = reqRes.data || [];
+      $("#navReqCount").textContent = state.reqs.length;
+      $("#navReqCount").classList.toggle("hidden", !state.reqs.length);
+      $("#liveLabel").textContent = "Live · " + new Date().toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
+      if (state.view === "overview" || state.view === "analytics" || state.view === "requests") renderCurrentView();
+    } catch (_) {}
+  }, 60000);
+  $("#liveLabel").textContent = "Live";
+}
+
+function applySession(session) {
+  const loggedIn = Boolean(session && session.user);
+  $("#bootScreen").classList.add("hidden");
+  $("#authView").classList.toggle("hidden", loggedIn);
+  $("#appView").classList.toggle("hidden", !loggedIn);
+  if (!loggedIn) {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    return;
+  }
+  state.email = session.user.email || "";
+  const name = (state.email.split("@")[0] || "Owner").replace(/[._-]+/g, " ");
+  const pretty = name.charAt(0).toUpperCase() + name.slice(1);
+  $("#ownerName").textContent = pretty;
+  $("#ownerEmailSide").textContent = state.email;
+  $("#avatarInitial").textContent = (pretty[0] || "N").toUpperCase();
+  if (state.email.toLowerCase() !== OWNER_EMAIL) {
+    toast("This account is not the registered owner.", "err");
+  }
+  switchView("overview");
+  refreshAll();
+  startLive();
+}
+
+(async function boot() {
+  try {
+    const { data } = await sb.auth.getSession();
+    applySession(data.session);
+  } catch (err) {
+    $("#bootScreen").classList.add("hidden");
+    $("#authView").classList.remove("hidden");
+    $("#authMsg").textContent = "Could not reach Supabase. Check your connection.";
+    $("#authMsg").style.color = "#ff9488";
+  }
   sb.auth.onAuthStateChange((_event, session) => {
-    const loggedIn = Boolean(session && session.user);
-    document.getElementById("authSection").classList.toggle("hidden", loggedIn);
-    document.getElementById("appSection").classList.toggle("hidden", !loggedIn);
-    document.getElementById("userBar").classList.toggle("hidden", !loggedIn);
-    if (loggedIn) {
-      document.getElementById("ownerEmailBadge").textContent = session.user.email;
-      refreshAll();
+    applySession(session);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      ["dlModal", "pwdModal"].forEach((id) => { const el = document.getElementById(id); if (el) el.classList.add("hidden"); });
+      toggleSidebar(false);
     }
   });
+})();
 </script>
 </body>
 </html>
