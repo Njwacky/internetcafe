@@ -53,6 +53,26 @@ create policy "Anyone can check latest app release"
     using (true);
 
 -- -----------------------------------------------------------------------------
+-- CUSTOMER ANNOUNCEMENTS (in-app updates, service notices, and promotions)
+-- -----------------------------------------------------------------------------
+create table if not exists public.app_announcements (
+    id              uuid primary key default gen_random_uuid(),
+    title           text not null,
+    message         text not null,
+    kind            text not null default 'info' check (kind in ('update', 'promotion', 'info')),
+    active          boolean not null default true,
+    published_at    timestamptz not null default now()
+);
+
+alter table public.app_announcements enable row level security;
+drop policy if exists "Customers can read active announcements" on public.app_announcements;
+create policy "Customers can read active announcements" on public.app_announcements
+    for select to anon, authenticated using (active = true);
+
+grant select on public.app_announcements to anon, authenticated;
+grant insert, update, delete on public.app_announcements to authenticated;
+
+-- -----------------------------------------------------------------------------
 -- 2. MULTI-PC SHOPS & SEAT QUOTAS (Owner Managed via service_role / Edge RPC)
 -- -----------------------------------------------------------------------------
 create table if not exists public.shops (
@@ -480,6 +500,11 @@ create policy "Owner full access to activation_requests"
 drop policy if exists "Owner full access to shops" on public.shops;
 create policy "Owner full access to shops"
     on public.shops for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+drop policy if exists "Owner manage app announcements" on public.app_announcements;
+create policy "Owner manage app announcements" on public.app_announcements
+    for all to authenticated
     using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
 
 drop policy if exists "Owner write access to app_releases" on public.app_releases;

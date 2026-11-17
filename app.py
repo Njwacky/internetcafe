@@ -135,7 +135,7 @@ class CafeDesk(ctk.CTk):
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._last_telemetry_flush=0.0; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick)
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick)
         if settings_corrupted:
             self.status.set('⚠ Settings file damaged • staff access locked fail-closed until restored')
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
@@ -569,6 +569,29 @@ class CafeDesk(ctk.CTk):
         self.job('Saving recovery copy…',work,lambda _:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted'),error_cb=on_fail)
     def recovery_tick(self):
         self.perform_recovery();self.after(60000,self.recovery_tick)
+    def remote_entitlement_tick(self):
+        # Remote pause/resume and new approvals are applied on launch and every 10 minutes.
+        self.after(600000,self.remote_entitlement_tick)
+        cfg=settings_store.load_settings()
+        if self._entitlement_sync_running or not cloud_sync.is_supabase_configured(cfg): return
+        self._entitlement_sync_running=True
+        def check_online():
+            try: result=cloud_sync.sync_machine_entitlements_from_cloud(cfg)
+            except Exception as exc: result={'ok':False,'error':str(exc)}
+            self.events.put(('ok',self._finish_remote_entitlement_sync,result))
+        threading.Thread(target=check_online,daemon=True).start()
+    def _finish_remote_entitlement_sync(self,result):
+        self._entitlement_sync_running=False
+        if not isinstance(result,dict) or not result.get('ok'): return
+        revoked=result.get('revoked') or []
+        activated=result.get('activated') or []
+        if revoked:
+            self.status.set('License access paused by the owner • contact support if unexpected')
+            messagebox.showwarning('Café Desk access paused', 'The owner remotely paused this computer’s license. Contact the Café Desk owner if you believe this is a mistake.',parent=self)
+            if license_guard.is_license_required() and not license_guard.current_license_status().get('valid'):
+                self.close_app()
+        elif activated:
+            self.status.set('Cloud license approval applied successfully')
     def projects_screen(self):
         self.heading(self.body,'Projects & recovery','Save your work to reopen and keep working later.')
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Save or open a project',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
@@ -699,6 +722,14 @@ class CafeDesk(ctk.CTk):
             size=12,color=MUTED,wraplength=740,justify='left',
         ).pack(anchor='w',padx=20,pady=(0,12))
 
+
+        def update_dot_state(available):
+            if not update_dot.winfo_exists(): return
+            if available:
+                update_dot.pack(side='left',before=check_updates_button,padx=(0,8))
+            else:
+                update_dot.pack_forget()
+
         def check_updates_click():
             cfg=settings_store.load_settings()
             if not cloud_sync.is_supabase_configured(cfg):
@@ -708,10 +739,19 @@ class CafeDesk(ctk.CTk):
                     parent=self,
                 )
             def _run_chk():
-                return cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD)
-            def _done_chk(res):
+                return {
+                    'update': cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD),
+                    'announcements': cloud_sync.fetch_app_announcements(cfg),
+                }
+            def _done_chk(result):
+                res=result['update']
+                announcements=result.get('announcements') or []
+                if announcements:
+                    notice_text='\n\n'.join(f"{str(a.get('title') or 'Café Desk notice')}\n{str(a.get('message') or '')}" for a in announcements[:5])
+                    messagebox.showinfo('Café Desk news & offers',notice_text,parent=self)
                 if not res.get('ok'):
                     return messagebox.showerror('Update Check Failed',str(res.get('error') or 'Could not check updates.'),parent=self)
+                update_dot_state(bool(res.get('update_available')))
                 if not res.get('update_available'):
                     self.status.set(f'Up to date • Café Desk v{APP_BUILD}')
                     return messagebox.showinfo('Up to Date',f"You already have the latest Café Desk version (v{APP_BUILD}).",parent=self)
@@ -778,8 +818,19 @@ class CafeDesk(ctk.CTk):
             self.job('Syncing Machine ID approvals from cloud…',_do_k,_done_k)
 
         urow=ctk.CTkFrame(upd_box,fg_color='transparent'); urow.pack(fill='x',padx=20,pady=(0,18))
-        button(urow,'⬇ Check for App Updates',check_updates_click,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
+        update_dot=ctk.CTkLabel(urow,text='● Update available',text_color='#FFCC66',font=('Segoe UI',11,'bold'))
+        check_updates_button=button(urow,'⬇ Check for App Updates',check_updates_click,fg_color=LIME,hover_color='#A9EB65',text_color='#142018')
+        check_updates_button.pack(side='left',padx=(0,BTN_PADX))
         button(urow,'☁ Sync Approved Keys Online',sync_keys_online_click,secondary=True).pack(side='left')
+        if cloud_sync.is_supabase_configured(settings_store.load_settings()):
+            def _check_badge_in_background():
+                try:
+                    res=cloud_sync.check_for_app_update(settings_store.load_settings(),current_version=APP_BUILD)
+                    if res.get('ok'):
+                        self.after(0,lambda:update_dot_state(bool(res.get('update_available'))))
+                except Exception:
+                    pass  # Offline cafés stay quiet; the manual check explains any connection problem.
+            threading.Thread(target=_check_badge_in_background,daemon=True).start()
         lic_status=license_guard.current_license_status()
         lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12))
         lic_box.pack_forget()
