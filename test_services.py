@@ -1607,6 +1607,67 @@ class WorkspaceTelemetryTests(unittest.TestCase):
             self.assertIn(fragment,dash)
         self.assertNotIn('service_role',dash)
 
+    def test_public_download_page_is_separate_from_owner_console(self):
+        """Customers get a password-free download page; the owner console stays private at /dashboard."""
+        repo=Path(__file__).resolve().parent
+        page=(repo/'download.html').read_text(encoding='utf-8')
+        for fragment in ('CafeDesk-Setup.exe','CafeDesk-Windows-USB-Portable.zip',
+                         'CafeDesk-Release-Checksums.json','SHA-256','/dashboard'):
+            self.assertIn(fragment,page)
+        # It is a marketing/download page: no owner auth or signing surface.
+        for forbidden in ('signInWithOtp','owner-admin','service_role','SUPABASE_ANON_KEY','issueKeysNow'):
+            self.assertNotIn(forbidden,page)
+        # The installable PWA is the owner console only.
+        self.assertNotIn('manifest.webmanifest',page)
+
+    def test_pwa_manifest_and_service_worker_are_installable(self):
+        import json
+        repo=Path(__file__).resolve().parent
+        manifest=json.loads((repo/'manifest.webmanifest').read_text(encoding='utf-8'))
+        self.assertEqual(manifest['start_url'],'/dashboard?source=pwa')
+        self.assertEqual(manifest['display'],'standalone')
+        self.assertEqual(manifest['scope'],'/')
+        purposes={icon.get('purpose') for icon in manifest['icons']}
+        self.assertEqual(purposes,{'any','maskable'})
+        sizes={icon['sizes'] for icon in manifest['icons']}
+        self.assertTrue({'192x192','512x512'}.issubset(sizes))
+        for icon in manifest['icons']:
+            icon_path=repo/icon['src'].lstrip('/')
+            self.assertTrue(icon_path.is_file(),f"missing PWA icon {icon['src']}")
+            self.assertGreater(icon_path.stat().st_size,0)
+        sw=(repo/'sw.js').read_text(encoding='utf-8')
+        self.assertIn("'/dashboard'",sw)
+        self.assertIn('/offline.html',sw)
+        # Never serve stale auth/API traffic from the cache.
+        for bypass in ("'/rest/'","'/auth/'","'/functions/'","'/storage/'"):
+            self.assertIn(bypass,sw)
+
+    def test_dashboard_exposes_install_and_deep_links(self):
+        dash=(Path(__file__).resolve().parent/'owner-dashboard.html').read_text(encoding='utf-8')
+        for fragment in ('manifest.webmanifest','apple-touch-icon','beforeinstallprompt',
+                         'serviceWorker','registerServiceWorker','promptInstall','deepLinkView'):
+            self.assertIn(fragment,dash)
+        # Bottom of the funnel must point customers at the public page, not the console.
+        self.assertIn('publicPageUrl',dash)
+        self.assertIn('internetcafe.vercel.app',dash)
+
+    def test_vercel_routes_public_page_and_private_console(self):
+        import json
+        cfg=json.loads((Path(__file__).resolve().parent/'vercel.json').read_text(encoding='utf-8'))
+        rewrites={r['source']:r['destination'] for r in cfg['rewrites']}
+        self.assertEqual(rewrites['/'],'/index.html')
+        self.assertEqual(rewrites['/dashboard'],'/owner-dashboard.html')
+        self.assertEqual(rewrites['/admin'],'/owner-dashboard.html')
+        for asset in ('download.html','manifest.webmanifest','sw.js','offline.html','assets/pwa'):
+            self.assertIn(asset,cfg['buildCommand'])
+        headered={h['source']:h['headers'] for h in cfg['headers']}
+        # The owner console must never be indexed or framed.
+        for protected in ('/dashboard','/owner-dashboard.html'):
+            keys={h['key']:h['value'] for h in headered[protected]}
+            self.assertEqual(keys['X-Frame-Options'],'DENY')
+            self.assertIn('noindex',keys['X-Robots-Tag'])
+        self.assertIn('Service-Worker-Allowed',{h['key'] for h in headered['/sw.js']})
+
     def test_app_records_screen_visits_without_blocking_the_ui(self):
         app_src=(Path(__file__).resolve().parent/'app.py').read_text(encoding='utf-8')
         for fragment in ('_note_screen_visit','_flush_telemetry_async','threading.Thread(target=_bg,daemon=True)',

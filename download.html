@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#fbfaf7">
+<title>Café Desk — Every document your café prints, in one calm PC app</title>
+<meta name="description" content="Download Café Desk for Windows 10 &amp; 11. PDF tools, CVs, scans, cards, forms, receipts and sales reports for internet cafés and print shops — with per-computer licensing and free updates.">
+<meta property="og:title" content="Café Desk — the calm document app for internet cafés">
+<meta property="og:description" content="One Windows app for PDFs, CVs, scans, cards, forms and receipts. Download the official installer or portable USB edition.">
+<meta property="og:type" content="website">
+<link rel="canonical" href="/">
+<link rel="icon" href="/assets/pwa/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/pwa/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#fbfaf7;
+    --paper-2:#ffffff;
+    --sand:#f2efe7;
+    --sand-2:#e9e5da;
+    --ink:#17211c;
+    --ink-2:#3f4a43;
+    --muted:#6b746d;
+    --dim:#98a09a;
+    --line:#e3e0d6;
+    --line-2:#d5d1c4;
+    --green:#0f7a52;
+    --green-2:#16a06a;
+    --green-soft:#e8f5ee;
+    --lime:#b9ff70;
+    --amber:#b4761b;
+    --amber-soft:#fdf3e0;
+    --shadow:0 1px 2px rgba(23,33,28,.05), 0 12px 28px rgba(23,33,28,.07);
+    --shadow-lg:0 2px 4px rgba(23,33,28,.04), 0 26px 60px rgba(23,33,28,.12);
+    --r:18px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--paper);color:var(--ink);
+    font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+    font-size:16px;line-height:1.62;letter-spacing:-.011em;-webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{margin:0;line-height:1.14;letter-spacing:-.028em}
+  h1,h2{font-family:"Fraunces",Georgia,serif;font-weight:600;letter-spacing:-.022em}
+  p{margin:0}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1160px;margin:0 auto;padding:0 24px}
+  .mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;font-size:11.5px;font-weight:700;
+    letter-spacing:.11em;text-transform:uppercase;color:var(--green);
+  }
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--green-2);box-shadow:0 0 0 0 rgba(22,160,106,.45);animation:pulse 2.4s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 7px rgba(22,160,106,0)}100%{box-shadow:0 0 0 0 rgba(22,160,106,0)}}
+
+  /* ---------- nav ---------- */
+  header{position:sticky;top:0;z-index:50;background:rgba(251,250,247,.86);backdrop-filter:blur(14px) saturate(150%);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;gap:14px;padding:14px 0}
+  .brand{display:flex;align-items:center;gap:10px;flex:none}
+  .mark{
+    width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none;
+    background:linear-gradient(145deg,#c9ff8f,#6ee7d0);color:#0a2018;font-weight:800;font-size:16px;
+    box-shadow:0 3px 10px rgba(22,160,106,.22);
+  }
+  .brand-txt{font-weight:750;font-size:15px;letter-spacing:-.02em;display:block}
+  .brand-sub{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.14em;font-weight:700}
+  .nav-links{display:flex;align-items:center;gap:2px;margin-left:auto}
+  .nav-links a{font-size:13.5px;font-weight:550;color:var(--ink-2);padding:8px 12px;border-radius:9px;transition:.16s}
+  .nav-links a:hover{background:var(--sand);color:var(--ink)}
+  .nav-links a.cta{
+    background:var(--green);color:#fff;font-weight:650;padding:9px 15px;margin-left:6px;
+    box-shadow:0 1px 2px rgba(15,122,82,.24), 0 6px 16px rgba(15,122,82,.16);
+  }
+  .nav-links a.cta:hover{background:#0c6644;color:#fff}
+
+  /* ---------- hero ---------- */
+  .hero{padding:64px 0 8px;display:grid;grid-template-columns:1.02fr .98fr;gap:52px;align-items:start}
+  .hero h1{font-size:clamp(32px,4.4vw,52px);margin:16px 0 0}
+  .hero h1 em{font-style:normal;position:relative;white-space:nowrap}
+  .hero h1 em::after{
+    content:"";position:absolute;left:0;right:0;bottom:.06em;height:.30em;border-radius:3px;
+    background:linear-gradient(90deg,rgba(185,255,112,.85),rgba(110,231,208,.7));z-index:-1;
+  }
+  .lede{font-size:17px;color:var(--ink-2);margin-top:20px;max-width:46ch}
+  .hero-cta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:30px}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:9px;padding:14px 22px;border-radius:12px;
+    border:1px solid transparent;font:inherit;font-size:14.5px;font-weight:650;cursor:pointer;
+    transition:transform .14s,box-shadow .18s,background .18s,border-color .18s;white-space:nowrap;
+  }
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:var(--green);color:#fff;box-shadow:0 1px 2px rgba(15,122,82,.3),0 10px 26px rgba(15,122,82,.2)}
+  .btn-primary:hover{background:#0c6644;box-shadow:0 2px 4px rgba(15,122,82,.3),0 14px 32px rgba(15,122,82,.26)}
+  .btn-secondary{background:var(--paper-2);color:var(--ink);border-color:var(--line-2);box-shadow:0 1px 2px rgba(23,33,28,.04)}
+  .btn-secondary:hover{background:var(--sand);border-color:#c8c3b4}
+  .btn svg{width:17px;height:17px;flex:none}
+  .btn-sm{padding:10px 15px;font-size:13px;border-radius:10px}
+  .hero-meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:22px;font-size:12.8px;color:var(--muted)}
+  .hero-meta span{display:inline-flex;align-items:center;gap:6px}
+  .hero-meta svg{width:14px;height:14px;color:var(--green-2);flex:none}
+
+  /* ---------- app mockup ---------- */
+  .mock{position:relative;filter:drop-shadow(0 30px 60px rgba(23,33,28,.14))}
+  .mock-window{
+    background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;
+  }
+  .mock-bar{display:flex;align-items:center;gap:8px;padding:10px 13px;background:var(--sand);border-bottom:1px solid var(--line)}
+  .mock-dots{display:flex;gap:5px}
+  .mock-dots i{width:9px;height:9px;border-radius:50%;background:#d8d3c6}
+  .mock-dots i:first-child{background:#f0b7ac}
+  .mock-dots i:nth-child(2){background:#f2d9a4}
+  .mock-dots i:nth-child(3){background:#b6dfb9}
+  .mock-title{font-size:11px;font-weight:650;color:var(--muted);margin-left:4px}
+  .mock-pill{margin-left:auto;font-size:10px;font-weight:700;color:var(--green);background:var(--green-soft);border:1px solid #cfe8da;padding:3px 8px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
+  .mock-body{display:grid;grid-template-columns:118px 1fr;min-height:330px}
+  .mock-side{background:#faf9f5;border-right:1px solid var(--line);padding:11px 8px;display:flex;flex-direction:column;gap:2px}
+  .mock-side .si{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:7px;font-size:10.5px;font-weight:550;color:var(--ink-2)}
+  .mock-side .si.active{background:var(--green-soft);color:var(--green);font-weight:700}
+  .mock-side .si b{width:7px;height:7px;border-radius:2px;background:currentColor;opacity:.55;flex:none}
+  .mock-main{padding:16px}
+  .mock-h{font-size:12.5px;font-weight:750;letter-spacing:-.015em}
+  .mock-sub{font-size:10.5px;color:var(--dim);margin-top:2px}
+  .mock-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px}
+  .mock-card{background:#faf9f5;border:1px solid var(--line);border-radius:9px;padding:9px}
+  .mock-card .k{font-size:8.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+  .mock-card .v{font-size:15px;font-weight:750;margin-top:3px;letter-spacing:-.02em}
+  .mock-card .d{font-size:9px;color:var(--green);font-weight:650;margin-top:1px}
+  .mock-chart{margin-top:13px;background:#faf9f5;border:1px solid var(--line);border-radius:9px;padding:11px}
+  .mock-bars{display:flex;align-items:flex-end;gap:5px;height:62px;margin-top:9px}
+  .mock-bars i{flex:1;background:linear-gradient(180deg,#8fe4b3,#16a06a);border-radius:3px 3px 0 0;opacity:.9}
+  .mock-foot{display:flex;gap:7px;margin-top:11px}
+  .mock-foot span{font-size:9px;font-weight:650;padding:4px 8px;border-radius:999px;background:var(--green-soft);color:var(--green);border:1px solid #d3e9dd}
+  .mock-float{
+    position:absolute;right:-16px;bottom:-18px;background:#fff;border:1px solid var(--line);
+    border-radius:13px;padding:11px 14px;box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:10px;
+  }
+  .mock-float .ic{width:30px;height:30px;border-radius:9px;background:var(--green-soft);display:grid;place-items:center;color:var(--green);flex:none}
+  .mock-float .ic svg{width:15px;height:15px}
+  .mock-float .t{font-size:11.5px;font-weight:750}
+  .mock-float .s{font-size:10px;color:var(--dim)}
+
+  /* ---------- download panel ---------- */
+  .downloads{padding:70px 0 0}
+  .panel-head{text-align:center;max-width:60ch;margin:0 auto 30px}
+  .panel-head h2{font-size:clamp(25px,3.3vw,36px);margin-top:12px}
+  .panel-head p{color:var(--ink-2);margin-top:12px;font-size:15.5px}
+  .dl-cards{display:grid;grid-template-columns:1.15fr 1fr;gap:16px}
+  .dl{
+    background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r);padding:26px;
+    box-shadow:var(--shadow);display:flex;flex-direction:column;
+  }
+  .dl.primary{border-color:#bcdcc9;background:linear-gradient(170deg,#f4fbf6,#ffffff 55%)}
+  .dl-top{display:flex;align-items:center;gap:8px;font-size:10.5px;font-weight:750;letter-spacing:.1em;text-transform:uppercase;color:var(--green)}
+  .dl-top .tag{background:var(--green-soft);border:1px solid #cfe8da;padding:3px 9px;border-radius:999px}
+  .dl h3{font-size:20px;margin:14px 0 0;font-family:"Inter",sans-serif;letter-spacing:-.024em;font-weight:750}
+  .dl p{color:var(--ink-2);font-size:13.6px;margin-top:8px;max-width:40ch}
+  .specs{display:flex;gap:7px;flex-wrap:wrap;margin-top:16px}
+  .specs span{font-size:11px;font-weight:600;color:var(--muted);background:var(--sand);border:1px solid var(--line);padding:4px 9px;border-radius:999px}
+  .dl .btn{margin-top:18px;width:100%}
+  .hash-row{display:flex;align-items:center;gap:7px;margin-top:12px;font-size:10px;color:var(--dim)}
+  .hash-row code{
+    flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--sand);
+    border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-family:"JetBrains Mono",monospace;font-size:9.5px;
+  }
+  .hash-row button{border:1px solid var(--line);background:var(--paper-2);color:var(--muted);width:27px;height:27px;border-radius:7px;cursor:pointer;display:grid;place-items:center;flex:none}
+  .hash-row button:hover{color:var(--ink);border-color:var(--line-2)}
+  .build-note{margin-top:20px;text-align:center;font-size:12.5px;color:var(--muted)}
+  .build-note b{color:var(--green);font-weight:700}
+  .build-note a{color:var(--green);font-weight:650;text-decoration:underline;text-underline-offset:2px}
+
+  /* ---------- proof strip ---------- */
+  .proof{margin-top:44px;padding:22px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .proof-inner{display:flex;align-items:center;gap:28px;justify-content:center;flex-wrap:wrap}
+  .proof-inner .lbl{font-size:12px;color:var(--dim);font-weight:600;letter-spacing:.02em}
+  .proof-inner .item{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:650;color:var(--ink-2)}
+  .proof-inner .item svg{width:15px;height:15px;color:var(--green);flex:none}
+
+  /* ---------- section shell ---------- */
+  section.block{padding:76px 0 0}
+  .sec-head{max-width:56ch;margin-bottom:34px}
+  .sec-head h2{font-size:clamp(24px,3.1vw,34px);margin-top:12px}
+  .sec-head p{color:var(--ink-2);font-size:15.5px;margin-top:12px}
+
+  /* ---------- feature grid ---------- */
+  .fgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .card{
+    background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r);padding:24px;
+    box-shadow:0 1px 2px rgba(23,33,28,.04);transition:.2s;
+  }
+  .card:hover{box-shadow:var(--shadow);transform:translateY(-2px);border-color:var(--line-2)}
+  .card .ic{
+    width:38px;height:38px;border-radius:11px;display:grid;place-items:center;margin-bottom:15px;
+    background:var(--green-soft);color:var(--green);border:1px solid #d3e9dd;
+  }
+  .card .ic svg{width:18px;height:18px}
+  .card h3{font-size:15.5px;font-family:"Inter",sans-serif;font-weight:750;letter-spacing:-.02em}
+  .card p{font-size:13.4px;color:var(--ink-2);margin-top:7px;line-height:1.6}
+
+  /* ---------- wide showcase ---------- */
+  .show{display:grid;grid-template-columns:.95fr 1.05fr;gap:32px;align-items:center;margin-top:20px}
+  .show.rev{grid-template-columns:1.05fr .95fr}
+  .show h3{font-size:23px;font-family:"Inter",sans-serif;font-weight:750;letter-spacing:-.025em}
+  .show p{color:var(--ink-2);font-size:14.5px;margin-top:12px;max-width:44ch}
+  .ticks{margin:18px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px}
+  .ticks li{display:flex;gap:10px;font-size:13.6px;color:var(--ink-2)}
+  .ticks svg{width:16px;height:16px;color:var(--green-2);flex:none;margin-top:3px}
+  .shot{
+    background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r);padding:18px;
+    box-shadow:var(--shadow);
+  }
+  .shot-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+  .shot-h .t{font-size:12px;font-weight:750}
+  .shot-h .b{font-size:9.5px;font-weight:700;color:var(--green);background:var(--green-soft);border:1px solid #d3e9dd;padding:3px 8px;border-radius:999px}
+  .bars{display:flex;flex-direction:column;gap:9px}
+  .bar{display:grid;grid-template-columns:96px 1fr 34px;align-items:center;gap:10px;font-size:11px}
+  .bar .n{color:var(--ink-2);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar .track{height:8px;border-radius:99px;background:var(--sand);overflow:hidden}
+  .bar .fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#8fe4b3,#16a06a)}
+  .bar .v{text-align:right;font-weight:700;font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--muted)}
+  .rows{display:flex;flex-direction:column;gap:1px}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:11.5px}
+  .row:last-child{border-bottom:0}
+  .row .st{width:7px;height:7px;border-radius:50%;background:#c9c4b6;flex:none}
+  .row .st.on{background:var(--green-2);box-shadow:0 0 0 3px rgba(22,160,106,.14)}
+  .row .nm{font-weight:650;color:var(--ink)}
+  .row .mt{color:var(--dim);font-size:10.5px}
+  .row .rt{margin-left:auto;font-size:10px;font-weight:700;color:var(--green);background:var(--green-soft);padding:3px 8px;border-radius:999px;white-space:nowrap}
+
+  /* ---------- steps ---------- */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;counter-reset:s}
+  .step{background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r);padding:26px 24px;position:relative}
+  .step .num{
+    font-family:"Fraunces",serif;font-size:13px;font-weight:600;letter-spacing:.08em;color:var(--dim);
+    text-transform:uppercase;
+  }
+  .step h3{font-size:16px;font-family:"Inter",sans-serif;font-weight:750;margin-top:10px;letter-spacing:-.02em}
+  .step p{font-size:13.3px;color:var(--ink-2);margin-top:8px}
+  .step .mini{margin-top:14px;font-size:11.5px;font-weight:650;color:var(--green);display:inline-flex;align-items:center;gap:6px}
+
+  /* ---------- stats ---------- */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:22px}
+  .stat{background:var(--green-soft);border:1px solid #d3e9dd;border-radius:var(--r);padding:24px;text-align:center}
+  .stat .v{font-family:"Fraunces",serif;font-size:34px;font-weight:600;color:var(--green);letter-spacing:-.02em}
+  .stat .l{font-size:12.5px;color:var(--ink-2);margin-top:6px;font-weight:550}
+
+  /* ---------- faq ---------- */
+  .faq{max-width:840px}
+  details{border-bottom:1px solid var(--line);padding:4px 0}
+  details:first-of-type{border-top:1px solid var(--line)}
+  summary{
+    cursor:pointer;list-style:none;padding:19px 2px;font-size:15px;font-weight:650;
+    display:flex;align-items:center;justify-content:space-between;gap:16px;letter-spacing:-.015em;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"";width:9px;height:9px;border-right:2px solid var(--dim);border-bottom:2px solid var(--dim);transform:rotate(45deg);transition:.22s;flex:none;margin-right:4px}
+  details[open] summary::after{transform:rotate(225deg);border-color:var(--green)}
+  details .ans{padding:0 2px 20px;color:var(--ink-2);font-size:14px;max-width:70ch}
+  details .ans a{color:var(--green);font-weight:650;text-decoration:underline;text-underline-offset:2px}
+
+  /* ---------- closing cta ---------- */
+  .close-cta{margin-top:76px;background:linear-gradient(150deg,#f1faf4,#ffffff 60%);border:1px solid #d3e9dd;border-radius:24px;padding:44px 40px;text-align:center;box-shadow:var(--shadow)}
+  .close-cta h2{font-size:clamp(25px,3.2vw,36px)}
+  .close-cta p{color:var(--ink-2);margin:14px auto 0;max-width:52ch;font-size:15px}
+  .close-cta .row-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:26px}
+  .close-cta .fine{margin-top:20px;font-size:11.5px;color:var(--dim)}
+
+  /* ---------- footer ---------- */
+  footer{margin-top:64px;border-top:1px solid var(--line);padding:34px 0 44px}
+  .foot{display:flex;justify-content:space-between;gap:22px;flex-wrap:wrap;align-items:flex-start}
+  .foot .who{font-size:12.8px;color:var(--muted);max-width:44ch;line-height:1.65}
+  .foot-links{display:flex;gap:18px;flex-wrap:wrap;font-size:12.8px;color:var(--ink-2)}
+  .foot-links a:hover{color:var(--green)}
+
+  .toast{
+    position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(16px);
+    background:var(--ink);color:#f4f7f4;padding:12px 20px;border-radius:11px;font-size:13px;font-weight:600;
+    box-shadow:0 16px 40px rgba(23,33,28,.24);opacity:0;transition:.25s;pointer-events:none;z-index:80;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media (max-width:980px){
+    .hero{grid-template-columns:1fr;gap:38px;padding-top:44px}
+    .dl-cards,.fgrid,.steps,.stats{grid-template-columns:1fr}
+    .show,.show.rev{grid-template-columns:1fr;gap:24px}
+    .mock-float{right:8px;bottom:-14px}
+    section.block{padding-top:58px}
+    .nav-links a:not(.cta){display:none}
+    .close-cta{padding:34px 22px}
+  }
+  @media (max-width:600px){
+    .wrap{padding:0 16px}
+    body{font-size:15.5px}
+    .mock-body{grid-template-columns:96px 1fr}
+    .mock-side .si{font-size:9.5px;padding:5px 6px}
+    .mock-cards{grid-template-columns:1fr 1fr}
+    .mock-card:nth-child(3){display:none}
+    .proof-inner{gap:14px}
+    .hero-meta{gap:12px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/">
+      <span class="mark">C</span>
+      <span>
+        <span class="brand-txt">Café Desk</span>
+        <span class="brand-sub">For Windows 10 &amp; 11</span>
+      </span>
+    </a>
+    <nav class="nav-links">
+      <a href="#download">Download</a>
+      <a href="#features">What's inside</a>
+      <a href="#install">Install</a>
+      <a href="#faq">FAQ</a>
+      <a class="cta" href="/dashboard">Owner sign in</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- ================= HERO ================= -->
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <span class="eyebrow"><i class="dot"></i> Café Desk v<span id="verInline">0.8.2</span> · 2-minute setup</span>
+        <h1>Every document your café prints, in <em>one calm PC app</em>.</h1>
+        <p class="lede">PDFs, CVs, scans, cards, forms, receipts and daily sales — all in one Windows application built for internet cafés and print shops. No spreadsheets, no browser tabs, no training needed.</p>
+
+        <div class="hero-cta">
+          <a class="btn btn-primary" id="dlExe" href="https://github.com/Njwacky/internetcafe/releases/latest/download/CafeDesk-Setup.exe" download rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg>
+            Download for Windows<span id="exeSize" style="font-weight:500;opacity:.8"></span>
+          </a>
+          <a class="btn btn-secondary" href="#features">
+            See what's inside
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          </a>
+        </div>
+
+        <div class="hero-meta">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Works 100% offline</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> No Python to install</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Free updates in-app</span>
+        </div>
+      </div>
+
+      <!-- app mockup -->
+      <div class="mock" aria-hidden="true">
+        <div class="mock-window">
+          <div class="mock-bar">
+            <span class="mock-dots"><i></i><i></i><i></i></span>
+            <span class="mock-title">Café Desk — Sunrise Cyber Café</span>
+            <span class="mock-pill"><i class="dot" style="width:5px;height:5px"></i>Licensed</span>
+          </div>
+          <div class="mock-body">
+            <div class="mock-side">
+              <div class="si active"><b></b>Home</div>
+              <div class="si"><b></b>Price list</div>
+              <div class="si"><b></b>PDF tools</div>
+              <div class="si"><b></b>Scan &amp; images</div>
+              <div class="si"><b></b>Career documents</div>
+              <div class="si"><b></b>Cards &amp; invitations</div>
+              <div class="si"><b></b>Forms creator</div>
+              <div class="si"><b></b>Receipts</div>
+              <div class="si"><b></b>Sales reports</div>
+              <div class="si"><b></b>Business settings</div>
+            </div>
+            <div class="mock-main">
+              <div class="mock-h">Good afternoon, Sunrise</div>
+              <div class="mock-sub">Everything is ready for the next customer.</div>
+              <div class="mock-cards">
+                <div class="mock-card"><div class="k">Today</div><div class="v">R 1 248</div><div class="d">+18% vs Mon</div></div>
+                <div class="mock-card"><div class="k">Prints</div><div class="v">316</div><div class="d">14 colour</div></div>
+                <div class="mock-card"><div class="k">Receipts</div><div class="v">27</div><div class="d">all sent</div></div>
+              </div>
+              <div class="mock-chart">
+                <div style="display:flex;justify-content:space-between;align-items:baseline">
+                  <span style="font-size:10px;font-weight:700;color:#6b746d">This week</span>
+                  <span style="font-size:9.5px;color:#98a09a">Mon – Sun</span>
+                </div>
+                <div class="mock-bars">
+                  <i style="height:42%"></i><i style="height:58%"></i><i style="height:36%"></i><i style="height:74%"></i>
+                  <i style="height:64%"></i><i style="height:88%"></i><i style="height:52%"></i>
+                </div>
+              </div>
+              <div class="mock-foot">
+                <span>PDF merge ready</span><span>Scanner online</span><span>Prices synced</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mock-float">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg></span>
+          <div>
+            <div class="t">Activation valid</div>
+            <div class="s">1 year · this computer</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= DOWNLOADS ================= -->
+  <section class="downloads" id="download">
+    <div class="wrap">
+      <div class="panel-head">
+        <span class="eyebrow" style="justify-content:center">Official download</span>
+        <h2>Pick how you want to install it</h2>
+        <p>Both builds are the same licensed app. Install it on the PC, or carry it on a flash drive for several machines.</p>
+      </div>
+
+      <div class="dl-cards">
+        <div class="dl primary">
+          <div class="dl-top">
+            <span class="tag">Recommended</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9 20h6"/><path d="M12 16.5V20"/></svg>
+          </div>
+          <h3>Windows installer</h3>
+          <p>CafeDesk-Setup.exe installs for your Windows user and adds Desktop and Start Menu shortcuts. Activation stays tied to this computer.</p>
+          <div class="specs">
+            <span id="exeSpec">Windows 10 / 11 · 64-bit</span>
+            <span>No admin password needed</span>
+            <span>Free updates</span>
+          </div>
+          <a class="btn btn-primary" id="dlExeCard" href="https://github.com/Njwacky/internetcafe/releases/latest/download/CafeDesk-Setup.exe" download rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg>
+            Download installer
+          </a>
+          <div class="hash-row">
+            <span style="font-weight:700">SHA-256</span>
+            <code id="exeSha">loading checksum…</code>
+            <button type="button" data-copy="exe" title="Copy checksum" aria-label="Copy installer checksum">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" style="width:13px;height:13px"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5.5A1.5 1.5 0 0013.5 4H5.5A1.5 1.5 0 004 5.5v8A1.5 1.5 0 005.5 15"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="dl">
+          <div class="dl-top" style="color:var(--muted)">
+            <span class="tag" style="background:var(--sand);border-color:var(--line);color:var(--muted)">For flash drives</span>
+          </div>
+          <h3>Portable USB edition</h3>
+          <p>CafeDesk-Windows-USB-Portable.zip — unzip anywhere and run <span class="mono" style="font-size:12px">CafeDesk.exe</span>. Nothing is installed on the PC.</p>
+          <div class="specs">
+            <span id="zipSpec">No install required</span>
+            <span>Portable data folder</span>
+          </div>
+          <a class="btn btn-secondary" id="dlZip" href="https://github.com/Njwacky/internetcafe/releases/latest/download/CafeDesk-Windows-USB-Portable.zip" download rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg>
+            Download portable ZIP
+          </a>
+          <div class="hash-row">
+            <span style="font-weight:700">SHA-256</span>
+            <code id="zipSha">loading checksum…</code>
+            <button type="button" data-copy="zip" title="Copy checksum" aria-label="Copy portable checksum">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" style="width:13px;height:13px"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5.5A1.5 1.5 0 0013.5 4H5.5A1.5 1.5 0 004 5.5v8A1.5 1.5 0 005.5 15"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <p class="build-note" id="buildNote">Checking the latest published build…</p>
+    </div>
+
+    <div class="proof">
+      <div class="wrap proof-inner">
+        <span class="lbl">Built with care</span>
+        <span class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l7 2.6v5.2c0 4.2-2.9 7.3-7 8.7-4.1-1.4-7-4.5-7-8.7V6.1z"/><path d="M8.8 12l2.3 2.3 4.1-4.4"/></svg> SHA-256 verified builds</span>
+        <span class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0113.7-5.6"/><path d="M20 5.5v5h-5"/><path d="M20 12a8 8 0 01-13.7 5.6"/><path d="M4 18.5v-5h5"/></svg> Compiled by GitHub Actions</span>
+        <span class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V8a4 4 0 018 0v2.5"/></svg> Licence per computer</span>
+        <span class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l1.9 4.9 4.9 1.9-4.9 1.9L12 17.1l-1.9-4.9L5.2 10.3l4.9-1.9z"/></svg> Documents stay on your PC</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FEATURES ================= -->
+  <section class="block" id="features">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">What's inside</span>
+        <h2>Seventeen workspaces. One window.</h2>
+        <p>Everything a counter needs is already built in — so staff never juggle five different programs to serve one customer.</p>
+      </div>
+
+      <div class="fgrid">
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5h8l3 3v14h-11z"/><path d="M9.5 10h5"/><path d="M9.5 13.5h5"/></svg></span>
+          <h3>PDF tools</h3>
+          <p>Merge, split, extract pages, rotate and compress. Unlock password-protected PDFs with the paid add-on.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c.7-3.4 3.5-5.4 7-5.4s6.3 2 7 5.4"/></svg></span>
+          <h3>Career documents</h3>
+          <p>CVs, cover letters and application letters in ten professional designs, with photos and multi-page layouts.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2.6"/><path d="M10.5 18.5h3"/></svg></span>
+          <h3>Scan &amp; images</h3>
+          <p>Scan straight from the printer, tidy up photos, and print A4 picture sheets at passport or custom sizes.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.2"/><path d="M8 10h8"/><path d="M8 14h5"/></svg></span>
+          <h3>Cards &amp; invitations</h3>
+          <p>Business cards, funeral programmes and party invitations across thirteen print-ready templates.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h14v15H5z"/><path d="M8.5 9h7"/><path d="M8.5 12.5h7"/><path d="M8.5 16h4"/></svg></span>
+          <h3>Forms creator</h3>
+          <p>Build fillable or printable application, school and membership forms in seconds — no design skill needed.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h12v17H6z"/><path d="M9 8h6"/><path d="M9 11.5h6"/><path d="M9 15h3"/></svg></span>
+          <h3>Receipts &amp; sales</h3>
+          <p>Issue receipts, watch the day's takings and combine totals across every till in the shop.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l5 5-5 5"/><path d="M17 9H8.5a4.5 4.5 0 100 9H12"/></svg></span>
+          <h3>Bluetooth files</h3>
+          <p>Take photos straight from a customer's phone and drop them into the document being printed.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h16"/><path d="M4 12h16"/><path d="M4 16.5h10"/></svg></span>
+          <h3>Price list &amp; settings</h3>
+          <p>Your prices, currency and shop branding — synced to every PC in the shop over the cloud.</p>
+        </div>
+        <div class="card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5l2.2 5.6 5.8.5-4.4 3.9 1.3 5.7L12 17.1l-4.9 3.1 1.3-5.7-4.4-3.9 5.8-.5z"/></svg></span>
+          <h3>Optional AI polish</h3>
+          <p>Connect your own AI key to improve wording on documents — only when you choose to send a draft.</p>
+        </div>
+      </div>
+
+      <!-- showcase 1 -->
+      <div class="show" style="margin-top:56px">
+        <div>
+          <h3>See where the day actually goes</h3>
+          <p>The owner console shows which tools your shop uses most, which computers are busy and how each branch is trading — without ever touching a customer's document.</p>
+          <ul class="ticks">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Most-visited tools, ranked for the last 7–90 days</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Live view of every counter PC and which one is online</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Stripped of all customer data — only counts and shop names</li>
+          </ul>
+        </div>
+        <div class="shot">
+          <div class="shot-h">
+            <span class="t">Most visited tools</span>
+            <span class="b">Last 14 days</span>
+          </div>
+          <div class="bars">
+            <div class="bar"><span class="n">PDF tools</span><span class="track"><span class="fill" style="width:92%"></span></span><span class="v">1 284</span></div>
+            <div class="bar"><span class="n">Career documents</span><span class="track"><span class="fill" style="width:74%"></span></span><span class="v">1 032</span></div>
+            <div class="bar"><span class="n">Scan &amp; images</span><span class="track"><span class="fill" style="width:61%"></span></span><span class="v">851</span></div>
+            <div class="bar"><span class="n">Price list</span><span class="track"><span class="fill" style="width:48%"></span></span><span class="v">670</span></div>
+            <div class="bar"><span class="n">Cards &amp; invitations</span><span class="track"><span class="fill" style="width:37%"></span></span><span class="v">516</span></div>
+            <div class="bar"><span class="n">Receipts</span><span class="track"><span class="fill" style="width:29%"></span></span><span class="v">404</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- showcase 2 -->
+      <div class="show rev" style="margin-top:56px">
+        <div class="shot">
+          <div class="shot-h">
+            <span class="t">Live stations</span>
+            <span class="b">2 online</span>
+          </div>
+          <div class="rows">
+            <div class="row"><span class="st on"></span><span class="nm">Counter PC 1</span><span class="mt">Sunrise · Benoni</span><span class="rt">Online</span></div>
+            <div class="row"><span class="st on"></span><span class="nm">Desk 2</span><span class="mt">Sunrise · Benoni</span><span class="rt">Online</span></div>
+            <div class="row"><span class="st"></span><span class="nm">Desk 3</span><span class="mt">Sunrise · Benoni</span><span class="rt" style="background:var(--sand);color:var(--muted)">Idle</span></div>
+            <div class="row"><span class="st"></span><span class="nm">Print station</span><span class="mt">Tembisa Hub</span><span class="rt" style="background:var(--sand);color:var(--muted)">Idle</span></div>
+          </div>
+        </div>
+        <div>
+          <h3>Perfect for one counter or six shops</h3>
+          <p>Start on a single PC. Add a Shop ID and every counter shares one price list, one sales total and one owner view — with a licence per computer.</p>
+          <ul class="ticks">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Shared prices across all PCs in the shop</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Combined daily sales from every till</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6.5L9.5 17 4 11.5"/></svg> Instant remote activation — no shop visit</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="v">2 min</div><div class="l">From download to first printed document</div></div>
+        <div class="stat"><div class="v">17</div><div class="l">Built-in workspaces, no add-ons required</div></div>
+        <div class="stat"><div class="v">100%</div><div class="l">Offline document processing on the PC</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= INSTALL ================= -->
+  <section class="block" id="install">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">Install</span>
+        <h2>Three steps, one minute</h2>
+        <p>You need a 64-bit Windows 10 or 11 PC and an activation key from Café Desk.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="num">Step 01</div>
+          <h3>Download the installer</h3>
+          <p>Tap <b>Download installer</b>. Your browser saves <span class="mono" style="font-size:11.5px">CafeDesk-Setup.exe</span> in Downloads.</p>
+          <a class="mini" href="#download">Go to downloads
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+          </a>
+        </div>
+        <div class="step">
+          <div class="num">Step 02</div>
+          <h3>Allow it to run</h3>
+          <p>If Windows SmartScreen appears, choose <b>More info → Run anyway</b>. Compare the SHA-256 above to be sure the file is genuine.</p>
+        </div>
+        <div class="step">
+          <div class="num">Step 03</div>
+          <h3>Activate this computer</h3>
+          <p>On first launch Café Desk shows a Machine ID like <span class="mono" style="font-size:11.5px">CD-1A2B-3C4D-5E6F</span>. Send it to the owner and paste the key back — or tap <b>Check online approval</b>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FAQ ================= -->
+  <section class="block" id="faq">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">FAQ</span>
+        <h2>Questions before you install</h2>
+      </div>
+      <div class="faq">
+        <details open>
+          <summary>Do I need internet or Python installed?</summary>
+          <div class="ans">No. Café Desk is a finished Windows application — there is nothing else to install. An internet connection is only used for activation, cloud price sync and app updates. Every document tool works fully offline.</div>
+        </details>
+        <details>
+          <summary>Is the app free?</summary>
+          <div class="ans">The download is free. Using the workspace needs a paid activation key — one per computer, valid for one year. The PDF password remover is a separate paid add-on. Ask your shop owner for a key, or <a href="/dashboard">sign in as owner</a> to issue one.</div>
+        </details>
+        <details>
+          <summary>Why does Windows warn me before running it?</summary>
+          <div class="ans">SmartScreen flags any new installer it has not seen many times yet. Choose <b>More info → Run anyway</b>. You can confirm the file with the SHA-256 checksum published above and on the <a href="https://github.com/Njwacky/internetcafe/releases/latest" target="_blank" rel="noopener">GitHub release page</a>.</div>
+        </details>
+        <details>
+          <summary>Can I run it from a flash drive on several PCs?</summary>
+          <div class="ans">Yes. Download the portable ZIP, unzip the <span class="mono" style="font-size:12px">CafeDesk</span> folder onto the drive and run <span class="mono" style="font-size:12px">CafeDesk.exe</span> from there. Each computer still needs its own activation key.</div>
+        </details>
+        <details>
+          <summary>Are customer documents uploaded anywhere?</summary>
+          <div class="ans">No. PDFs, CVs, photos, scans, receipts and forms are processed on the PC and never leave it. Only anonymous usage counts — which tool was opened and how often — plus the shop and city name reach the owner dashboard. Never filenames, documents or customer details.</div>
+        </details>
+        <details>
+          <summary>How do updates work?</summary>
+          <div class="ans">Café Desk tells you inside the app when a newer version is published and downloads it over the internet. You can also re-run the installer from this page at any time — your prices and settings are kept.</div>
+        </details>
+        <details>
+          <summary>Will it run on 32-bit or older Windows?</summary>
+          <div class="ans">No. Café Desk targets 64-bit Windows 10 and 11. Windows 7, 8, 8.1 and 32-bit machines are not supported.</div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CLOSING CTA ================= -->
+  <div class="wrap">
+    <div class="close-cta">
+      <h2>Ready when your counter is</h2>
+      <p>Download Café Desk on the front-desk PC, activate it, and serve the next customer from one calm window.</p>
+      <div class="row-cta">
+        <a class="btn btn-primary" id="dlExeBottom" href="https://github.com/Njwacky/internetcafe/releases/latest/download/CafeDesk-Setup.exe" download rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg>
+          Download for Windows
+        </a>
+        <a class="btn btn-secondary" id="dlZipBottom" href="https://github.com/Njwacky/internetcafe/releases/latest/download/CafeDesk-Windows-USB-Portable.zip" download rel="noopener">
+          Portable USB (.zip)
+        </a>
+      </div>
+      <div class="fine" id="finePrint">v0.8.2 · Windows 10 &amp; 11 (64-bit) · SHA-256 published for every build</div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div>
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
+        <span class="mark" style="width:26px;height:26px;border-radius:8px;font-size:12px">C</span>
+        <span style="font-weight:750;font-size:13.5px">Café Desk</span>
+      </div>
+      <div class="who">Built for internet cafés, print shops and copy centres. Your customers' documents never leave the PC.</div>
+    </div>
+    <div class="foot-links">
+      <a href="/cafe-desk-manual.html">User manual</a>
+      <a href="https://github.com/Njwacky/internetcafe/releases/latest" target="_blank" rel="noopener">All releases</a>
+      <a href="#faq">FAQ</a>
+      <a href="/dashboard">Owner sign in</a>
+    </div>
+  </div>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const REPO = "Njwacky/internetcafe";
+const LATEST = `https://github.com/${REPO}/releases/latest`;
+const EXE = `${LATEST}/download/CafeDesk-Setup.exe`;
+const ZIP = `${LATEST}/download/CafeDesk-Windows-USB-Portable.zip`;
+const SUMS = `${LATEST}/download/CafeDesk-Release-Checksums.json`;
+
+const state = { exeSha: "", zipSha: "", version: "" };
+
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(window._t);
+  window._t = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+function humanSize(bytes) {
+  const b = Number(bytes) || 0;
+  if (!b) return "";
+  if (b > 1048576) return (b / 1048576).toFixed(1) + " MB";
+  return Math.max(1, Math.round(b / 1024)) + " KB";
+}
+
+function setHrefs(url) {
+  ["dlExe", "dlExeCard", "dlExeBottom"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el && url.exe) el.href = url.exe;
+  });
+  ["dlZip", "dlZipBottom"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el && url.zip) el.href = url.zip;
+  });
+}
+
+async function loadRelease() {
+  setHrefs({ exe: EXE, zip: ZIP });
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+      headers: { Accept: "application/vnd.github+json" },
+      cache: "no-store",
+    });
+    if (!r.ok) throw new Error("no release yet");
+    const rel = await r.json();
+    const version = String(rel.tag_name || "").replace(/^v/i, "");
+    state.version = version;
+    const assets = Array.isArray(rel.assets) ? rel.assets : [];
+    const exe = assets.find((a) => String(a.name).toLowerCase().endsWith(".exe"));
+    const zip = assets.find((a) => String(a.name).toLowerCase().endsWith(".zip"));
+    const when = rel.published_at
+      ? new Date(rel.published_at).toLocaleDateString("en-ZA", { day: "2-digit", month: "short", year: "numeric" })
+      : "";
+
+    setHrefs({
+      exe: exe ? exe.browser_download_url : EXE,
+      zip: zip ? zip.browser_download_url : ZIP,
+    });
+
+    if (version) document.getElementById("verInline").textContent = version;
+
+    const exeBtn = document.getElementById("dlExe");
+    if (exeBtn && exe && exe.size) {
+      document.getElementById("exeSize").textContent = " · " + humanSize(exe.size);
+    }
+    if (exe && exe.size) {
+      document.getElementById("exeSpec").textContent = humanSize(exe.size) + " · Windows 10 / 11";
+    }
+    if (zip && zip.size) {
+      document.getElementById("zipSpec").textContent = humanSize(zip.size) + " · no install";
+    }
+
+    document.getElementById("buildNote").innerHTML = version
+      ? `Latest build <b>v${version}</b>${when ? " · published " + when : ""} · <a href="${LATEST}" target="_blank" rel="noopener">release notes</a>`
+      : "Latest build is on the release page.";
+    document.getElementById("finePrint").textContent =
+      `v${version || "0.8.2"} · Windows 10 & 11 (64-bit) · SHA-256 published for every build`;
+
+    // Checksums: manifest first, then fall back to hashes in the release body.
+    let ok = false;
+    try {
+      const c = await fetch(SUMS, { cache: "no-store" });
+      if (c.ok) {
+        const sums = await c.json();
+        state.exeSha = String(sums?.setup_exe?.sha256 || "").toLowerCase();
+        state.zipSha = String(sums?.usb_zip?.sha256 || "").toLowerCase();
+        ok = Boolean(state.exeSha || state.zipSha);
+      }
+    } catch (_) {}
+    if (!ok && rel.body) {
+      const hashes = String(rel.body).match(/[0-9a-f]{64}/gi) || [];
+      if (hashes[0]) state.exeSha = hashes[0].toLowerCase();
+      if (hashes[1]) state.zipSha = hashes[1].toLowerCase();
+    }
+    document.getElementById("exeSha").textContent = state.exeSha || "see release page";
+    document.getElementById("zipSha").textContent = state.zipSha || "see release page";
+  } catch (_) {
+    document.getElementById("buildNote").innerHTML =
+      `Latest build lives on the <a href="${LATEST}" target="_blank" rel="noopener">GitHub release page</a>.`;
+    document.getElementById("exeSha").textContent = "see release page";
+    document.getElementById("zipSha").textContent = "see release page";
+    document.getElementById("verInline").textContent = "0.8.2";
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-copy]");
+  if (!btn) return;
+  const value = btn.dataset.copy === "exe" ? state.exeSha : state.zipSha;
+  if (!value || !/^[0-9a-f]{64}$/i.test(value)) return toast("Checksum is on the GitHub release page.");
+  try {
+    await navigator.clipboard.writeText(value);
+    toast("SHA-256 copied.");
+  } catch (_) {
+    toast("Long-press the checksum to copy it.");
+  }
+});
+
+loadRelease();
+</script>
+</body>
+</html>
