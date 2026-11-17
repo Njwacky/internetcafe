@@ -120,6 +120,12 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
 
    The release job then overwrites the embedded key with the secret before packaging and re-checks it, so a mismatched or missing secret cannot silently ship a demo-key build. `.github/check_release_key.py` is the guard: **release builds (push to `main`, `v*` tags, manual runs) fail closed** when the secret is missing or the demo key is embedded, while **pull-request builds only warn** — those artifacts are throw-away and must never be handed to a customer.
 
+   **Verify what you actually published** (do this after a release, on the file you downloaded from the Releases page):
+   ```bash
+   python tools/verify_release_key.py CafeDesk-Windows-USB-Portable.zip
+   ```
+   It scans the artifact's own bytes and reports `PASS: this artifact embeds YOUR owner public key` or `FAIL: the DEMO signing key is embedded in this file`. Build-time guards cannot catch a mis-pasted secret that happens to be a different valid 32-byte value; this reads the shipped file itself. Add `--expect <key>` when `owner-keys/` is not present on that machine.
+
    *Why the demo key must never ship:* it is a placeholder that lives in this repository. The matching **private** half was never committed, so a stranger cannot forge a licence from it today — but you have no control over who holds it, you cannot revoke or rotate it away from copies already distributed, and anyone who ever obtained it (an old contractor, a leaked backup) could issue themselves keys you can never distinguish from your own. A build signed with your own keypair is the only one you control.
 
    - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.

@@ -2030,6 +2030,74 @@ class ReleaseKeyGuardTests(unittest.TestCase):
             tmp.cleanup()
 
 
+class ReleaseArtifactKeyScanTests(unittest.TestCase):
+    """`tools/verify_release_key.py` must tell real builds apart from demo-signed ones."""
+
+    OWN = 'v1eFv9Y-3SzW1iqOXIiKDdMswHniwEZdQZfdm8_jgTI'
+    DEMO = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
+    OTHER = 'HtERfMT7mtVJRhzEoYAIYb28NKlCPZgNbzwGMvd7RXo'
+
+    def _zip(self, path, key, member='_internal/app.pyc'):
+        import zipfile
+        with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr(member, b'\x00\x00license_guard' + key.encode() + b'\x00\x00')
+            z.writestr('CafeDesk.exe', b'MZ')
+
+    def _run(self, path, expect=None):
+        import subprocess, sys
+        cmd = [sys.executable, str(Path(__file__).resolve().parent / 'tools' / 'verify_release_key.py'), str(path)]
+        if expect:
+            cmd += ['--expect', expect]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+
+    def test_demo_signed_artifact_is_rejected(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'demo.zip'
+            self._zip(p, self.DEMO)
+            res = self._run(p, self.OWN)
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn('DEMO KEY', res.stdout)
+        finally:
+            tmp.cleanup()
+
+    def test_owner_signed_artifact_passes(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'own.zip'
+            self._zip(p, self.OWN)
+            res = self._run(p, self.OWN)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn('YOUR KEY', res.stdout)
+        finally:
+            tmp.cleanup()
+
+    def test_foreign_key_pair_fails(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'other.zip'
+            self._zip(p, self.OTHER)
+            res = self._run(p, self.OWN)
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn('NOT found', res.stdout)
+        finally:
+            tmp.cleanup()
+
+    def test_key_split_across_the_scan_boundary_is_still_found(self):
+        import zipfile
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'split.zip'
+            blob = b'A' * (8 * 1024 * 1024 - 20) + self.OWN.encode() + b'B' * 64
+            with zipfile.ZipFile(p, 'w', zipfile.ZIP_STORED) as z:
+                z.writestr('_internal/app.pyc', blob)
+            res = self._run(p, self.OWN)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn('YOUR KEY', res.stdout)
+        finally:
+            tmp.cleanup()
+
+
 if __name__=='__main__': unittest.main()
 
 
