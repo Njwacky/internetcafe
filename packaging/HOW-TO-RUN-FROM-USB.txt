@@ -1,0 +1,55 @@
+============================================================
+  Cafe Desk  --  Document Studio for Cafes & Print Shops
+============================================================
+
+  WHAT THIS FOLDER IS
+  -------------------
+  A complete, portable copy of Cafe Desk. No Python, no setup
+  program, no internet connection needed to run it.
+
+  Keep this WHOLE "CafeDesk" folder together (including the
+  "_internal" folder) whenever you copy it.
+
+  START HERE  (2 minutes)
+  -----------------------
+  1. Copy the whole "CafeDesk" folder to the PC (for example to
+     C:\Users\<name>\Desktop\CafeDesk) or run it from this drive.
+  2. Double-click "CafeDesk.exe".
+     Windows may ask for permission the first time: choose
+     "More info", then "Run anyway". That prompt appears because
+     Windows has not seen this file often yet, not because
+     anything is wrong with this copy.
+  3. Cafe Desk opens the "Activate this computer" screen and
+     shows a Machine ID like CD-1A2B-3C4D-5E6F.
+  4. Copy that ID and send it to the owner on WhatsApp
+     (072 227 9505). You will receive a 1-year activation key.
+  5. Paste the key into Cafe Desk and click
+     "Activate this computer". Done - the workspace unlocks.
+
+  Each computer needs its OWN activation key. Copying this
+  folder to another PC does not activate that PC.
+
+  YOUR FILES STAY HERE
+  --------------------
+  PDFs, CVs, photos, scans, forms and receipts are created on
+  this computer and never uploaded. Prices, the staff PIN and
+  sales history are saved for the current Windows user.
+
+  OPTIONAL: KEEP PRICES & PIN ON THE USB DRIVE
+  ---------------------------------------------
+  Double-click "Enable-USB-Portable-Data.bat" once. It creates
+  a "CafeDeskData" folder beside CafeDesk.exe, and prices and
+  settings are then saved inside this folder instead.
+  (The 1-year activation always stays tied to each computer.)
+
+  OPTIONAL: ENGLISH TEXT RECOGNITION (OCR)
+  ----------------------------------------
+  Install "Tesseract OCR" on the PC and keep English language
+  data ticked during setup, then restart Cafe Desk. The direct
+  download link is inside Help & privacy in the app.
+
+  NEED HELP?
+  ----------
+  WhatsApp: 072 227 9505
+  Email   : njwayelodlamini@gmail.com
+  GitHub  : https://github.com/Njwacky/internetcafe

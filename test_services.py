@@ -1736,11 +1736,16 @@ class SecurityHardeningTests(unittest.TestCase):
         import license_guard
         self.assertTrue(license_guard.is_demo_public_key_active())
         self.assertIn('DEMO SIGNING KEY', license_guard.demo_key_warning())
+        self.assertFalse(license_guard.is_customer_build_ready())
+        # The installer must never greet a customer with a modal error: build hygiene is
+        # reported as an in-app owner notice, and the release pipelines refuse to ship.
         ui_src = (Path(__file__).resolve().parent / 'license_ui.py').read_text(encoding='utf-8')
-        self.assertIn('is_demo_public_key_active', ui_src)
-        self.assertIn('DEMO_KEY_WARNING', ui_src)
+        self.assertNotIn('Demo signing key — do not distribute', ui_src)
+        self.assertNotIn('sys, \'frozen\', False', ui_src)
         app_src = (Path(__file__).resolve().parent / 'app.py').read_text(encoding='utf-8')
-        self.assertIn('demo_key_warning', app_src)
+        self.assertIn('license_guard.is_demo_public_key_active()', app_src)
+        self.assertIn('demo_key_warning()', app_src)
+        self.assertIn('OWNER_BUILD_FIX_STEPS', app_src)
 
     def test_shop_sync_secret_requires_10_chars(self):
         import cloud_sync
@@ -2340,6 +2345,64 @@ class ReleaseTrustTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(upd['update_available'])
         self.assertEqual(upd['signature'], '')  # unsigned — the downloader will refuse it
+
+    def test_preview_build_is_reported_calmly_not_as_an_error(self):
+        """A demo-key build must warn its owner without looking broken to a customer."""
+        import license_guard
+        self.assertTrue(license_guard.is_demo_public_key_active())
+        self.assertFalse(license_guard.is_customer_build_ready())
+        notice = license_guard.owner_build_notice()
+        self.assertIsInstance(notice, str)
+        # Calm wording: no shouting, no "do not distribute" alarm, but still actionable.
+        self.assertNotIn('DO NOT', notice.upper())
+        self.assertIn('testing', notice)
+        self.assertEqual(len(license_guard.OWNER_BUILD_FIX_STEPS), 3)
+        for title, command in license_guard.OWNER_BUILD_FIX_STEPS:
+            self.assertTrue(title.strip() and command.strip())
+        self.assertIn('admin_keygen.py', license_guard.OWNER_BUILD_FIX_STEPS[1][1])
+
+    def test_installer_refuses_a_demo_key_app_folder(self):
+        """The last gate before `iscc`: never wrap a demo-key folder into Setup.exe."""
+        import subprocess
+        import sys
+        import tempfile
+        repo = Path(__file__).resolve().parent
+        demo = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp) / 'CafeDesk' / '_internal'
+            dist.mkdir(parents=True)
+            (dist / 'clean.bin').write_bytes(b'no keys here')
+            clean = subprocess.run(
+                [sys.executable, str(repo / '.github' / 'check_release_key.py'), '--dist-dir', str(Path(tmp) / 'CafeDesk')],
+                capture_output=True, text=True, cwd=repo,
+            )
+            self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+            (dist / 'licence_guard.pyc').write_bytes(b'...' + demo.encode() + b'...')
+            dirty = subprocess.run(
+                [sys.executable, str(repo / '.github' / 'check_release_key.py'), '--dist-dir', str(Path(tmp) / 'CafeDesk')],
+                capture_output=True, text=True, cwd=repo,
+            )
+            self.assertEqual(dirty.returncode, 1, 'a demo-key folder must not become an installer')
+            self.assertIn('Refusing to package', dirty.stdout + dirty.stderr)
+
+    def test_installer_wizard_is_branded_and_never_blocking(self):
+        """Wizard copy explains activation up front instead of dumping security jargon."""
+        repo = Path(__file__).resolve().parent
+        iss = (repo / 'packaging' / 'windows-installer.iss').read_text(encoding='utf-8')
+        for fragment in ('AppPublisher=', 'WizardStyle=modern', 'PrivilegesRequired=lowest',
+                         'FinishedHeadingLabel=', 'ConfirmUninstall=', 'InitializeWizard'):
+            self.assertIn(fragment, iss)
+        # The alarming build-health paragraph must live in the app's owner notice, not here.
+        self.assertNotIn('DEMO SIGNING KEY', iss)
+        # A customer-facing next step must be spelled out, with a way to reach the owner.
+        self.assertIn('Machine ID', iss)
+        self.assertIn('WhatsApp', iss)
+        readme = (repo / 'packaging' / 'HOW-TO-RUN-FROM-USB.txt').read_text(encoding='utf-8').lower()
+        # A first-time customer needs "no setup needed" and a calm SmartScreen explanation.
+        self.assertIn('no setup', readme)
+        self.assertIn('run anyway', readme)
+        self.assertIn('machine id', readme)
+        self.assertIn('never uploaded', readme)
 
     def test_version_sync_tool_passes_and_detects_drift(self):
         import subprocess

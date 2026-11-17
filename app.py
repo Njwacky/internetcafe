@@ -755,12 +755,28 @@ class CafeDesk(ctk.CTk):
             if not webbrowser.open(path.as_uri()): raise RuntimeError('Could not open your browser.')
             self.status.set('Opened full Café Desk Manual & Sales Guide in your browser')
         except Exception as exc: messagebox.showerror('Could not open manual',str(exc),parent=self)
+    def _build_notice_card(self):
+        """One quiet, owner-only line about build hygiene — never an error dialog.
+
+        Release builds (real owner key applied) render nothing here at all. Preview builds
+        show a calm notice with the exact fix, so the person who owns the build still gets
+        told while a café's counter PC never looks broken or unsafe.
+        """
+        if not license_guard.is_demo_public_key_active():
+            return
+        note=card(self.body);note.pack(fill='x',pady=(0,10))
+        label(note,'Owner notice  •  preview build',size=11,bold=True,color='#FFDBA2').pack(anchor='w',padx=18,pady=(14,3))
+        label(note,license_guard.OWNER_BUILD_NOTE,size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,6))
+        label(note,license_guard.demo_key_warning() or '',size=11,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,8))
+        steps='   →   '.join(f'{title}: {cmd}' for title,cmd in license_guard.OWNER_BUILD_FIX_STEPS)
+        label(note,steps,size=11,color='#C9D4E6',wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,14))
     def help_screen(self):
         self.heading(self.body,'Help & privacy','A quick guide for staff and customers.')
         manual_banner=card(self.body);manual_banner.pack(fill='x',pady=(0,10))
         label(manual_banner,'Full Printable User Manual, Menu Guide & Sales Handbook',size=15,bold=True,color=LIME).pack(anchor='w',padx=18,pady=(15,4))
         label(manual_banner,'Open the complete formatted HTML handbook (all 17 sidebar tools, 5-minute shop setup, 30-second pitch & printable A4 handout) locally in your browser.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,10))
         button(manual_banner,'📖 Open Full Manual & Sales Guide (HTML)  ↗',self.open_user_manual,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(anchor='w',padx=18,pady=(0,15))
+        self._build_notice_card()
         sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Add services in Receipts. Saving a receipt PDF does not record a sale. Staff choose Record sale; staff-only Sales reports show recorded totals. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
         for title,description in sections:
             box=card(self.body);box.pack(fill='x',pady=(0,8));label(box,title,size=14,bold=True).pack(anchor='w',padx=18,pady=(14,4));label(box,description,size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,14))
@@ -952,17 +968,31 @@ class CafeDesk(ctk.CTk):
                     pass  # Offline cafés stay quiet; the manual check explains any connection problem.
             threading.Thread(target=_check_badge_in_background,daemon=True).start()
         lic_status=license_guard.current_license_status()
-        lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12))
-        lic_box.pack_forget()
-        lic_box.pack(fill='x',pady=(0,12),before=contact_box)
-        label(lic_box,'1-Year Computer License & Machine ID',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
-        _demo_warn=license_guard.demo_key_warning()
-        if _demo_warn:
-            label(lic_box,_demo_warn,size=12,bold=True,color='#FFB8B0',wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
+        lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12),before=contact_box)
+
+        # ---- Licence card: status pill + one summary line + expiry meter -----------
+        # The old card opened with a paragraph of red DEMO-SIGNING-KEY text. A customer
+        # reading that assumed the app was cracked or infected. Build hygiene now lives
+        # behind a quiet "About this build" toggle, and the licence itself reads as a
+        # clear, calm status: active / expiring / unactivated, with days left at a glance.
+        lhead=ctk.CTkFrame(lic_box,fg_color='transparent');lhead.pack(fill='x',padx=20,pady=(18,4))
+        label(lhead,'1-Year Computer License & Machine ID',size=16,bold=True).pack(side='left')
         mid_val=lic_status.get('machine_id') or license_guard.get_machine_id()
         if lic_status.get('valid'):
-            days_left=lic_status.get('days_remaining',0)
-            badge_color='#FFB8B0' if days_left<=30 else LIME
+            days_left=int(lic_status.get('days_remaining',0) or 0)
+            if days_left<=14:
+                pill_text,pill_fg,pill_tx,accent='EXPIRING SOON','#4A2F22','#FFD9A8','#FFB463'
+            elif days_left<=30:
+                pill_text,pill_fg,pill_tx,accent='RENEWAL DUE','#3A3320','#FFE9B0','#FFD36E'
+            else:
+                pill_text,pill_fg,pill_tx,accent='LICENSED','#20301F','#CBF5A8',LIME
+        else:
+            days_left=0
+            pill_text,pill_fg,pill_tx,accent='NOT ACTIVATED','#332B1F','#FFE0AE','#FFCC66'
+        ctk.CTkLabel(lhead,text=f' {pill_text} ',fg_color=pill_fg,corner_radius=20,text_color=pill_tx,
+                     font=ctk.CTkFont(family=FONT,size=10,weight='bold')).pack(side='right',pady=(3,0))
+
+        if lic_status.get('valid'):
             seat_badge=''
             if lic_status.get('seat_no') and lic_status.get('seat_max'):
                 seat_badge=f"  •  Seat {lic_status['seat_no']} of {lic_status['seat_max']}"
@@ -970,11 +1000,49 @@ class CafeDesk(ctk.CTk):
                     seat_badge+=f" ({lic_status['seat_label']})"
             elif lic_status.get('shop_id'):
                 seat_badge=f"  •  Shop {lic_status['shop_id']}"
-            summary=f'ACTIVE  •  Licensed to: {lic_status["customer"]}{seat_badge}  •  Expires: {lic_status["expires_at"]} ({days_left} days remaining)'
+            label(lic_box,f'Licensed to {lic_status["customer"]}{seat_badge}',size=13,bold=True,color=INK).pack(
+                anchor='w',padx=20,pady=(0,2))
+            label(lic_box,f'Valid until {lic_status["expires_at"]}  •  {days_left} days remaining',size=12,color=MUTED).pack(
+                anchor='w',padx=20,pady=(0,10))
+            # A quiet meter answers "how long have I got?" without reading a sentence.
+            meter=ctk.CTkFrame(lic_box,fg_color='#141C2B',corner_radius=6,height=8)
+            meter.pack(fill='x',padx=20,pady=(0,14));meter.pack_propagate(False)
+            fill_pct=max(0.02,min(1.0,days_left/365))
+            ctk.CTkFrame(meter,fg_color=accent,corner_radius=6,height=8).place(relwidth=fill_pct,relheight=1.0,x=0,y=0)
         else:
-            badge_color='#FFDBA2'
-            summary=f'Developer / Unactivated mode  •  {lic_status.get("reason","No per-PC license installed yet.")}'
-        label(lic_box,summary,size=12,bold=True,color=badge_color,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
+            label(lic_box,f'Developer / unactivated mode  •  {lic_status.get("reason","No per-PC license installed yet.")}',
+                  size=12,bold=True,color='#FFDBA2',wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,12))
+
+        # ---- Owner-only build notice, collapsed by default --------------------------
+        if license_guard.is_demo_public_key_active():
+            note=ctk.CTkFrame(lic_box,fg_color='#182231',corner_radius=12,border_width=1,border_color=BORDER)
+            note.pack(fill='x',padx=20,pady=(0,14))
+            nrow=ctk.CTkFrame(note,fg_color='transparent');nrow.pack(fill='x',padx=14,pady=(10,10))
+            label(nrow,'About this build',size=12,bold=True,color=INK).pack(side='left',padx=(0,8))
+            label(nrow,'preview / owner build',size=11,color=MUTED).pack(side='left')
+            body=ctk.CTkFrame(note,fg_color='transparent')
+            detail_open={'v':False}
+            def toggle_note():
+                if detail_open['v']:
+                    body.pack_forget();toggle_btn.configure(text='Why am I seeing this?  ▾')
+                else:
+                    body.pack(fill='x',padx=14,pady=(0,12));toggle_btn.configure(text='Hide details  ▴')
+                detail_open['v']=not detail_open['v']
+            toggle_btn=ctk.CTkButton(nrow,text='Why am I seeing this?  ▾',command=toggle_note,corner_radius=8,height=30,
+                                     width=200,fg_color='transparent',hover_color=SOFT,text_color=LIME,border_width=1,border_color=BORDER,
+                                     font=ctk.CTkFont(family=FONT,size=12,weight='bold'))
+            toggle_btn.pack(side='right')
+            label(body,license_guard.OWNER_BUILD_NOTE,size=12,color='#D9E2F2',wraplength=660,justify='left').pack(
+                anchor='w',pady=(0,10))
+            for step_title,step_cmd in license_guard.OWNER_BUILD_FIX_STEPS:
+                step_row=ctk.CTkFrame(body,fg_color='#0F1725',corner_radius=8)
+                step_row.pack(fill='x',pady=(0,6))
+                label(step_row,step_title,size=11,bold=True,color=LIME).pack(anchor='w',padx=10,pady=(6,0))
+                ctk.CTkLabel(step_row,text=step_cmd,text_color=MUTED,anchor='w',
+                             font=ctk.CTkFont(family='Consolas',size=11)).pack(anchor='w',padx=10,pady=(0,6))
+            label(body,license_guard.OWNER_BUILD_BENEFIT,size=11,color=MUTED,wraplength=660,justify='left').pack(
+                anchor='w',pady=(2,0))
+
         mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,10))
         m_entry=entry(mrow);m_entry.insert(0,f'Machine ID: {mid_val}');m_entry.configure(state='readonly');m_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
         button(mrow,'⧉ Copy',lambda:copy_val(mid_val,'Machine ID'),ghost=True).pack(side='left',padx=(0,BTN_PADX))

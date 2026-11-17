@@ -1,8 +1,6 @@
 """Activation Dialog & License Status Card for Café Desk (Hardware Machine-ID + 1-Year Lock)."""
 from __future__ import annotations
 
-import sys
-import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 import customtkinter as ctk
@@ -50,51 +48,63 @@ class ActivationWindow(ctk.CTk):
 
     def __init__(self, initial_status: dict):
         super().__init__()
-        self.title('Activate Café Desk — 1-Year Computer License')
-        self.geometry('720x590')
-        self.minsize(640, 540)
+        self.title('Activate Café Desk')
+        self.geometry('760x700')
+        self.minsize(700, 640)
         self.configure(fg_color=BG)
         self.activated_info: dict | None = None
         self.machine_id = initial_status.get('machine_id') or license_guard.get_machine_id()
-        reason = initial_status.get('reason') or 'This computer requires a valid activation key.'
+        reason = initial_status.get('reason') or 'This computer needs a 1-year activation key.'
 
-        outer = ctk.CTkFrame(self, fg_color=WHITE, corner_radius=18, border_width=1, border_color=BORDER)
-        outer.pack(fill='both', expand=True, padx=26, pady=24)
+        # A single centred column keeps the eye on one path: ID → key → activate.
+        page = ctk.CTkScrollableFrame(self, fg_color='transparent')
+        page.pack(fill='both', expand=True)
+        outer = ctk.CTkFrame(page, fg_color=WHITE, corner_radius=20, border_width=1, border_color=BORDER)
+        outer.pack(fill='both', expand=True, padx=28, pady=24)
 
-        _lbl(outer, 'CAFÉ DESK  •  COMPUTER ACTIVATION REQUIRED', size=11, bold=True, color=LIME).pack(
-            anchor='w', padx=26, pady=(22, 4)
+        # ---- Header: who this is for, and that it takes a minute -------------------
+        _lbl(outer, 'CAFÉ DESK  •  FIRST-TIME SETUP', size=11, bold=True, color=LIME).pack(
+            anchor='w', padx=28, pady=(26, 6)
         )
-        _lbl(outer, 'Activate Café Desk on This Computer', size=22, bold=True).pack(
-            anchor='w', padx=26, pady=(0, 6)
-        )
+        _lbl(outer, 'Activate this computer', size=26, bold=True).pack(anchor='w', padx=28, pady=(0, 8))
         _lbl(
             outer,
-            'Each Café Desk installation is locked to one specific computer (1-year license). '
-            'Copying the app to another PC requires a fresh activation key from the owner.',
-            size=12, color=MUTED, wraplength=630, justify='left'
-        ).pack(anchor='w', padx=26, pady=(0, 12))
+            'One activation key unlocks Café Desk on this PC for a full year. '
+            'Send the Machine ID below to the owner, then paste the key you receive.',
+            size=13, color=MUTED, wraplength=650, justify='left',
+        ).pack(anchor='w', padx=28, pady=(0, 14))
 
-        reason_box = ctk.CTkFrame(outer, fg_color='#342329', corner_radius=10, border_width=1, border_color='#6A3E49')
-        reason_box.pack(fill='x', padx=26, pady=(0, 14))
-        _lbl(reason_box, f'Status: {reason}', size=12, bold=True, color='#FFB8B0', wraplength=610, justify='left').pack(
+        status_chip = ctk.CTkFrame(outer, fg_color='#1F2937', corner_radius=9, border_width=1, border_color=BORDER)
+        status_chip.pack(fill='x', padx=28, pady=(0, 20))
+        _lbl(status_chip, reason, size=12, color='#FFDBA2', wraplength=610, justify='left').pack(
             anchor='w', padx=14, pady=10
         )
 
-        # Step 1 — Machine ID box
-        mid_box = ctk.CTkFrame(outer, fg_color='#131B2A', corner_radius=12, border_width=1, border_color=BORDER)
-        mid_box.pack(fill='x', padx=26, pady=(0, 14))
-        _lbl(mid_box, 'STEP 1 — SEND THIS COMPUTER\'S MACHINE ID TO THE OWNER', size=10, bold=True, color=LIME).pack(
-            anchor='w', padx=16, pady=(12, 4)
-        )
-        mid_row = ctk.CTkFrame(mid_box, fg_color='transparent')
-        mid_row.pack(fill='x', padx=16, pady=(0, 8))
+        # ---- Step 1: Machine ID ---------------------------------------------------
+        step1 = ctk.CTkFrame(outer, fg_color='#131B2A', corner_radius=14, border_width=1, border_color=BORDER)
+        step1.pack(fill='x', padx=28, pady=(0, 14))
+        head1 = ctk.CTkFrame(step1, fg_color='transparent')
+        head1.pack(fill='x', padx=18, pady=(14, 2))
+        ctk.CTkLabel(head1, text=' 1 ', fg_color=LIME, corner_radius=20, text_color='#142018',
+                     font=ctk.CTkFont(family=FONT, size=11, weight='bold')).pack(side='left', padx=(0, 10))
+        _lbl(head1, 'Send your Machine ID to the owner', size=13, bold=True).pack(side='left')
+        _lbl(
+            step1,
+            'This ID is tied to this computer\'s hardware. It contains no customer data.',
+            size=11, color=MUTED,
+        ).pack(anchor='w', padx=58, pady=(0, 10))
+
+        # ID on its own full-width line, actions beneath it: at the minimum window width a
+        # narrow field beside two buttons clipped the code customers are asked to read out.
         mid_entry = ctk.CTkEntry(
-            mid_row, height=40, corner_radius=9, border_color=BORDER, fg_color='#0D1320',
-            text_color=LIME, font=ctk.CTkFont(family='Consolas', size=16, weight='bold')
+            step1, height=44, corner_radius=10, border_color=BORDER, fg_color='#0D1320',
+            text_color=LIME, font=ctk.CTkFont(family='Consolas', size=18, weight='bold'), justify='center',
         )
         mid_entry.insert(0, self.machine_id)
         mid_entry.configure(state='readonly')
-        mid_entry.pack(side='left', fill='x', expand=True, padx=(0, 8))
+        mid_entry.pack(fill='x', padx=18, pady=(0, 10))
+        mid_row = ctk.CTkFrame(step1, fg_color='transparent')
+        mid_row.pack(fill='x', padx=18, pady=(0, 14))
 
         def copy_mid():
             self.clipboard_clear()
@@ -102,7 +112,9 @@ class ActivationWindow(ctk.CTk):
             self.update_idletasks()
             messagebox.showinfo(
                 'Machine ID copied',
-                f'Copied Machine ID:\n{self.machine_id}\n\nSend this code via WhatsApp ({services.DEVELOPER_WHATSAPP_LOCAL}) or email ({services.DEVELOPER_EMAIL}) to receive your 1-year activation key.',
+                f'Copied Machine ID:\n{self.machine_id}\n\n'
+                f'Send it via WhatsApp ({services.DEVELOPER_WHATSAPP_LOCAL}) or email '
+                f'({services.DEVELOPER_EMAIL}) to receive your 1-year activation key.',
                 parent=self,
             )
 
@@ -113,54 +125,55 @@ class ActivationWindow(ctk.CTk):
             except ValueError as exc:
                 messagebox.showerror('Could not open WhatsApp', str(exc), parent=self)
 
-        _btn(mid_row, '⧉ Copy ID', copy_mid, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=120).pack(
+        _btn(mid_row, 'Copy ID', copy_mid, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=110).pack(
             side='left', padx=(0, 8)
         )
-        _btn(mid_row, '💬 WhatsApp ID', whatsapp_mid, fg_color='#25D366', hover_color='#1EBE5D', text_color='#0B1F13', width=155).pack(
-            side='left'
-        )
+        _btn(mid_row, 'WhatsApp the owner', whatsapp_mid, fg_color='#25D366', hover_color='#1EBE5D',
+             text_color='#0B1F13', width=180).pack(side='left')
+
+        # ---- Step 2: paste the key ------------------------------------------------
+        step2 = ctk.CTkFrame(outer, fg_color='#131B2A', corner_radius=14, border_width=1, border_color=BORDER)
+        step2.pack(fill='x', padx=28, pady=(0, 16))
+        head2 = ctk.CTkFrame(step2, fg_color='transparent')
+        head2.pack(fill='x', padx=18, pady=(14, 2))
+        ctk.CTkLabel(head2, text=' 2 ', fg_color=LIME, corner_radius=20, text_color='#142018',
+                     font=ctk.CTkFont(family=FONT, size=11, weight='bold')).pack(side='left', padx=(0, 10))
+        _lbl(head2, 'Paste the activation key you received', size=13, bold=True).pack(side='left')
         _lbl(
-            mid_box,
-            f'WhatsApp: {services.DEVELOPER_WHATSAPP_LOCAL}   •   Email: {services.DEVELOPER_EMAIL}',
-            size=11, color=MUTED
-        ).pack(anchor='w', padx=16, pady=(0, 12))
-
-        # Step 2 — Enter activation key or load .cafelicense
-        key_box = ctk.CTkFrame(outer, fg_color='#131B2A', corner_radius=12, border_width=1, border_color=BORDER)
-        key_box.pack(fill='x', padx=26, pady=(0, 16))
-        _lbl(key_box, 'STEP 2 — PASTE YOUR 1-YEAR ACTIVATION KEY OR LOAD A LICENSE FILE', size=10, bold=True, color=LIME).pack(
-            anchor='w', padx=16, pady=(12, 4)
-        )
+            step2,
+            'Keys start with CDLIC1 and are locked to this Machine ID. Have a .cafelicense file? '
+            'Use “Load a license file” below.',
+            size=11, color=MUTED, wraplength=600, justify='left',
+        ).pack(anchor='w', padx=58, pady=(0, 10))
         self.key_text = ctk.CTkTextbox(
-            key_box, height=84, corner_radius=9, border_width=1, border_color=BORDER,
-            fg_color='#0D1320', text_color=INK, font=ctk.CTkFont(family='Consolas', size=12)
+            step2, height=96, corner_radius=10, border_width=1, border_color=BORDER,
+            fg_color='#0D1320', text_color=INK, font=ctk.CTkFont(family='Consolas', size=12),
         )
-        self.key_text.pack(fill='x', padx=16, pady=(0, 12))
+        self.key_text.pack(fill='x', padx=18, pady=(0, 14))
 
-        actions = ctk.CTkFrame(outer, fg_color='transparent')
-        actions.pack(fill='x', padx=26, pady=(0, 16))
-
+        # ---- Actions --------------------------------------------------------------
         def do_activate():
             raw = self.key_text.get('1.0', 'end').strip()
             try:
                 info = license_guard.activate_and_save_license(raw)
             except license_guard.LicenseError as exc:
-                messagebox.showerror('Activation failed', str(exc), parent=self)
+                messagebox.showerror('That key did not work', str(exc), parent=self)
                 return
             self.activated_info = info
             seat_line = (
-                f'• Shop Seat: Seat {info["seat_no"]} of {info["seat_max"]}'
+                f'• Shop seat: Seat {info["seat_no"]} of {info["seat_max"]}'
                 + (f' ({info["seat_label"]})\n' if info.get('seat_label') else '\n')
                 if info.get('seat_no') and info.get('seat_max')
                 else ''
             )
             messagebox.showinfo(
-                'Computer activated',
-                f'Café Desk is now activated for:\n'
-                f'• Customer: {info["customer"]}\n'
+                'Café Desk is activated',
+                f'This computer is ready to use:\n'
+                f'• Licensed to: {info["customer"]}\n'
                 f'{seat_line}'
                 f'• Machine ID: {info["machine_id"]}\n'
-                f'• Valid until: {info["expires_at"]} ({info["days_remaining"]} days remaining)',
+                f'• Valid until: {info["expires_at"]} ({info["days_remaining"]} days remaining)\n\n'
+                f'You can renew from About & contact when the year is nearly up.',
                 parent=self,
             )
             self.destroy()
@@ -169,73 +182,81 @@ class ActivationWindow(ctk.CTk):
             cfg = settings_store.load_settings()
             if not cloud_sync.is_supabase_configured(cfg):
                 messagebox.showinfo(
-                    'Cloud Not Configured Yet',
-                    'Online approval pulls keys automatically once Supabase Cloud is configured, or paste your CDLIC1 key directly above.',
+                    'Online approval is not set up yet',
+                    'Paste your CDLIC1 key above instead, or ask the owner to enable online approval.',
                     parent=self,
                 )
                 return
             try:
                 res = cloud_sync.sync_machine_entitlements_from_cloud(cfg, machine_id=self.machine_id)
             except Exception as exc:
-                messagebox.showerror('Online Check Failed', str(exc), parent=self)
+                messagebox.showerror('Online check could not complete', str(exc), parent=self)
                 return
             status = license_guard.current_license_status()
             if status.get('valid'):
                 self.activated_info = status
                 messagebox.showinfo(
-                    'Activated Online!',
-                    'Approved key downloaded and activated automatically:\n• ' + '\n• '.join(res.get('activated') or ['Computer activated']),
+                    'Activated online',
+                    'Your approved key was downloaded and applied:\n• ' +
+                    '\n• '.join(res.get('activated') or ['Computer activated']),
                     parent=self,
                 )
                 self.destroy()
             else:
                 messagebox.showinfo(
-                    'No Approved Key Found Yet',
-                    f'No active online license was found yet for Machine ID {self.machine_id}.\nSend your Machine ID to the owner first, then click Check Online Approval again.',
+                    'Nothing approved yet',
+                    f'No active online licence was found for Machine ID {self.machine_id}.\n\n'
+                    'Send your Machine ID to the owner first, then try again.',
                     parent=self,
                 )
 
         def load_file():
             chosen = filedialog.askopenfilename(
                 parent=self,
-                title='Select .cafelicense file',
-                filetypes=[('Café Desk License', '*.cafelicense *.txt *.json'), ('All files', '*.*')],
+                title='Select your .cafelicense file',
+                filetypes=[('Café Desk license', '*.cafelicense *.txt *.json'), ('All files', '*.*')],
             )
             if not chosen:
                 return
             try:
                 raw = Path(chosen).read_text(encoding='utf-8')
             except OSError as exc:
-                messagebox.showerror('Could not read file', str(exc), parent=self)
+                messagebox.showerror('Could not read that file', str(exc), parent=self)
                 return
             self.key_text.delete('1.0', 'end')
             self.key_text.insert('1.0', raw.strip())
             do_activate()
 
-        _btn(actions, '✓ Activate This Computer', do_activate, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=205).pack(
-            side='left', padx=(0, 8)
+        actions = ctk.CTkFrame(outer, fg_color='transparent')
+        actions.pack(fill='x', padx=28, pady=(0, 8))
+        _btn(actions, 'Activate this computer', do_activate, fg_color=LIME, hover_color='#A9EB65',
+             text_color='#142018', width=210, height=42).pack(side='left', padx=(0, 10))
+        _btn(actions, 'Check online approval', check_cloud_approval, secondary=True, width=190, height=42).pack(
+            side='left'
         )
-        _btn(actions, '☁ Check Online Approval', check_cloud_approval, secondary=True, width=185).pack(side='left', padx=(0, 8))
-        _btn(actions, 'Load file…', load_file, secondary=True, width=110).pack(side='left', padx=(0, 8))
-        _btn(actions, 'Exit', self.destroy, secondary=True, width=80).pack(side='right')
+
+        secondary = ctk.CTkFrame(outer, fg_color='transparent')
+        secondary.pack(fill='x', padx=28, pady=(0, 18))
+        _btn(secondary, 'Load a license file…', load_file, secondary=True, width=175).pack(side='left', padx=(0, 10))
+        _lbl(
+            secondary,
+            f'Need help?  {services.DEVELOPER_WHATSAPP_LOCAL}  •  {services.DEVELOPER_EMAIL}',
+            size=11, color=MUTED,
+        ).pack(side='left', padx=(0, 10))
+        _btn(secondary, 'Exit', self.destroy, secondary=True, width=80).pack(side='right')
 
 
 def ensure_computer_licensed() -> dict | None:
     """Check license at startup; if required and missing/invalid, show ActivationWindow.
 
     Returns license status dict if allowed to run, or `None` if the user closed ActivationWindow.
+
+    Build hygiene (the demo signing key) is reported INSIDE the app as an owner notice card,
+    never as a blocking error dialog before the window exists. An installer that greets a new
+    customer with a red error box reads like a broken or infected download, so the check keeps
+    its teeth where it belongs — the release pipeline (`packaging/build-*.{bat,sh}` and
+    `.github/check_release_key.py`) refuses to produce a distributable build at all.
     """
-    # Fail loudly if a production build still ships the demo signing key.
-    if license_guard.is_demo_public_key_active() and getattr(sys, 'frozen', False):
-        import tkinter as tk
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(
-            'Demo signing key — do not distribute',
-            license_guard.DEMO_KEY_WARNING,
-            parent=root,
-        )
-        root.destroy()
     status = license_guard.current_license_status()
     if status.get('valid'):
         return status

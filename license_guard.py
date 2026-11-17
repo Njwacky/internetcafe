@@ -112,17 +112,58 @@ def is_demo_public_key_active() -> bool:
     return embedded_public_key_is_demo() or configured_public_key_b64() == DEMO_OWNER_PUBLIC_KEY_B64
 
 
+# Owner-facing text. This string is asserted by the test suite and by release tooling,
+# so keep the "DEMO SIGNING KEY" phrase intact even when rewording the rest of it.
 DEMO_KEY_WARNING = (
-    '⚠ DEMO SIGNING KEY ACTIVE: This build still uses the sample Ed25519 public key '
-    'shipped in the repo. Run `python admin_keygen.py --init-keys --apply-public-key` '
-    'on your private laptop and rebuild before selling or distributing this app. '
-    'This placeholder key was never meant for real customers, so you do not control it. '
+    'DEMO SIGNING KEY ACTIVE — this build still uses the sample Ed25519 public key from '
+    'the repo. Run `python admin_keygen.py --init-keys --apply-public-key` on your private '
+    'laptop, then rebuild before selling or distributing this app. Keys signed with the demo '
+    'key must not be trusted in production.'
+)
+
+# The same diagnosis, written for the person actually holding the build (the owner or an
+# installer) instead of a terminal. Shown as an in-app notice card, never as a crash-style
+# error dialog: a warning about build hygiene must not read like the app is broken.
+OWNER_BUILD_NOTE = (
+    'This is an owner/preview build. It verifies licences against the sample public key '
+    'that ships in the repository, so it is meant for testing — not for the counter.'
+)
+
+OWNER_BUILD_FIX_STEPS = (
+    ('On your private laptop', 'Open a terminal in the project folder.'),
+    ('Create your own keypair', 'python admin_keygen.py --init-keys --apply-public-key'),
+    ('Rebuild the installer', 'packaging\\build-windows.bat, then compile the setup with Inno Setup.'),
+)
+
+OWNER_BUILD_BENEFIT = (
+    'Once rebuilt, only activation keys you issue can unlock Café Desk, and every customer '
+    'PC shows a clean, verified licence card — no build notices anywhere.'
+)
+
+STORE_TIPS = (
+    'Keep CaféDesk-Setup.exe in Downloads until activation succeeds.',
+    'Windows SmartScreen: choose More info, then Run anyway.',
+    'Have this computer\'s Machine ID ready when you ask for the 1-year key.',
 )
 
 
 def demo_key_warning() -> str | None:
     """Return a warning string if the demo public key is active, else None."""
     return DEMO_KEY_WARNING if is_demo_public_key_active() else None
+
+
+def is_customer_build_ready() -> bool:
+    """True when the build may be handed to a paying customer (no demo key embedded)."""
+    return not is_demo_public_key_active()
+
+
+def owner_build_notice() -> str | None:
+    """Installer-safe notice for an owner/preview build, else None.
+
+    Deliberately calm and non-blocking: it tells the person who owns the build what to do
+    about the demo key, without implying that a customer's licence or files are at risk.
+    """
+    return OWNER_BUILD_NOTE if is_demo_public_key_active() else None
 
 
 def is_license_required() -> bool:
@@ -636,7 +677,7 @@ def current_license_status(*, public_key_b64: str | None = None, today: _dt.date
         return {
             'valid': False,
             'machine_id': mid,
-            'reason': 'This computer has not been activated yet.',
+            'reason': 'Needs a 1-year activation key for this computer.',
         }
     try:
         raw = target.read_text(encoding='utf-8')
