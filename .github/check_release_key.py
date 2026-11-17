@@ -108,7 +108,16 @@ def main(argv: list[str] | None = None) -> int:
                         help='Build a throw-away test copy with the demo key (also enabled by CAFE_DESK_ALLOW_DEMO_KEY=1).')
     parser.add_argument('--apply', action='store_true', help='Write $CAFE_DESK_PUBLIC_KEY into license_guard.py before checking (fails if unset).')
     parser.add_argument('--apply-if-available', action='store_true', help='Same as --apply, but continue quietly when the secret is unset (pull requests).')
+    parser.add_argument('--dist-dir', metavar='FOLDER',
+                        help='Scan a built app folder (e.g. dist/CafeDesk) for the demo key. Used to block '
+                             'packaging an installer from a demo-key build, even in throw-away/PR runs.')
     args = parser.parse_args(argv)
+
+    if args.dist_dir:
+        # Deliberately ignores --warn-only / --allow-demo / CAFE_DESK_ALLOW_DEMO_KEY: those
+        # let a contributor produce a test app FOLDER, but an installable Setup.exe is a
+        # customer-facing artifact and must never wrap a demo-key app.
+        return _check_dist_dir(Path(args.dist_dir))
 
     secret = os.environ.get('CAFE_DESK_PUBLIC_KEY', '').strip()
 
@@ -160,6 +169,46 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f'Owner signing key OK ({active[:12]}…).')
+    return 0
+
+
+def _check_dist_dir(dist_dir: Path) -> int:
+    """Fail if a built app folder still embeds the demo owner key.
+
+    A folder build is fine for contributors, but the installer that wraps it is not: this is
+    the last gate before `iscc` turns that folder into a double-clickable Setup.exe.
+    PyInstaller keeps the 43-character base64url literal verbatim in the bundled bytecode,
+    so scanning raw bytes is enough and needs no disassembly.
+    """
+    if not dist_dir.is_dir():
+        _emit('error', 'Build folder missing', f'{dist_dir} does not exist, so the demo-key check cannot run.')
+        return 1
+    demo = _pristine_demo_key()
+    needle = demo.encode('ascii')
+    found_demo = False
+    scanned = 0
+    # Onedir builds hide the app code in .pyc files inside the PYZ/EXE; still, the literal
+    # appears in the archive bytes, so plain binary searching covers it.
+    for path in dist_dir.rglob('*'):
+        if not path.is_file():
+            continue
+        try:
+            if path.stat().st_size > 400 * 1024 * 1024:
+                continue
+            scanned += 1
+            if needle in path.read_bytes():
+                found_demo = True
+                print(f'  demo key found in {path}')
+        except OSError:
+            continue
+    if found_demo:
+        _emit('error', 'Refusing to package a demo-key installer',
+              'The built app folder still embeds the demo signing key, so any Setup.exe made from it '
+              'would verify licences against a key you do not control. Set the CAFE_DESK_PUBLIC_KEY '
+              'secret on release builds; on a machine with owner-keys/, run '
+              '`python .github/check_release_key.py --apply` and rebuild.')
+        return 1
+    print(f'App folder clean: no demo signing key in {scanned} file(s) under {dist_dir}.')
     return 0
 
 

@@ -33,33 +33,21 @@ set /p CDVER=<"%TEMP%\cafedesk_version.txt"
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --icon "assets\icons\cafedesk.ico" --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "cafe-desk-manual.html;." --add-data "README.md;." app.py
 if errorlevel 1 exit /b 1
 
-> "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" (
-  echo ============================================================
-  echo   Cafe Desk v!CDVER! -- Commercial 1-Year Licensed Edition
-  echo ============================================================
-  echo.
-  echo 1. COPY TO TARGET PC ^& ACTIVATE ^(1-YEAR PER-COMPUTER LICENSE^):
-  echo    Keep this ENTIRE "CafeDesk" folder together ^(including "_internal"^).
-  echo    Copy the whole "CafeDesk" folder onto a Windows 10/11 PC and run
-  echo    "CafeDesk.exe". No Python installation is needed!
-  echo.
-  echo    On first launch on a new computer, Cafe Desk displays that PC's
-  echo    unique hardware Machine ID ^(CD-XXXX-XXXX-XXXX^) and asks for a
-  echo    1-year Activation Key. Copying this folder to another computer will
-  echo    NOT transfer activation -- every computer requires its own key from
-  echo    the owner.
-  echo.
-  echo 2. PORTABLE USB SETTINGS MODE ^(OPTIONAL^):
-  echo    Create an empty folder named "CafeDeskData" beside CafeDesk.exe
-  echo    ^(or run "Enable-USB-Portable-Data.bat"^) if you want prices/settings
-  echo    stored inside this folder. Note: computer activation ^(license.json^)
-  echo    is always bound per-PC.
-  echo.
-  echo 3. OPTIONAL -- ENGLISH OCR ^(TESSERACT^):
-  echo    Install Tesseract OCR ^(keep English ticked^) using the direct link
-  echo    in Help ^& privacy, OR place a "Tesseract-OCR" folder inside this
-  echo    "CafeDesk\Tesseract-OCR" folder.
+rem Final gate on the artifact itself: the folder is what becomes Setup.exe.
+.venv\Scripts\python.exe .github\check_release_key.py --dist-dir dist\CafeDesk
+if errorlevel 1 (
+  echo ======================================================================
+  echo  BUILD STOPPED: the built app folder still contains the DEMO key.
+  echo  Do not turn this folder into an installer.
+  echo ======================================================================
+  exit /b 1
 )
+
+rem One source of truth for the customer-facing read-me, with the version stamped in.
+copy /y "packaging\HOW-TO-RUN-FROM-USB.txt" "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" >nul
+if errorlevel 1 (echo Could not copy HOW-TO-RUN-FROM-USB.txt & exit /b 1)
+>> "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" echo.
+>> "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" echo   This copy: Cafe Desk v!CDVER!
 
 > "dist\CafeDesk\Enable-USB-Portable-Data.bat" (
   echo @echo off
@@ -75,5 +63,7 @@ echo   IMPORTANT FOR COMMERCIAL SALES:
 echo   - Make sure you ran: python admin_keygen.py --init-keys --apply-public-key
 echo     BEFORE building so only YOUR secret private key can activate PCs!
 echo   - NEVER copy "admin_keygen.py" or "owner-keys\" onto customer USBs!
+echo   - Next: compile packaging\windows-installer.iss with Inno Setup 6
+echo     to produce installer-output\CafeDesk-Setup.exe
 echo ======================================================================
 pause

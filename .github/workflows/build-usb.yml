@@ -90,21 +90,10 @@ jobs:
           setlocal EnableDelayedExpansion
           for /f "delims=" %%v in ('python -c "from version import __version__; print(__version__)"') do set "CDVER=%%v"
           python -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --icon "assets\icons\cafedesk.ico" --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "cafe-desk-manual.html;." --add-data "README.md;." app.py
-          (
-            echo ============================================================
-            echo   Cafe Desk v!CDVER! -- 1-Year Licensed USB Edition ^(Windows^)
-            echo ============================================================
-            echo.
-            echo 1. COPY TO PC ^& ACTIVATE ^(LOCKED PER COMPUTER^):
-            echo    Keep this ENTIRE "CafeDesk" folder together ^(including "_internal"^).
-            echo    Copy the whole "CafeDesk" folder to the customer's Windows 10/11 PC
-            echo    and run "CafeDesk.exe". No Python installation is needed!
-            echo.
-            echo    On first launch, Cafe Desk displays that PC's hardware Machine ID
-            echo    ^(CD-XXXX-XXXX-XXXX^) and requires a 1-year Activation Key signed
-            echo    by the owner. Copying the folder to another PC will NOT activate
-            echo    the other PC.
-          ) > "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt"
+          rem One source of truth for the customer-facing read-me, with the version stamped in.
+          copy /y "packaging\HOW-TO-RUN-FROM-USB.txt" "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" >nul
+          >> "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" echo.
+          >> "dist\CafeDesk\HOW-TO-RUN-FROM-USB.txt" echo   This copy: Cafe Desk v!CDVER!
           (
             echo @echo off
             echo mkdir "%%~dp0CafeDeskData" 2^>nul
@@ -115,6 +104,13 @@ jobs:
       - name: Zip USB-ready portable folder
         shell: pwsh
         run: Compress-Archive -Path "dist\CafeDesk" -DestinationPath "CafeDesk-Windows-USB-Portable.zip" -Force
+
+      # The installer is the artifact a café actually double-clicks. Refuse to wrap a folder
+      # whose bundled bytecode still carries the demo key: a crafted /D override, a bypassed
+      # build script or a hand-run PyInstaller must never turn into a downloadable Setup.exe.
+      - name: Refuse to build an installer from a demo-key app folder
+        shell: bash
+        run: python .github/check_release_key.py --dist-dir dist/CafeDesk
 
       - name: Build optional Windows Setup.exe (Inno Setup 6)
         shell: pwsh

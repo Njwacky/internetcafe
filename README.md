@@ -131,6 +131,39 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
    - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.
    - **CI release builds and local `build-windows.bat` both refuse to build while the demo key is embedded** (pull requests only warn — those artifacts are throw-away). Frozen `.exe` builds also ignore the `CAFE_DESK_PUBLIC_KEY` environment override entirely; source runs and the test suite keep it for development.
 
+### Install & first-run experience (design contract)
+
+Two screens decide whether a café owner trusts Café Desk: the Windows installer and the
+first launch. Both are treated as product surfaces, not plumbing, and the test suite pins
+the rules so a future change cannot quietly reintroduce an alarming screen.
+
+- **No blocking error dialogs at startup.** Build hygiene (the demo signing key) is never
+  shown as a modal error before the window opens — to someone who just installed the app
+  that reads as a cracked or infected download. The check keeps its teeth where it belongs:
+  `packaging/build-windows.bat`, `packaging/build-unix.sh`, `.github/check_release_key.py`
+  and the CI release job all refuse to produce a distributable build. `--dist-dir` adds a
+  final gate that refuses to wrap an app folder into `CafeDesk-Setup.exe` if the demo key
+  is still inside it, even in throw-away/PR runs.
+- **Owner notices live inside the app, collapsed and calm.** In a preview build the licence
+  card in *About & contact* shows a quiet **About this build** row with a
+  *Why am I seeing this?* toggle; *Help & privacy* carries a one-line owner notice with the
+  exact fix. Release builds (real owner key applied) render nothing at all. Text comes from
+  `license_guard.OWNER_BUILD_NOTE`, `OWNER_BUILD_FIX_STEPS` and `OWNER_BUILD_BENEFIT` so
+  there is one source of truth.
+- **The licence card leads with status, not warnings.** A pill (`LICENSED`, `RENEWAL DUE`,
+  `EXPIRING SOON`, `NOT ACTIVATED`), one "Licensed to …" line, the expiry date with days
+  remaining, and a slim meter showing how much of the year is left.
+- **First launch is a two-step flow.** Step 1 shows the Machine ID full-width with *Copy ID*
+  and *WhatsApp the owner*; step 2 takes the key, plus *Check online approval* and
+  *Load a license file…*, with support contacts on the same screen. The window is scrollable
+  and every row is verified to fit at the minimum window width.
+- **The installer reads like the first screen of the product.** Modern wizard, per-user
+  install (no UAC prompt at the counter), publisher and version metadata, a "You're set up —
+  one step left" finish page that explains the Machine ID and the WhatsApp route to a key, an
+  uninstall message that promises documents are kept, and a reinstall note when a previous
+  copy is detected. `packaging/HOW-TO-RUN-FROM-USB.txt` is the single customer read-me; both
+  build scripts copy it and stamp the version in.
+
 2. **Installing & Activating on a Customer's Computer:**
    - Copy `dist\CafeDesk` (or `CafeDesk-Setup.exe`) from your USB onto the customer's PC and launch `CafeDesk.exe`.
    - Café Desk displays that computer's unique hardware **Machine ID** (`CD-XXXX-XXXX-XXXX`) and blocks access until activated.
