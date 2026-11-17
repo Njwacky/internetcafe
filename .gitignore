@@ -20,3 +20,6 @@ issued-licenses.jsonl
 issued-licenses.csv
 issued-licenses-dashboard.html
 
+
+# Local scratch / test workspaces (never ship venvs or node_modules)
+.arena/

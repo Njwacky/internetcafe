@@ -14,3 +14,9 @@ installer-output/
 *.sql
 pyproject.toml
 requirements*.txt
+*.md
+cafe_desk_bluetooth_files.zip
+cv-layout-samples.pdf
+cv-multiple-pages-sample.pdf
+*-preview.html
+cv-design-gallery.html

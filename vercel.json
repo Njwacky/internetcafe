@@ -1,20 +1,47 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "mkdir -p _vercel_static && cp owner-dashboard.html _vercel_static/index.html && cp owner-dashboard.html _vercel_static/owner-dashboard.html && cp cafe-desk-manual.html _vercel_static/cafe-desk-manual.html",
-  "outputDirectory": "_vercel_static",
   "rewrites": [
-    { "source": "/", "destination": "/index.html" },
-    { "source": "/admin", "destination": "/owner-dashboard.html" },
-    { "source": "/dashboard", "destination": "/owner-dashboard.html" }
+    { "source": "/", "destination": "/download.html" },
+    { "source": "/get", "destination": "/download.html" },
+    { "source": "/app", "destination": "/download.html" },
+    { "source": "/dashboard", "destination": "/owner-dashboard.html" },
+    { "source": "/dashboard/", "destination": "/owner-dashboard.html" },
+    { "source": "/admin", "destination": "/owner-dashboard.html" }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Frame-Options", "value": "DENY" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    },
+    {
+      "source": "/owner-dashboard.html",
+      "headers": [
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    },
+    {
+      "source": "/manifest.webmanifest",
+      "headers": [
+        { "key": "Content-Type", "value": "application/manifest+json" },
+        { "key": "Cache-Control", "value": "public, max-age=3600" }
+      ]
+    },
+    {
+      "source": "/assets/pwa/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=604800, immutable" }
       ]
     }
   ]

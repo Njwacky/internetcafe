@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#070b14">
+<title>Offline — Café Desk Owner Console</title>
+<link rel="icon" href="/assets/pwa/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/pwa/apple-touch-icon.png">
+<style>
+  :root{--bg:#070b14;--ink:#eef4ff;--muted:#8ea1c1;--lime:#b9ff70;--line:rgba(124,152,204,.2)}
+  *{box-sizing:border-box}
+  body{
+    margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;
+    font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;color:var(--ink);line-height:1.5;
+    background:
+      radial-gradient(820px 480px at 15% -10%, rgba(185,255,112,.10), transparent 62%),
+      radial-gradient(760px 440px at 88% 0%, rgba(122,179,255,.12), transparent 64%),
+      var(--bg);
+  }
+  .card{
+    max-width:430px;width:100%;text-align:center;padding:34px 26px;border-radius:22px;
+    background:rgba(19,27,45,.74);border:1px solid var(--line);
+    box-shadow:0 24px 60px rgba(2,6,16,.6);backdrop-filter:blur(16px);
+  }
+  .mark{
+    width:60px;height:60px;border-radius:18px;margin:0 auto 18px;display:grid;place-items:center;
+    background:linear-gradient(145deg,#b9ff70,#6ee7d0);color:#08150a;font-weight:800;font-size:27px;
+    box-shadow:0 12px 30px rgba(140,255,90,.24);
+  }
+  h1{font-size:21px;margin:0 0 8px;letter-spacing:-.02em}
+  p{color:var(--muted);font-size:13.5px;margin:0 0 20px}
+  button{
+    width:100%;padding:13px;border:0;border-radius:13px;cursor:pointer;font:inherit;font-weight:700;font-size:14px;
+    background:linear-gradient(180deg,#c8ff8a,#a9f65c);color:#0a1708;box-shadow:0 8px 22px rgba(140,255,90,.18);
+  }
+  button:active{transform:translateY(1px)}
+  .tip{margin-top:16px;font-size:11.5px;color:#64799a;line-height:1.55}
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">C</div>
+    <h1>You're offline</h1>
+    <p>The owner console needs a connection to sign keys and load live station data. Your licence keys and settings are safe — nothing was lost.</p>
+    <button onclick="location.replace('/dashboard')">Try again</button>
+    <div class="tip">Tip: installed Café Desk stays on your home screen — reopen it when your signal is back.</div>
+  </main>
+</body>
+</html>
