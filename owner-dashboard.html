@@ -17,6 +17,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/owner-auth.js"></script>
 <style>
   :root{
     --bg:#070b14; --bg-2:#0a1020;
@@ -357,26 +358,26 @@
 <!-- ==================== AUTH ==================== -->
 <main id="authView" class="auth-view hidden">
   <div class="auth-card">
-    <div class="auth-badge"><span style="width:6px;height:6px;border-radius:50%;background:#b9ff70;display:inline-block"></span> Private · Owner only</div>
-    <h2>Welcome back, Njwayo</h2>
-    <p class="lead">Sign in with your verified owner email <b style="color:#dbe6f7">njwayelodlamini@gmail.com</b>. Sign-ups are disabled.</p>
+    <div class="auth-badge"><span style="width:6px;height:6px;border-radius:50%;background:#b9ff70;display:inline-block"></span> Secured sign in</div>
+    <h2>Welcome back</h2>
+    <p class="lead">Enter your account email and password to continue. New accounts cannot be created here.</p>
 
     <div class="seg">
       <button id="modeOtpBtn" class="active" onclick="switchAuthMode('otp')">Email code / link</button>
       <button id="modePwdBtn" onclick="switchAuthMode('password')">Email + password</button>
     </div>
 
-    <label for="loginEmail">Owner email</label>
-    <input id="loginEmail" type="email" value="njwayelodlamini@gmail.com" autocomplete="email">
+    <label for="loginEmail">Email</label>
+    <input id="loginEmail" type="email" value="" placeholder="you@example.com" autocomplete="email" spellcheck="false">
 
     <div id="pwdBox" class="hidden">
       <label for="loginPassword">Password</label>
-      <input id="loginPassword" type="password" placeholder="Your owner password" autocomplete="current-password">
+      <input id="loginPassword" type="password" placeholder="Your password" autocomplete="current-password">
       <button class="btn btn-primary btn-block" onclick="signInWithPassword()">Sign in securely</button>
     </div>
 
     <div id="otpBox">
-      <button class="btn btn-primary btn-block" id="sendOtpBtn" onclick="sendEmailOtp()">✉ Send login code to my email</button>
+      <button class="btn btn-primary btn-block" id="sendOtpBtn" onclick="sendEmailOtp()">✉ Send login code by email</button>
       <div id="otpVerifyArea" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
         <label for="otpCodeInput">8-digit code from email (or tap the link)</label>
         <input id="otpCodeInput" type="text" inputmode="numeric" placeholder="12345678" autocomplete="one-time-code">
@@ -880,7 +881,8 @@
    ============================================================ */
 const SUPABASE_URL = "https://rmtkppzqzxuuuhbeufjy.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtdGtwcHpxenh1dXVoYmV1Zmp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ4NDg5ODksImV4cCI6MjExMDQyNDk4OX0.FES1qZBI3btnS3Z96x17pXh3hCneM37mz-tKW7jU2cc";
-const OWNER_EMAIL = "njwayelodlamini@gmail.com";
+/* The owner address itself is never embedded in this file — only its SHA-256 digest
+   lives in owner-auth.js, and public.is_cafedesk_owner() enforces the same check in RLS. */
 const REPO = "Njwacky/internetcafe";
 const DL_EXE = `https://github.com/${REPO}/releases/latest/download/CafeDesk-Setup.exe`;
 const DL_ZIP = `https://github.com/${REPO}/releases/latest/download/CafeDesk-Windows-USB-Portable.zip`;
@@ -1993,31 +1995,52 @@ function startLive() {
   $("#liveLabel").textContent = "Live";
 }
 
-function applySession(session) {
+function showAccessDenied() {
+  // Hard gate: an authenticated non-owner session never sees the console.
+  // RLS blocks the data server-side too, so this is defence in depth.
+  $("#appView").classList.add("hidden");
+  $("#authView").classList.remove("hidden");
+  $("#authMsg").textContent = "Access denied.";
+  $("#authMsg").style.color = "#ff9488";
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+}
+
+async function applySession(session) {
   const loggedIn = Boolean(session && session.user);
-  $("#bootScreen").classList.add("hidden");
-  $("#authView").classList.toggle("hidden", loggedIn);
-  $("#appView").classList.toggle("hidden", !loggedIn);
   if (!loggedIn) {
+    $("#bootScreen").classList.add("hidden");
+    $("#authView").classList.remove("hidden");
+    $("#appView").classList.add("hidden");
     if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
     return;
   }
+  // Keep the console shell hidden (and the boot spinner up) until the session's
+  // email digest is confirmed, so no privileged UI flashes for a wrong account.
+  $("#appView").classList.add("hidden");
+  $("#authView").classList.add("hidden");
+  $("#bootScreen").classList.remove("hidden");
+
   state.email = session.user.email || "";
   const name = (state.email.split("@")[0] || "Owner").replace(/[._-]+/g, " ");
   const pretty = name.charAt(0).toUpperCase() + name.slice(1);
   $("#ownerName").textContent = pretty;
   $("#ownerEmailSide").textContent = state.email;
   $("#avatarInitial").textContent = (pretty[0] || "N").toUpperCase();
-  if (state.email.toLowerCase() !== OWNER_EMAIL) {
-    // Hard gate: non-owner sessions never see the console (RLS also blocks data server-side).
-    $("#appView").classList.add("hidden");
-    $("#authView").classList.remove("hidden");
-    $("#authMsg").textContent = "This account is not the registered owner. Access denied.";
-    $("#authMsg").style.color = "#ff9488";
-    toast("This account is not the registered owner.", "err");
-    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+
+  let allowed = false;
+  try {
+    allowed = await window.CafeDeskOwner.isOwnerEmail(state.email);
+  } catch (_) {
+    allowed = false;
+  }
+  $("#bootScreen").classList.add("hidden");
+  if (!allowed) {
+    showAccessDenied();
+    await sb.auth.signOut().catch(() => {});
     return;
   }
+  $("#authView").classList.add("hidden");
+  $("#appView").classList.remove("hidden");
   switchView("overview");
   refreshAll();
   startLive();

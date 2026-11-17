@@ -439,13 +439,33 @@ grant execute on function public.sync_shop_sales(text, text, jsonb, text) to ano
 -- -----------------------------------------------------------------------------
 -- 6. OWNER WEB DASHBOARD RLS POLICIES (`owner-dashboard.html` via Supabase Auth)
 -- -----------------------------------------------------------------------------
+-- The owner address is NOT stored in plaintext here (nor in owner-dashboard.html).
+-- We compare a SHA-256 digest of "CAFE-DESK-OWNER-V1|" + lower(email) instead.
+-- Keep this digest in sync with owner-auth.js if the owner account ever changes.
+create or replace function public.cafedesk_owner_digest()
+returns text
+language sql
+immutable
+as $$
+    select '72f63f593e8b7db71539bdb0c9ed04567a072b946102b1f353a049870b9ba1bc';
+$$;
+
 create or replace function public.is_cafedesk_owner()
 returns boolean
 language sql
 stable
 as $$
-    select coalesce(lower(auth.jwt() ->> 'email') = 'njwayelodlamini@gmail.com', false);
+    select coalesce(
+        encode(
+            digest('CAFE-DESK-OWNER-V1|' || lower(coalesce(auth.jwt() ->> 'email', '')), 'sha256'),
+            'hex'
+        ) = public.cafedesk_owner_digest(),
+        false
+    );
 $$;
+
+grant execute on function public.cafedesk_owner_digest() to anon, authenticated;
+grant execute on function public.is_cafedesk_owner() to anon, authenticated;
 
 drop policy if exists "Owner full access to issued_machine_keys" on public.issued_machine_keys;
 create policy "Owner full access to issued_machine_keys"

@@ -1762,4 +1762,56 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn('$("#appView").classList.add("hidden")', dash)
 
 
+class LoginPrivacyTests(unittest.TestCase):
+    """The owner's email must never be published on the site, in the login form, or in the SQL schema."""
+
+    repo = Path(__file__).resolve().parent
+    EMAIL = 'njwayelodlamini@gmail.com'
+    DIGEST = '72f63f593e8b7db71539bdb0c9ed04567a072b946102b1f353a049870b9ba1bc'
+
+    def web_files(self):
+        for name in ('owner-dashboard.html', 'download.html', 'owner-auth.js',
+                     'sw.js', 'vercel.json', 'manifest.webmanifest'):
+            p = self.repo / name
+            if p.is_file():
+                yield name, p.read_text(encoding='utf-8')
+
+    def test_owner_email_absent_from_every_shipped_web_file(self):
+        for name, src in self.web_files():
+            self.assertNotIn(self.EMAIL, src, f'{name} leaks the owner email address')
+            self.assertNotIn('njwayelodlamini', src.lower(), f'{name} leaks the owner address')
+
+    def test_login_form_is_not_prefilled_and_says_login_not_owner_sign_in(self):
+        dash = (self.repo / 'owner-dashboard.html').read_text(encoding='utf-8')
+        self.assertNotIn('value="njwayelodlamini@gmail.com"', dash)
+        self.assertIn('id="loginEmail"', dash)
+        self.assertIn('placeholder="you@example.com"', dash)
+        # Wording: plain "Login", no "Owner sign in" call to action.
+        for name, src in self.web_files():
+            self.assertNotIn('Owner sign in', src, f'{name} still says "Owner sign in"')
+            self.assertNotIn('sign in as owner', src, f'{name} still says "sign in as owner"')
+        dl = (self.repo / 'download.html').read_text(encoding='utf-8')
+        self.assertIn('href="/dashboard">Login</a>', dl)
+
+    def test_owner_gate_uses_sha256_digest_not_plaintext(self):
+        auth = (self.repo / 'owner-auth.js').read_text(encoding='utf-8')
+        self.assertIn(self.DIGEST, auth)
+        self.assertIn('CAFE-DESK-OWNER-V1|', auth)
+        self.assertIn('isOwnerEmail', auth)
+        dash = (self.repo / 'owner-dashboard.html').read_text(encoding='utf-8')
+        self.assertIn('/owner-auth.js', dash)
+        self.assertIn('CafeDeskOwner.isOwnerEmail', dash)
+        # A rejected session is signed out, not just hidden.
+        self.assertIn('sb.auth.signOut()', dash)
+
+    def test_sql_owner_check_uses_the_same_digest(self):
+        import hashlib
+        sql = (self.repo / 'supabase_schema.sql').read_text(encoding='utf-8')
+        self.assertNotIn(self.EMAIL, sql, 'supabase_schema.sql still contains the owner email')
+        self.assertIn(self.DIGEST, sql)
+        self.assertIn('cafedesk_owner_digest', sql)
+        expected = hashlib.sha256(('CAFE-DESK-OWNER-V1|' + self.EMAIL).encode()).hexdigest()
+        self.assertEqual(expected, self.DIGEST)
+
+
 if __name__=='__main__': unittest.main()

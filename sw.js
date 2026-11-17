@@ -1,7 +1,8 @@
 /* Café Desk Owner Console — service worker (network-first with offline fallback) */
-const VERSION = 'cafedesk-console-v1';
+const VERSION = 'cafedesk-console-v2';
 const CORE = [
   '/dashboard',
+  '/owner-auth.js',
   '/offline.html',
   '/manifest.webmanifest',
   '/assets/pwa/icon-192.png',
