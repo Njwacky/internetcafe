@@ -795,16 +795,25 @@ class DiagnosticRemediationTests(unittest.TestCase):
                 # Internal path guard protects portable CafeDeskData from public overwrite
                 self.assertTrue(settings_store.is_internal_path(portable_data/'settings.json'))
 
-        # Verify packaging scripts and Inno Setup match APP_BUILD
+        # Build scripts, version.py and Inno Setup must all agree on the version
         import cloud_sync
         app_src=(repo/'app.py').read_text(encoding='utf-8')
         iss_src=(repo/'packaging'/'windows-installer.iss').read_text(encoding='utf-8')
         bat_src=(repo/'packaging'/'build-windows.bat').read_text(encoding='utf-8')
         unix_src=(repo/'packaging'/'build-unix.sh').read_text(encoding='utf-8')
         wf_src=(repo/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
-        self.assertIn(f"APP_BUILD='{cloud_sync.APP_VERSION}'",app_src)
+        cloud_src=(repo/'cloud_sync.py').read_text(encoding='utf-8')
+        self.assertIn('from version import __version__',app_src)
+        self.assertIn('from version import __version__',cloud_src)
+        self.assertNotIn("APP_BUILD='0.",app_src)
+        self.assertNotIn("APP_VERSION = '0.",cloud_src)
+        self.assertIn(f"__version__ = '{cloud_sync.APP_VERSION}'",(repo/'version.py').read_text(encoding='utf-8'))
         self.assertIn(f'#define MyAppVersion "{cloud_sync.APP_VERSION}"',iss_src)
-        self.assertTrue(wf_src.count(f'v{cloud_sync.APP_VERSION}')>=1)
+        self.assertIn('CAFE_DESK_PUBLIC_KEY',wf_src)
+        self.assertIn('check_release_key.py',wf_src)
+        self.assertIn('--apply',wf_src)
+        self.assertIn('--icon',bat_src)
+        self.assertIn('--icon',wf_src)
         self.assertIn('--exclude-module admin_keygen',bat_src)
         self.assertIn('--exclude-module admin_keygen',unix_src)
         self.assertIn('--exclude-module admin_keygen',wf_src)
@@ -1443,31 +1452,46 @@ class DiagnosticRemediationTests(unittest.TestCase):
                 def __enter__(self): return self
                 def __exit__(self,*_a): pass
 
-            # 1. Refuses non-HTTPS remote installer URLs
-            with self.assertRaisesRegex(ValueError,'HTTPS'):
-                cloud_sync.download_and_verify_update('http://evil.example.com/CafeDesk.exe',good_sha,tmp_p)
+            priv_b64,pub_b64=admin_keygen.generate_owner_keypair(priv_path=tmp_p/'priv.key',pub_path=tmp_p/'pub.txt')
+            release_sig=cloud_sync.sign_release_sha256('0.8.1',good_sha,priv_b64)
 
-            # 2. Unsigned releases are refused before any download happens (fail closed).
-            #    This is what stops a leaked/compromised public anon key from pushing an exe.
-            with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)) as urlopen_mock:
-                with self.assertRaisesRegex(ValueError,'not signed by the owner'):
-                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1')
-                urlopen_mock.assert_not_called()
+            with mock.patch.dict(os.environ,{'CAFE_DESK_PUBLIC_KEY':pub_b64},clear=False):
+                # 1. Refuses non-HTTPS remote installer URLs
+                with self.assertRaisesRegex(ValueError,'HTTPS'):
+                    cloud_sync.download_and_verify_update('http://evil.example.com/CafeDesk.exe',good_sha,tmp_p,expected_signature=release_sig)
 
-            # 3. Tampered / mismatched SHA-256 deletes temporary file and raises security error
-            with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
-                with self.assertRaisesRegex(ValueError,'Security check failed'):
-                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',wrong_sha,tmp_p,version_label='0.8.1',allow_unsigned=True)
-            self.assertEqual(list(tmp_p.glob('*CafeDesk*')),[])
+                # 2. Unsigned releases are refused before any download happens (fail closed).
+                #    This is what stops a leaked/compromised public anon key from pushing an exe.
+                with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)) as urlopen_mock:
+                    with self.assertRaisesRegex(ValueError,'not signed by the owner'):
+                        cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1')
+                    urlopen_mock.assert_not_called()
+                self.assertEqual(list(tmp_p.glob('*CafeDesk*')),[])
 
-            # 4. Matching SHA-256 saves verified installer cleanly (legacy opt-in path for tests only)
-            with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
-                saved_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1',allow_unsigned=True)
-            self.assertTrue(saved_exe.is_file())
-            self.assertEqual(saved_exe.read_bytes(),fake_exe_bytes)
+                # 3. Tampered / mismatched SHA-256 deletes temporary file and raises security error
+                with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
+                    with self.assertRaisesRegex(ValueError,'Security check failed'):
+                        cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',wrong_sha,tmp_p,version_label='0.8.1',expected_signature=release_sig)
+                self.assertEqual(list(tmp_p.glob('*CafeDesk*')),[])
+
+                # 3b. Owner signature over a DIFFERENT version is rejected; file is deleted
+                with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
+                    with self.assertRaisesRegex(ValueError,'Security check failed'):
+                        cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1',expected_signature=cloud_sync.sign_release_sha256('0.9.9',good_sha,priv_b64))
+                self.assertEqual(list(tmp_p.glob('*CafeDesk*')),[])
+
+                # 4. Matching SHA-256 + valid owner signature saves the installer cleanly
+                with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
+                    saved_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1',expected_signature=release_sig)
+                self.assertTrue(saved_exe.is_file())
+                self.assertEqual(saved_exe.read_bytes(),fake_exe_bytes)
+
+                # 5. Legacy allow_unsigned opt-in (owner tooling/tests only): hash still enforced
+                with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
+                    legacy_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1',allow_unsigned=True)
+                self.assertTrue(legacy_exe.is_file())
 
             # 4. Mock Supabase check_for_app_update + online Machine ID key pull + remote revocation
-            priv_b64,pub_b64=admin_keygen.generate_owner_keypair(priv_path=tmp_p/'priv.key',pub_path=tmp_p/'pub.txt')
             mid='CD-ABCD-1234-EF56'
             today=dt.datetime.now(dt.timezone.utc).date()
             lic_tok,lic_pay=admin_keygen.sign_license_token(mid,customer='Cloud Cyber Shop',days=365,shop_id='SHOP-CLOUD',seat_no=2,seat_max=4,seat_label='Desk 2',issued_date=today,private_key_b64=priv_b64)
@@ -1897,7 +1921,7 @@ class ReleaseKeyGuardTests(unittest.TestCase):
         import shutil
         root = Path(tmp)
         repo = Path(__file__).resolve().parent
-        for name in ('license_guard.py', 'admin_keygen.py', 'cloud_sync.py'):
+        for name in ('license_guard.py', 'admin_keygen.py', 'cloud_sync.py', 'version.py'):
             shutil.copy2(repo / name, root / name)
         (root / '.github').mkdir(exist_ok=True)
         shutil.copy2(repo / '.github' / 'check_release_key.py', root / '.github' / 'check_release_key.py')
@@ -2279,6 +2303,59 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
                                  license_guard.DEFAULT_OWNER_PUBLIC_KEY_B64)
             # ...but still honoured for the test suite / owner pipeline.
             self.assertEqual(license_guard.configured_public_key_b64(), 'attacker-key')
+
+
+class ReleaseTrustTests(unittest.TestCase):
+    """Tier 2 guards: frozen builds ignore key env overrides, CI never ships the
+    demo key, updates must be Ed25519-signed, and version/digest stay in sync."""
+
+    def test_embedded_key_demo_check_is_fail_closed(self):
+        import license_guard
+        # This repository ships the demo key, so the embedded check must trip.
+        self.assertTrue(license_guard.embedded_public_key_is_demo())
+        self.assertTrue(license_guard.is_demo_public_key_active())
+
+    def test_check_for_app_update_propagates_auth_failures(self):
+        from unittest import mock
+        import cloud_sync
+        cfg = {'supabase_url': 'https://demo.supabase.co', 'supabase_anon_key': 'anon-xyz'}
+        with mock.patch.object(cloud_sync, '_supabase_request', side_effect=RuntimeError('permission denied for table app_releases')):
+            with self.assertRaises(RuntimeError):
+                cloud_sync.check_for_app_update(cfg, current_version='0.8.2')
+
+    def test_check_for_app_update_legacy_db_fallback_only_for_missing_signature_column(self):
+        from unittest import mock
+        import cloud_sync
+        cfg = {'supabase_url': 'https://demo.supabase.co', 'supabase_anon_key': 'anon-xyz'}
+        calls = []
+        def fake_request(url, key, method, path, **kwargs):
+            calls.append(path)
+            if 'signature' in path:
+                raise RuntimeError('column app_releases.signature does not exist')
+            return [{'version': '0.9.0', 'download_url': 'https://example.com/CafeDesk-Setup.exe',
+                     'sha256': 'a' * 64, 'release_notes': 'Legacy', 'mandatory': False,
+                     'published_at': '2026-01-01T00:00:00Z'}]
+        with mock.patch.object(cloud_sync, '_supabase_request', side_effect=fake_request):
+            upd = cloud_sync.check_for_app_update(cfg, current_version='0.8.2')
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(upd['update_available'])
+        self.assertEqual(upd['signature'], '')  # unsigned — the downloader will refuse it
+
+    def test_version_sync_tool_passes_and_detects_drift(self):
+        import subprocess
+        import sys
+        repo = Path(__file__).resolve().parent
+        ok = subprocess.run([sys.executable, str(repo / 'tools' / 'check_version_sync.py'), '--check'],
+                            capture_output=True, text=True, cwd=repo)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+
+    def test_owner_digest_sync_tool_passes(self):
+        import subprocess
+        import sys
+        repo = Path(__file__).resolve().parent
+        ok = subprocess.run([sys.executable, str(repo / 'tools' / 'sync_owner_digest.py'), '--check'],
+                            capture_output=True, text=True, cwd=repo)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
 
 
 if __name__=='__main__': unittest.main()

@@ -63,7 +63,7 @@ import cloud_sync
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
-APP_BUILD='0.8.2'
+from version import __version__ as APP_BUILD
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
 
@@ -828,7 +828,7 @@ class CafeDesk(ctk.CTk):
         label(upd_box,'Remote App Updates & Online Key Sync (Over the Internet)',size=16,bold=True,color=LIME).pack(anchor='w',padx=20,pady=(18,4))
         label(
             upd_box,
-            f'Current installed version: v{APP_BUILD}. Check for newer Café Desk releases over the internet (SHA-256 verified installer; your license, PIN, price list, and sales history stay untouched).',
+            f'Current installed version: v{APP_BUILD}. Check for newer Café Desk releases over the internet (owner-signed, SHA-256 verified installer; your license, PIN, price list, and sales history stay untouched).',
             size=12,color=MUTED,wraplength=740,justify='left',
         ).pack(anchor='w',padx=20,pady=(0,12))
 
@@ -899,7 +899,7 @@ class CafeDesk(ctk.CTk):
                     if sys.platform.startswith('win') and str(saved_installer).lower().endswith('.exe'):
                         if messagebox.askyesno(
                             'Update Verified — Launch Installer?',
-                            f'SHA-256 security verification passed!\nSaved to:\n{saved_installer}\n\nClose Café Desk and launch the v{res["latest_version"]} installer now?',
+                            f'Owner signature & SHA-256 verification passed!\nSaved to:\n{saved_installer}\n\nClose Café Desk and launch the v{res["latest_version"]} installer now?',
                             parent=self,
                         ):
                             try:
@@ -910,7 +910,7 @@ class CafeDesk(ctk.CTk):
                     else:
                         messagebox.showinfo(
                             'Update Downloaded & Verified',
-                            f'SHA-256 checksum verified!\nSaved update package to:\n{saved_installer}',
+                            f'Owner signature & SHA-256 checksum verified!\nSaved update package to:\n{saved_installer}',
                             parent=self,
                         )
                 self.job(f"Downloading & verifying Café Desk v{res['latest_version']}…",_run_dl,_done_dl)

@@ -32,6 +32,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-lock.txt
 
+      - name: Check version consistency (version.py is the single source)
+        run: python tools/check_version_sync.py --check
+
+      - name: Check owner digest is in sync (browser == database)
+        run: python tools/sync_owner_digest.py --check
+
       - name: Run unit test suite
         run: python .github/run_tests.py
 
@@ -81,10 +87,12 @@ jobs:
       - name: Build USB-ready 1-Year Licensed folder (dist\CafeDesk)
         shell: cmd
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "cafe-desk-manual.html;." --add-data "README.md;." app.py
+          setlocal EnableDelayedExpansion
+          for /f "delims=" %%v in ('python -c "from version import __version__; print(__version__)"') do set "CDVER=%%v"
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --icon "assets\icons\cafedesk.ico" --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "cafe-desk-manual.html;." --add-data "README.md;." app.py
           (
             echo ============================================================
-            echo   Cafe Desk v0.8.2 -- 1-Year Licensed USB Edition ^(Windows^)
+            echo   Cafe Desk v!CDVER! -- 1-Year Licensed USB Edition ^(Windows^)
             echo ============================================================
             echo.
             echo 1. COPY TO PC ^& ACTIVATE ^(LOCKED PER COMPUTER^):
@@ -111,14 +119,15 @@ jobs:
       - name: Build optional Windows Setup.exe (Inno Setup 6)
         shell: pwsh
         run: |
-          iscc "packaging\windows-installer.iss"
+          $ver = (python -c "from version import __version__; print(__version__)").Trim()
+          iscc /DMyAppVersion=$ver "packaging\windows-installer.iss"
 
       - name: Generate SHA-256 Checksums Manifest
         shell: pwsh
         run: |
           $exeHash = (Get-FileHash "installer-output\CafeDesk-Setup.exe" -Algorithm SHA256).Hash.ToLower()
           $zipHash = (Get-FileHash "CafeDesk-Windows-USB-Portable.zip" -Algorithm SHA256).Hash.ToLower()
-          $ver = python -c "import cloud_sync; print(cloud_sync.APP_VERSION)"
+          $ver = (python -c "from version import __version__; print(__version__)").Trim()
           @{
             version = $ver.Trim()
             built_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -148,7 +157,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ver = (python -c "import cloud_sync; print(cloud_sync.APP_VERSION)").Trim()
+          $ver = (python -c "from version import __version__; print(__version__)").Trim()
           $exeHash = (Get-FileHash "installer-output\CafeDesk-Setup.exe" -Algorithm SHA256).Hash.ToLower()
           $zipHash = (Get-FileHash "CafeDesk-Windows-USB-Portable.zip" -Algorithm SHA256).Hash.ToLower()
           $lines = @(

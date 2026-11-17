@@ -11,7 +11,7 @@ Architecture & Security Guarantees:
      exclusively in gitignored `owner-keys/supabase-owner.json` on your own PC.
 3. Tamper-Proof Remote App Updates:
    - Remote installer downloads enforce `https://`, stream in chunks, and verify an
-     exact 64-hex SHA-256 checksum BEFORE allowing execution. Releases are also
+     exact 64-hex SHA-256 checksum BEFORE allowing execution. Releases are ALSO
      Ed25519-signed by the owner (`app_releases.signature` over
      `CAFE-DESK-RELEASE-V1:{version}:{sha256}`) and verified against the embedded
      public key — a compromised Supabase account alone cannot push a fake installer.
@@ -39,7 +39,7 @@ from typing import Callable
 
 import license_guard
 
-APP_VERSION = '0.8.2'
+from version import __version__ as APP_VERSION  # single source of truth is version.py
 
 # Default PUBLIC Supabase project endpoint & anon key (safe for client builds — RLS + RPC enforced; NEVER put service_role here!).
 PUBLIC_PROJECT_SUPABASE_URL = 'https://rmtkppzqzxuuuhbeufjy.supabase.co'
@@ -349,7 +349,7 @@ def download_and_verify_update(
     timeout: float = 60.0,
     allow_unsigned: bool = False,
 ) -> Path:
-    """Download a remote Café Desk installer/zip over HTTPS and strictly verify its SHA-256 digest.
+    """Download a remote Café Desk installer/zip over HTTPS and verify it end to end.
 
     If `expected_signature` is provided, the Ed25519 owner signature over
     `CAFE-DESK-RELEASE-V1:{version}:{sha256}` is also verified and a mismatch
@@ -368,7 +368,6 @@ def download_and_verify_update(
     clean_hash = str(expected_sha256 or '').strip().lower()
     if not _HEX64_RE.match(clean_hash):
         raise ValueError('Refusing update download: release is missing a valid 64-character SHA-256 checksum.')
-
     # Fail closed BEFORE downloading: no signature means no update on a customer PC.
     clean_sig = str(expected_signature or '').strip()
     unsigned_allowed = bool(allow_unsigned) and not getattr(sys, 'frozen', False)
