@@ -1889,6 +1889,65 @@ class LoginPrivacyTests(unittest.TestCase):
         self.assertEqual(expected, self.DIGEST)
 
 
+class ReleaseKeyGuardTests(unittest.TestCase):
+    """The CI demo-key guard must block a demo-signed build and allow a real key."""
+
+    def _tree(self, tmp):
+        """Copy the files the guard needs into a throw-away tree (no .git)."""
+        import shutil
+        root = Path(tmp)
+        repo = Path(__file__).resolve().parent
+        for name in ('license_guard.py', 'admin_keygen.py', 'cloud_sync.py'):
+            shutil.copy2(repo / name, root / name)
+        (root / '.github').mkdir(exist_ok=True)
+        shutil.copy2(repo / '.github' / 'check_release_key.py', root / '.github' / 'check_release_key.py')
+        return root
+
+    def _run(self, root, args, extra_env=None):
+        import os, subprocess, sys
+        env = {k: v for k, v in os.environ.items() if k != 'CAFE_DESK_PUBLIC_KEY'}
+        env.update(extra_env or {})
+        return subprocess.run([sys.executable, str(root / '.github' / 'check_release_key.py'), *args],
+                              cwd=str(root), env=env, capture_output=True, text=True, timeout=120)
+
+    def test_release_build_is_blocked_while_the_demo_key_is_embedded(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            res = self._run(root, [])                     # enforcement mode (release job)
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn('Release blocked', res.stdout + res.stderr)
+            res2 = self._run(root, ['--warn-only'])       # pull-request mode
+            self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        finally:
+            tmp.cleanup()
+
+    def test_apply_injects_the_secret_and_then_passes(self):
+        import base64
+        from cryptography.hazmat.primitives import serialization as _s
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            # Missing secret must fail closed, not silently build a demo-signed exe.
+            missing = self._run(root, ['--apply'])
+            self.assertEqual(missing.returncode, 1, missing.stdout + missing.stderr)
+            self.assertIn('Missing signing key', missing.stdout + missing.stderr)
+
+            priv = Ed25519PrivateKey.generate()
+            pub = base64.urlsafe_b64encode(priv.public_key().public_bytes(
+                encoding=_s.Encoding.Raw, format=_s.PublicFormat.Raw)).decode().rstrip('=')
+            applied = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': pub})
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertIn(pub, (root / 'license_guard.py').read_text(encoding='utf-8'))
+            # A second enforcement run in the same tree must now pass (regression:
+            # the guard used to read a stale in-process module and block itself).
+            recheck = self._run(root, [])
+            self.assertEqual(recheck.returncode, 0, recheck.stdout + recheck.stderr)
+        finally:
+            tmp.cleanup()
+
+
 if __name__=='__main__': unittest.main()
 
 

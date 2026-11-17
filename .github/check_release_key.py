@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,7 +32,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import license_guard  # noqa: E402
 import admin_keygen  # noqa: E402
 
 
@@ -60,14 +60,11 @@ def main(argv: list[str] | None = None) -> int:
         except (RuntimeError, OSError) as exc:
             _emit('error', 'Could not apply owner public key', str(exc))
             return 1
-        # apply_public_key_to_guard rewrites the source; re-import so the check sees it.
-        for module in ('license_guard', 'admin_keygen'):
-            sys.modules.pop(module, None)
-        import importlib
-        importlib.invalidate_caches()
 
-    # The check reads the value PyInstaller will actually bundle.
-    active = license_guard.DEFAULT_OWNER_PUBLIC_KEY_B64
+    # Always read the value from the SOURCE FILE that PyInstaller bundles. Reading the
+    # imported module would still see the pre-`--apply` value in this process, which
+    # would wrongly block every correctly-signed release build.
+    active = _key_in_source()
     demo_active = active == _pristine_demo_key()
     if demo_active:
         _emit(
@@ -84,6 +81,16 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f'Owner signing key OK ({active[:12]}…).')
     return 0
+
+
+_KEY_RE = re.compile(r"^DEFAULT_OWNER_PUBLIC_KEY_B64\s*=\s*'([^']*)'", re.MULTILINE)
+
+
+def _key_in_source() -> str:
+    """Read `DEFAULT_OWNER_PUBLIC_KEY_B64` straight from license_guard.py on disk."""
+    src = (REPO_ROOT / 'license_guard.py').read_text(encoding='utf-8')
+    found = _KEY_RE.search(src)
+    return found.group(1).strip() if found else ''
 
 
 _DEMO_CACHE: list[str] = []
