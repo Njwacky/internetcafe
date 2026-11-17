@@ -46,6 +46,15 @@ If the PIN is forgotten, there is no built-in recovery. An administrator can res
 
 An API key is held in memory only; it is not encrypted or persisted. Do not unlock staff access or leave a key in an unattended customer session. AI sends the entire editor text to your chosen AI provider (Google Gemini, OpenRouter, OpenAI, Groq, DeepSeek, or custom endpoint) after confirmation. Obtain customer permission and review provider policies and charges. Scanner and saved-file usage can leave copies in other applications and recent-file lists.
 
+### Anonymous usage statistics (opt-in, off by default)
+
+Café Desk asks **once** on the Home screen whether it may send anonymous usage statistics, and the answer is **No unless you explicitly agree**. You can change it at any time under **Help & privacy → Anonymous usage statistics**. When it is on, Café Desk uploads only:
+
+- this computer's Machine ID (`CD-XXXX-XXXX-XXXX`), the **business/shop name**, the **station name**, and the **city label** you typed in settings;
+- the app version, the operating system, and a count of how many times each sidebar screen was opened.
+
+It never uploads document text, filenames, images, scanned pages, OCR text, customer names, ID numbers, or sales/receipt figures. Turning the switch off stops all uploads immediately and also stops the online station heartbeat; licensing, updates and key sync keep working. Because the business/town labels are sent with a machine identifier, treat this as personal information under POPIA and only enable it with the shop owner's agreement.
+
 ## Scan directly in the app (Windows)
 
 1. Install the scanner driver for your device, connect its USB cable and switch it on. The Epson EcoTank L3251 is an intended test device, but this feature **has not been tested on that device or on Windows**.
@@ -93,6 +102,7 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
    ```
    - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` (**gitignored — NEVER share or copy `owner-keys/` or `admin_keygen.py` onto customer USBs!**).
    - Writes only your Ed25519 **public key** into `license_guard.py`, then commit & push (or run `packaging\build-windows.bat`) so your `.exe` builds verify signatures against **your** keypair.
+   - **Required for GitHub Actions builds:** add a repository secret named **`CAFE_DESK_PUBLIC_KEY`** (Settings → Secrets and variables → Actions) whose value is that same public key. The Windows release job now *fails closed* if the secret is missing, because a build made from a plain checkout would otherwise verify licenses against the throw-away **demo** key that is committed in this repo — meaning anyone could mint themselves a licence. The check lives in `.github/check_release_key.py`; pull requests only get a warning, release/tag builds are blocked.
    - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.
 
 2. **Installing & Activating on a Customer's Computer:**

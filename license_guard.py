@@ -70,9 +70,18 @@ def _b64u_decode(text: str) -> bytes:
 
 
 def configured_public_key_b64() -> str:
-    """Return active owner Ed25519 public key (env override supported for build pipelines/tests)."""
-    env_key = os.environ.get('CAFE_DESK_PUBLIC_KEY', '').strip()
-    return env_key or DEFAULT_OWNER_PUBLIC_KEY_B64
+    """Return the active owner Ed25519 public key.
+
+    Security: the `CAFE_DESK_PUBLIC_KEY` environment override exists ONLY for the test
+    suite and the owner's signing pipeline. It is ignored in frozen (`CafeDesk.exe`)
+    builds, because otherwise any customer could launch the app with their own keypair
+    in the environment and mint themselves a valid-looking license.
+    """
+    if not getattr(sys, 'frozen', False):
+        env_key = os.environ.get('CAFE_DESK_PUBLIC_KEY', '').strip()
+        if env_key:
+            return env_key
+    return DEFAULT_OWNER_PUBLIC_KEY_B64
 
 
 def is_demo_public_key_active() -> bool:

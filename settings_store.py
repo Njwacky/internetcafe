@@ -115,6 +115,10 @@ def _default_dict():
         'lan_sync_folder':'',
         'supabase_url':os.environ.get('CAFE_DESK_SUPABASE_URL',cloud_sync.PUBLIC_PROJECT_SUPABASE_URL).strip(),
         'supabase_anon_key':os.environ.get('CAFE_DESK_SUPABASE_ANON_KEY',cloud_sync.PUBLIC_PROJECT_SUPABASE_ANON_KEY).strip(),
+        # Anonymized usage counters are OPT-IN: nothing is uploaded until someone
+        # explicitly enables "Share anonymous usage statistics" and acknowledges the notice.
+        'telemetry_enabled':False,
+        'telemetry_consent_asked':False,
     }
 def _parse_settings_file(target):
     default=_default_dict()
@@ -149,6 +153,7 @@ def _parse_settings_file(target):
         if k in (
             'pin_salt','pin_hash','currency','prices','failed_attempts','lockout_until_epoch',
             'station_name','shop_id','city_label','lan_sync_folder','supabase_url','supabase_anon_key',
+            'telemetry_enabled','telemetry_consent_asked',
         )
     })
     default.update(business_name=name,business_icon=icon if icon in ICONS else DEFAULT_ICON)
@@ -159,6 +164,8 @@ def _parse_settings_file(target):
     default['lan_sync_folder']=str(default.get('lan_sync_folder') or '').strip()[:260]
     default['supabase_url']=str(default.get('supabase_url') or '').strip()[:200]
     default['supabase_anon_key']=str(default.get('supabase_anon_key') or '').strip()[:512]
+    default['telemetry_enabled']=bool(default.get('telemetry_enabled'))
+    default['telemetry_consent_asked']=bool(default.get('telemetry_consent_asked'))
     return default
 def load_settings(path=None,strict=False):
     target=Path(path or settings_path())
@@ -212,6 +219,19 @@ def save_settings(name,icon,path=None):
     if icon not in ICONS: raise ValueError('Please select an available business icon.')
     data=load_settings(path,strict=True); data.update(business_name=name,business_icon=icon); _write(data,path); return name
 def save_name(name,path=None): return save_settings(name,load_settings(path,strict=True)['business_icon'],path)
+def save_telemetry_preference(enabled,path=None,asked=True):
+    """Persist the opt-in flag for anonymized usage counters (default OFF)."""
+    data=load_settings(path,strict=True)
+    data['telemetry_enabled']=bool(enabled)
+    data['telemetry_consent_asked']=bool(asked)
+    _write(data,path)
+    return bool(enabled)
+def telemetry_enabled(path=None):
+    """True only when a staff member explicitly opted in. Missing/damaged => OFF."""
+    try:
+        return bool(load_settings(path,strict=True).get('telemetry_enabled'))
+    except (CorruptedSettingsError,OSError,ValueError):
+        return False
 def set_pin(pin,path=None):
     if not isinstance(pin,str) or not pin.isascii() or not pin.isdigit() or not 6<=len(pin)<=12: raise ValueError('Use a PIN of 6–12 digits.')
     salt=os.urandom(16); digest=hashlib.pbkdf2_hmac('sha256',pin.encode(),salt,300000)

@@ -22,6 +22,13 @@
 --   * Releases are Ed25519-signed (app_releases.signature). Publish via
 --     cloud_sync.owner_publish_app_release (signs with owner-keys private key)
 --     or update the owner-admin Edge Function to sign before upserting.
+--   * UNSIGNED RELEASES ARE REFUSED by the desktop client. An empty `signature`
+--     no longer falls back to SHA-256-only verification, because this project's
+--     `anon` key is public (it is embedded in the app and in owner-dashboard.html);
+--     a writable app_releases row must therefore never be enough to push an .exe.
+--     Always publish with a signature from `admin_keygen.py` / owner_publish_app_release.
+--   * Telemetry (section 7) is OPT-IN in the client: nothing is uploaded until a
+--     staff member enables "Share anonymous usage statistics" in Help & privacy.
 -- =============================================================================
 
 create extension if not exists pgcrypto;

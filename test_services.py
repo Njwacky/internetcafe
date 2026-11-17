@@ -1447,15 +1447,22 @@ class DiagnosticRemediationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'HTTPS'):
                 cloud_sync.download_and_verify_update('http://evil.example.com/CafeDesk.exe',good_sha,tmp_p)
 
-            # 2. Tampered / mismatched SHA-256 deletes temporary file and raises security error
+            # 2. Unsigned releases are refused before any download happens (fail closed).
+            #    This is what stops a leaked/compromised public anon key from pushing an exe.
+            with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)) as urlopen_mock:
+                with self.assertRaisesRegex(ValueError,'not signed by the owner'):
+                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1')
+                urlopen_mock.assert_not_called()
+
+            # 3. Tampered / mismatched SHA-256 deletes temporary file and raises security error
             with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
                 with self.assertRaisesRegex(ValueError,'Security check failed'):
-                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',wrong_sha,tmp_p,version_label='0.8.1')
+                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',wrong_sha,tmp_p,version_label='0.8.1',allow_unsigned=True)
             self.assertEqual(list(tmp_p.glob('*CafeDesk*')),[])
 
-            # 3. Matching SHA-256 saves verified installer cleanly
+            # 4. Matching SHA-256 saves verified installer cleanly (legacy opt-in path for tests only)
             with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
-                saved_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1')
+                saved_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1',allow_unsigned=True)
             self.assertTrue(saved_exe.is_file())
             self.assertEqual(saved_exe.read_bytes(),fake_exe_bytes)
 
@@ -1880,6 +1887,189 @@ class LoginPrivacyTests(unittest.TestCase):
         self.assertIn('cafedesk_owner_digest', sql)
         expected = hashlib.sha256(('CAFE-DESK-OWNER-V1|' + self.EMAIL).encode()).hexdigest()
         self.assertEqual(expected, self.DIGEST)
+
+
+if __name__=='__main__': unittest.main()
+
+
+class TimerAndPrivacyHardeningTests(unittest.TestCase):
+    """Regression tests for the 2026-11-17 audit fixes.
+
+    The timer tests exercise the REAL `CafeDesk.poll_events` / `check_idle` /
+    `recovery_tick` bodies against a stub object, so they keep guarding the
+    behaviour even without a display (tkinter is not importable in CI sandbox).
+    """
+
+    def _methods(self):
+        """Return the unbound methods from app.py without importing tkinter/the GUI."""
+        import ast, textwrap
+        src = (Path(__file__).resolve().parent / 'app.py').read_text(encoding='utf-8')
+        tree = ast.parse(src)
+        wanted = {'poll_events', 'check_idle', 'recovery_tick', 'report_callback_exception',
+                  '_log_exception', '_quiet_job_error', 'job', '_note_screen_visit',
+                  '_flush_telemetry_async'}
+        module_src = src
+        ns = {'queue': __import__('queue'), 'threading': __import__('threading'),
+              'uuid': __import__('uuid'), 'time': __import__('time'),
+              'traceback': __import__('traceback'), 'datetime': __import__('datetime').datetime,
+              'messagebox': __import__('types').SimpleNamespace(showerror=lambda *a, **k: None,
+                                                                 showinfo=lambda *a, **k: None),
+              '_QUIET_JOB_ERROR_TAGS': ('Auto-recovery', 'recovery copy', 'Temporary files')}
+        out = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in wanted:
+                code = ast.get_source_segment(module_src, node)
+                exec(textwrap.dedent(code), ns)
+                out[node.name] = ns[node.name]
+        return out
+
+    @staticmethod
+    def _names(callbacks):
+        """Timer names of captured `after()` callbacks (they are `functools.partial`s)."""
+        import functools
+        out = []
+        for f in callbacks:
+            target = f.func if isinstance(f, functools.partial) else f
+            out.append(getattr(target, '__name__', ''))
+        return out
+
+    def _stub(self, m):
+        import queue, threading, types, functools
+        class Stub:
+            pass
+        s = Stub()
+        s.events = queue.Queue(); s.busy = False; s._active_job_id = None
+        s.pending = []; s.statuses = []
+        s._telemetry_lock = threading.Lock(); s._telemetry_counts = {}
+        s._telemetry_inflight = False; s._telemetry_enabled = False
+        s._last_telemetry_flush = 0.0; s.current = 'Home'
+        s.after = lambda ms, fn=None: s.pending.append(fn)
+        s.status = types.SimpleNamespace(set=lambda v: s.statuses.append(v),
+                                        get=lambda: '')
+        s.key = types.SimpleNamespace(set=lambda v: None)
+        s.staff_unlocked = True
+        s.idle = types.SimpleNamespace(expired=lambda: True)
+        s.lock_staff = lambda: None
+        s.update_lock_button = lambda: None
+        s.perform_recovery = lambda: None
+        s._log_exception = lambda where: s.statuses.append(f'logged:{where}')
+        # Bind the extracted bodies as attributes: they call `self.<timer>(...)` to re-arm.
+        # `_log_exception` keeps the stub so expected failures stay out of the test log.
+        for name, fn in m.items():
+            if name == '_log_exception':
+                continue
+            setattr(s, name, functools.partial(fn, s))
+        return s
+
+    # ---- #1/#2: timers must ALWAYS re-arm ---------------------------------
+    def test_event_pump_rearms_even_when_callback_raises(self):
+        m = self._methods(); s = self._stub(m)
+        s.events.put(('ok', lambda r: (_ for _ in ()).throw(RuntimeError('widget destroyed')), 1, 'job1'))
+        s._active_job_id = 'job1'
+        m['poll_events'](s)
+        self.assertEqual(self._names(s.pending), ['poll_events'],
+                         'poll_events must reschedule itself even if a callback raises')
+        self.assertFalse(s.busy, 'a failing callback must not leave the desk busy forever')
+
+    def test_event_pump_still_delivers_later_results(self):
+        m = self._methods(); s = self._stub(m)
+        seen = []
+        s.events.put(('ok', lambda r: (_ for _ in ()).throw(RuntimeError('boom')), 1, None))
+        s.events.put(('ok', lambda r: seen.append(r), 2, None))
+        m['poll_events'](s)
+        self.assertEqual(seen, [2], 'one bad result must not swallow later results')
+
+    def test_event_pump_ignores_abandoned_watchdog_job(self):
+        m = self._methods(); s = self._stub(m)
+        ran = []
+        s._active_job_id = 'new-job'
+        s.events.put(('ok', lambda r: ran.append('stale'), 1, 'old-job'))
+        m['poll_events'](s)
+        self.assertEqual(ran, [], 'a result from an abandoned job must be dropped')
+        self.assertTrue(s.busy is False)
+
+    def test_out_of_band_event_does_not_cancel_a_running_job(self):
+        """Remote entitlement sync pushes job_id=None; it must not complete the active job."""
+        m = self._methods(); s = self._stub(m)
+        seen = []
+        s._active_job_id = 'real-job'
+        s.busy = True
+        s.events.put(('ok', lambda r: seen.append('oob'), 'sync-result', None))   # entitlement sync
+        s.events.put(('ok', lambda r: seen.append('job'), 'job-result', 'real-job'))  # the real job
+        m['poll_events'](s)
+        self.assertEqual(seen, ['oob', 'job'])
+        self.assertFalse(s.busy)
+
+    def test_check_idle_rearms_and_fails_closed(self):
+        m = self._methods(); s = self._stub(m)
+        s.lock_staff = lambda: (_ for _ in ()).throw(RuntimeError('settings unwritable'))
+        m['check_idle'](s)
+        self.assertEqual(self._names(s.pending), ['check_idle'], 'idle timer must keep running')
+        self.assertFalse(s.staff_unlocked, 'a failing idle lock must still drop staff access')
+
+    def test_recovery_tick_rearms_on_failure(self):
+        m = self._methods(); s = self._stub(m)
+        s.perform_recovery = lambda: (_ for _ in ()).throw(OSError('No space left on device'))
+        m['recovery_tick'](s)
+        self.assertEqual(self._names(s.pending), ['recovery_tick'])
+
+    def test_job_watchdog_frees_a_wedged_worker(self):
+        m = self._methods(); s = self._stub(m)
+        s.after = lambda ms, fn=None: (s.pending.append(fn), ms)[1]   # capture, don't run
+        import threading
+        gate = threading.Event()
+        m['job'](s, 'Stuck scanner', lambda: gate.wait(5), lambda r: None, timeout=45)
+        self.assertTrue(s.busy, 'job should start busy')
+        # Simulate the watchdog firing while the worker is still blocked.
+        watchdog = [f for f in s.pending if f is not None][-1]
+        watchdog()
+        self.assertFalse(s.busy, 'watchdog must release the desk after a hang')
+        self.assertIn('abandoned', ' '.join(s.statuses))
+        gate.set()
+
+    # ---- #3: telemetry is opt-in -----------------------------------------
+    def test_telemetry_records_nothing_until_opted_in(self):
+        m = self._methods(); s = self._stub(m)
+        s._telemetry_enabled = False
+        m['_note_screen_visit'](s, 'PDF tools')
+        self.assertEqual(s._telemetry_counts, {}, 'no counters may be collected before opt-in')
+        m['_flush_telemetry_async'](s, force=True)
+        self.assertEqual(s._telemetry_counts, {})
+
+    def test_telemetry_preference_defaults_to_off(self):
+        import settings_store
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'settings.json'
+            self.assertFalse(settings_store.telemetry_enabled(p))
+            settings_store.save_telemetry_preference(True, path=p)
+            self.assertTrue(settings_store.telemetry_enabled(p))
+            settings_store.save_telemetry_preference(False, path=p)
+            self.assertFalse(settings_store.telemetry_enabled(p))
+        finally:
+            tmp.cleanup()
+
+    def test_corrupt_settings_means_telemetry_off(self):
+        import settings_store
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'settings.json'
+            p.write_text('{not json', encoding='utf-8')
+            self.assertFalse(settings_store.telemetry_enabled(p), 'damaged settings must fail closed')
+        finally:
+            tmp.cleanup()
+
+    # ---- #5: env public-key override ignored in frozen builds -------------
+    def test_public_key_env_override_is_ignored_in_frozen_build(self):
+        import os, sys as _sys
+        from unittest import mock
+        import license_guard
+        with mock.patch.dict(os.environ, {'CAFE_DESK_PUBLIC_KEY': 'attacker-key'}, clear=False):
+            with mock.patch.object(_sys, 'frozen', True, create=True):
+                self.assertEqual(license_guard.configured_public_key_b64(),
+                                 license_guard.DEFAULT_OWNER_PUBLIC_KEY_B64)
+            # ...but still honoured for the test suite / owner pipeline.
+            self.assertEqual(license_guard.configured_public_key_b64(), 'attacker-key')
 
 
 if __name__=='__main__': unittest.main()
