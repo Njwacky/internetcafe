@@ -429,7 +429,7 @@
     <div class="side-spacer"></div>
 
     <div class="side-card" id="installSideCard" hidden>
-      <div class="t">📲 Install this console</div>
+      <div class="t">Install this console</div>
       <div class="s">Add it to your home screen</div>
       <button class="btn btn-primary btn-sm" style="width:100%" onclick="promptInstall()">Install app</button>
     </div>
@@ -767,8 +767,8 @@
           <textarea id="relNotes" style="min-height:64px;font-family:inherit" placeholder="Faster PDF preview, new templates, bug fixes…"></textarea>
 
           <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:15px">
-            <button class="btn btn-primary" id="pubRelBtn" onclick="publishReleaseNow()">🚀 Upload &amp; publish</button>
-            <button class="btn btn-ghost" onclick="syncGithubRelease()">🔄 Sync latest GitHub build</button>
+            <button class="btn btn-primary" id="pubRelBtn" onclick="publishReleaseNow()">Upload &amp; publish</button>
+            <button class="btn btn-ghost" onclick="syncGithubRelease()">Sync latest GitHub build</button>
           </div>
         </div>
 
@@ -783,7 +783,7 @@
           <label>Message</label>
           <textarea id="announcementMessage" maxlength="1200" style="min-height:82px;font-family:inherit" placeholder="Tell customers what to expect or share promotion details…"></textarea>
           <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:12px">
-            <button class="btn btn-primary" id="sendAnnouncementBtn" onclick="publishAnnouncement()">📣 Send notification</button>
+            <button class="btn btn-primary" id="sendAnnouncementBtn" onclick="publishAnnouncement()">Send notification</button>
           </div>
           <div class="table-wrap mt16">
             <table><thead><tr><th>Type</th><th>Title &amp; message</th><th>Published</th><th>Status</th><th>Action</th></tr></thead><tbody id="announcementsTbody"></tbody></table>
@@ -855,15 +855,14 @@
     <div class="modal-body">
       <div id="dlHubBody"></div>
       <div class="note mt16">
-        <span>🛡️</span>
         <div>Customer downloads are hosted on your public page — every build is compiled by GitHub Actions and published with a SHA-256 checksum.</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
         <a class="btn btn-primary btn-sm" href="/" target="_blank" rel="noopener">Open public download page ↗</a>
         <button class="btn btn-ghost btn-sm" onclick="copyPublicLink()">⧉ Copy page link</button>
-        <a class="btn btn-wa btn-sm" id="dlWhatsapp" target="_blank" rel="noopener" href="#">💬 WhatsApp it</a>
+        <a class="btn btn-wa btn-sm" id="dlWhatsapp" target="_blank" rel="noopener" href="#">WhatsApp it</a>
         <a class="btn btn-ghost btn-sm" id="dlReleasePage" target="_blank" rel="noopener" href="#">All releases ↗</a>
-        <button class="btn btn-ghost btn-sm" onclick="syncGithubRelease()">🔄 Sync to auto-update</button>
+        <button class="btn btn-ghost btn-sm" onclick="syncGithubRelease()">Sync to auto-update</button>
       </div>
     </div>
   </div>
@@ -1643,7 +1642,7 @@ function renderReqsTable() {
     <tr>
       <td class="mono" style="font-size:11.4px">${esc(String(r.created_at || "").slice(0, 16).replace("T", " "))}</td>
       <td class="mid">${esc(r.machine_id)}</td>
-      <td><div style="font-weight:650">${esc(r.shop_name || "Walk-in shop")}</div><div class="cell-sub">${esc(r.shop_id || "No shop ID")} ${r.station_name ? "· " + esc(r.station_name) : ""}</div></td>
+      <td><div style="font-weight:650">${esc(r.shop_name || "Walk-in shop")}</div><div class="cell-sub">${esc(r.contact_name || "No contact name")} ${r.station_name ? "· " + esc(r.station_name) : ""}</div></td>
       <td><span class="badge b-warn">${esc(r.requested_kind || "license")}</span></td>
       <td style="font-size:11.8px">${esc(r.contact_phone || "—")}</td>
       <td>
@@ -1798,10 +1797,39 @@ async function issueKeysNow(prefillReqId = null) {
   const label = btn.textContent;
   btn.textContent = "Signing in cloud vault…";
   try {
-    const res = await callOwnerAdmin({ action: "sign_keys", customer, mode, days, shop_id, machines, request_id: prefillReqId });
+    // Always query fresh, not the truncated dashboard cache. The database trigger
+    // is the final guard against races and other issuance clients.
+    const ids = [...new Set(machines.split(/[\n,;]+/).map(x => x.split(/[=|:]/)[0].trim().toUpperCase()).filter(Boolean))];
+    if (!ids.length || ids.some(id => !/^CD-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/.test(id)))
+      throw new Error("Enter valid Machine IDs in CD-XXXX-XXXX-XXXX format.");
+    let res;
+    if (mode !== "addon") {
+      const { data: existing, error } = await sb.from("issued_machine_keys").select("*")
+        .in("machine_id", ids).in("key_type", ["license", "combo"])
+        .gte("expires_at", new Date().toISOString().slice(0, 10));
+      if (error) throw error;
+      if (existing && existing.length) {
+        if (ids.length !== 1 || existing.length !== 1)
+          throw new Error("An unexpired key already exists or this ID has duplicates. Review the keys individually; duplicate IDs are paused on check-in.");
+        const key = existing[0];
+        if (key.revoked) throw new Error("This key is paused. Investigate and resume the existing key instead of issuing a new one.");
+        if ((key.customer || "").trim().toLowerCase() !== customer.toLowerCase()) {
+          // An owner-initiated approval for another customer is suspicious. Pause
+          // the existing key rather than silently sharing it with the new requester.
+          await callOwnerAdmin({ action: "set_revoked", license_id: key.license_id, revoked: true });
+          await refreshAll();
+          throw new Error("This Machine ID belongs to a different customer. The existing key was paused; contact both customers and investigate before resuming it.");
+        }
+        if (mode === "combo" && key.key_type !== "combo")
+          throw new Error("This PC already has a base key. Issue the add-on separately instead.");
+        if (prefillReqId) await callOwnerAdmin({ action: "update_request_status", request_id: prefillReqId, status: "approved" });
+        res = { issued: [key], reused: true };
+      }
+    }
+    if (!res) res = await callOwnerAdmin({ action: "sign_keys", customer, mode, days, shop_id, machines, request_id: prefillReqId });
     const box = $("#issuedResultBox");
     box.classList.remove("hidden");
-    box.innerHTML = `<div class="ok">✓ Signed &amp; live in Supabase — ${res.issued.length} computer key(s). The customer can tap “Check Online Approval” right now.</div>` +
+    box.innerHTML = `<div class="ok">${res.reused ? "Reused the existing unexpired key" : "Signed &amp; live in Supabase"} — ${res.issued.length} computer key(s). The customer can tap “Check Online Approval” right now.</div>` +
       res.issued.map((item) => {
         const seatTxt = item.seat_no ? ` · seat ${item.seat_no}/${item.seat_max} ${esc(item.seat_label || "")}` : "";
         const waMsg = encodeURIComponent(
@@ -1813,13 +1841,13 @@ async function issueKeysNow(prefillReqId = null) {
             <span><strong class="mono" style="color:var(--lime)">${esc(item.machine_id)}</strong>${esc(seatTxt)} <span class="badge b-blue">${esc(item.key_type)}</span></span>
             <span style="display:flex;gap:6px">
               <button class="btn btn-ghost btn-sm" data-copy="${attr(item.token)}">⧉ Copy</button>
-              <a class="btn btn-wa btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text=${waMsg}">💬 WhatsApp</a>
+              <a class="btn btn-wa btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text=${waMsg}">WhatsApp</a>
             </span>
           </div>
           <input readonly value="${attr(item.token)}" class="mono" onclick="this.select()">
         </div>`;
       }).join("");
-    toast(`Issued ${res.issued.length} key(s) for ${customer}.`);
+    toast(`${res.reused ? "Reused" : "Issued"} ${res.issued.length} key(s) for ${customer}.`);
     await refreshAll();
   } catch (err) {
     toast(err.message, "err");
@@ -1879,7 +1907,7 @@ async function publishReleaseNow() {
     toast(err.message, "err");
   } finally {
     btn.disabled = false;
-    btn.textContent = "🚀 Upload & publish";
+    btn.textContent = "Upload & publish";
   }
 }
 
@@ -2027,7 +2055,7 @@ function renderDownloadHub() {
       </div>
     </div>
     ${gh
-      ? `<div class="note" style="margin-top:14px"><span>📦</span><div><b>v${esc(version)}</b> was compiled automatically from the latest main branch and is live on the public page.</div></div>`
+      ? `<div class="note" style="margin-top:14px"><div><b>v${esc(version)}</b> was compiled automatically from the latest main branch and is live on the public page.</div></div>`
       : `<div class="note warn" style="margin-top:14px"><span>⏳</span><div><b>First build in progress.</b> GitHub Actions publishes the installer and portable ZIP a couple of minutes after a merge to <b>main</b>.</div></div>`}
   `;
 

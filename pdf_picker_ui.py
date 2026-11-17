@@ -18,7 +18,7 @@ class PDFPagePicker:
         footer=ctk.CTkFrame(self.window,fg_color='transparent');footer.pack(side='bottom',fill='x',padx=20,pady=(8,15))
         self.summary=ctk.CTkLabel(footer,text='0 selected',text_color='#b9ff70');self.summary.pack(side='left')
         ctk.CTkButton(footer,text='Cancel',width=85,fg_color='#344663',command=self.window.destroy).pack(side='right')
-        ctk.CTkButton(footer,text='✓ Use pages',width=135,fg_color='#b9ff70',hover_color='#a9eb65',text_color='#142018',command=self.apply).pack(side='right',padx=(0,8))
+        ctk.CTkButton(footer,text='Use pages',width=135,fg_color='#b9ff70',hover_color='#a9eb65',text_color='#142018',command=self.apply).pack(side='right',padx=(0,8))
         ctk.CTkButton(footer,text='Clear',width=78,fg_color='#344663',command=self.clear).pack(side='right',padx=(0,8))
         ctk.CTkButton(footer,text='Invert',width=78,fg_color='#344663',command=self.invert_all).pack(side='right',padx=(0,8))
         ctk.CTkButton(footer,text='Select all',width=95,fg_color='#344663',command=self.select_all).pack(side='right',padx=(0,8))
@@ -53,7 +53,7 @@ class PDFPagePicker:
     def refresh(self):
         self.summary.configure(text=f'{len(self.selected)} selected')
         for n,b in self.cards:
-            chosen=n in self.selected;b.configure(text=f'{"✓ Selected" if chosen else "Select"}  •  Page {n}',fg_color='#b9ff70' if chosen else '#344663',hover_color='#a9eb65' if chosen else '#40506d',text_color='#142018' if chosen else 'white')
+            chosen=n in self.selected;b.configure(text=f'{"Selected" if chosen else "Select"}  •  Page {n}',fg_color='#b9ff70' if chosen else '#344663',hover_color='#a9eb65' if chosen else '#40506d',text_color='#142018' if chosen else 'white')
         self.prev.configure(state='normal' if self.start>0 else 'disabled');self.next.configure(state='normal' if self.start+pdf_preview.BATCH_SIZE<self.total else 'disabled')
     def clear(self):self.selected.clear();self.refresh()
     def select_all(self):

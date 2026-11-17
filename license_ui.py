@@ -43,6 +43,37 @@ def _btn(parent, text, cmd, secondary=False, **kw):
     return ctk.CTkButton(parent, **opts)
 
 
+def open_license_request(parent, machine_id=None):
+    """Ask for the business owner's contact details before submitting a request."""
+    dlg = ctk.CTkToplevel(parent)
+    dlg.title('Request a Café Desk license')
+    dlg.geometry('480x440')
+    dlg.transient(parent)
+    dlg.grab_set()
+    mid = machine_id or license_guard.get_machine_id()
+    _lbl(dlg, 'Request a license online', size=20, bold=True).pack(anchor='w', padx=24, pady=(22, 8))
+    _lbl(dlg, f'Machine ID: {mid}\nYour details will be sent to the Café Desk owner.',
+         size=12, color=MUTED, justify='left').pack(anchor='w', padx=24, pady=(0, 12))
+    fields = {}
+    for key, caption in (('name', 'Your name'), ('company', 'Company / shop name'), ('phone', 'Phone number')):
+        _lbl(dlg, caption, size=12, bold=True).pack(anchor='w', padx=24, pady=(6, 2))
+        fields[key] = ctk.CTkEntry(dlg, height=36)
+        fields[key].pack(fill='x', padx=24)
+    def submit():
+        send.configure(state='disabled')
+        try:
+            cloud_sync.request_license_with_contact(settings_store.load_settings(), machine_id=mid,
+                name=fields['name'].get(), company=fields['company'].get(), phone=fields['phone'].get())
+        except Exception as exc:
+            messagebox.showerror('Request not sent', str(exc), parent=dlg)
+            send.configure(state='normal')
+            return
+        messagebox.showinfo('Request sent', 'Your request was sent to the owner. Once approved, use Check online approval.', parent=dlg)
+        dlg.destroy()
+    send = _btn(dlg, 'Send request', submit)
+    send.pack(anchor='w', padx=24, pady=18)
+
+
 class ActivationWindow(ctk.CTk):
     """Standalone gate window shown before CafeDesk launches if this PC is unlicensed or expired."""
 
@@ -131,6 +162,8 @@ class ActivationWindow(ctk.CTk):
         _btn(mid_row, 'WhatsApp the owner', whatsapp_mid, fg_color='#25D366', hover_color='#1EBE5D',
              text_color='#0B1F13', width=180).pack(side='left')
 
+        _btn(mid_row, 'Request online', lambda: open_license_request(self, self.machine_id), secondary=True, width=145).pack(side='left', padx=(8, 0))
+
         # ---- Step 2: paste the key ------------------------------------------------
         step2 = ctk.CTkFrame(outer, fg_color='#131B2A', corner_radius=14, border_width=1, border_color=BORDER)
         step2.pack(fill='x', padx=28, pady=(0, 16))
@@ -202,6 +235,10 @@ class ActivationWindow(ctk.CTk):
                     parent=self,
                 )
                 self.destroy()
+            elif res.get('revoked'):
+                messagebox.showwarning('License paused',
+                    'This license has been paused. Contact the Café Desk owner to request approval again.\n\n' +
+                    '\n'.join(res.get('revocation_reasons') or []), parent=self)
             else:
                 messagebox.showinfo(
                     'Nothing approved yet',
@@ -329,7 +366,7 @@ def open_renewal_modal(parent, on_updated=None):
         except OSError as exc:
             messagebox.showerror('Could not read file', str(exc), parent=dlg)
 
-    _btn(row, '✓ Save & Activate', apply_key, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=170).pack(
+    _btn(row, 'Save & Activate', apply_key, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=170).pack(
         side='left', padx=(0, 8)
     )
     _btn(row, 'Load .cafelicense…', browse_file, secondary=True, width=165).pack(side='left', padx=(0, 8))
@@ -404,9 +441,9 @@ def open_addon_modal(
         except ValueError as exc:
             messagebox.showerror('Could not open WhatsApp', str(exc), parent=dlg)
 
-    _btn(mid_row, '⧉ Copy ID', copy_mid, secondary=True, width=110, height=36).pack(side='left', padx=(0, 8))
+    _btn(mid_row, 'Copy ID', copy_mid, secondary=True, width=110, height=36).pack(side='left', padx=(0, 8))
     _btn(
-        mid_row, '💬 Request Approval (WhatsApp)', request_whatsapp,
+        mid_row, 'Request Approval (WhatsApp)', request_whatsapp,
         fg_color='#25D366', hover_color='#1EBE5D', text_color='#0B1F13', width=225, height=36,
     ).pack(side='left')
     _lbl(
@@ -495,9 +532,9 @@ def open_addon_modal(
                 parent=dlg,
             )
 
-    _btn(row, '✓ Activate Add-on', apply_addon, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=170).pack(
+    _btn(row, 'Activate Add-on', apply_addon, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=170).pack(
         side='left', padx=(0, 8)
     )
-    _btn(row, '☁ Check Online Approval', check_addon_online, secondary=True, width=185).pack(side='left', padx=(0, 8))
+    _btn(row, 'Check Online Approval', check_addon_online, secondary=True, width=185).pack(side='left', padx=(0, 8))
     _btn(row, 'Load file…', browse_addon, secondary=True, width=115).pack(side='left', padx=(0, 8))
     _btn(row, 'Cancel', dlg.destroy, secondary=True, width=85).pack(side='right')

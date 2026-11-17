@@ -270,7 +270,7 @@ def show_cards(app, parent, card, label, button, entry):
             fg_color='#1B2333',
             selected_color='#445A86',
         ).pack(side='right')
-        button(win, '✕ Close', win.destroy, secondary=True, width=110, height=32).pack(pady=(4, 14))
+        button(win, 'Close', win.destroy, secondary=True, width=110, height=32).pack(pady=(4, 14))
         win.grab_set()
         win.focus_set()
 
@@ -358,7 +358,7 @@ def show_cards(app, parent, card, label, button, entry):
         refresh_preview()
 
     button(photo_row, '＋ Choose logo', choose_logo, secondary=True, width=135, height=32).pack(side='left', padx=(0, 8))
-    button(photo_row, '✕ Remove', remove_logo, secondary=True, width=100, height=32).pack(side='left')
+    button(photo_row, 'Remove', remove_logo, secondary=True, width=100, height=32).pack(side='left')
 
     def save_pdf():
         if app.busy:
@@ -402,7 +402,7 @@ def show_cards(app, parent, card, label, button, entry):
             done,
         )
 
-    button(export_btns, '⬇ Save PDF', save_pdf, width=130).pack(side='left', padx=(0, 8))
+    button(export_btns, 'Save PDF', save_pdf, width=130).pack(side='left', padx=(0, 8))
     button(export_btns, '＋ Add to PDF merge', add_to_merge, secondary=True, width=165).pack(side='left')
 
     type_menu.configure(command=on_kind_change)

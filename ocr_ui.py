@@ -333,7 +333,7 @@ def show_ocr(app, parent, card, label, button):
         refresh_list()
 
     button(pick_row, '＋ Add images', add_images, width=140, height=34).pack(side='left', padx=(0, 8))
-    button(pick_row, '✕ Remove', remove_selected, secondary=True, width=105, height=34).pack(side='left', padx=(0, 8))
+    button(pick_row, 'Remove', remove_selected, secondary=True, width=105, height=34).pack(side='left', padx=(0, 8))
     button(pick_row, '⌫ Clear all', clear_images, secondary=True, width=110, height=34).pack(side='left')
 
     # Editor + OCR execution actions
@@ -403,9 +403,9 @@ def show_ocr(app, parent, card, label, button):
         if path:
             app.job('Saving text…', lambda: services.export_text(text, path), lambda _: messagebox.showinfo('Saved', f'Text saved to:\n{path}', parent=app))
 
-    button(action_row, '🔍 Recognise image', recognize_selected, width=165).pack(side='left', padx=(0, 8))
-    button(action_row, '🔍 Recognise all', recognize_all, secondary=True, width=145).pack(side='left', padx=(0, 8))
-    button(action_row, '⬇ Save text', save, secondary=True, width=115).pack(side='left', padx=(0, 8))
+    button(action_row, 'Recognise image', recognize_selected, width=165).pack(side='left', padx=(0, 8))
+    button(action_row, 'Recognise all', recognize_all, secondary=True, width=145).pack(side='left', padx=(0, 8))
+    button(action_row, 'Save text', save, secondary=True, width=115).pack(side='left', padx=(0, 8))
     button(action_row, '↗ Get Tesseract OCR', lambda: app.show('Help & privacy'), secondary=True, width=165).pack(side='left')
 
     refresh_list()

@@ -32,7 +32,7 @@ class PictureSheet:
         self.brightness=ctk.CTkEntry(top_row,width=56,height=32)
         self.brightness.insert(0,str(state['brightness']))
         self.brightness.pack(side='left',padx=(0,5))
-        button(top_row,'✓ Apply',self.change_adjust,secondary=True,width=70,height=32).pack(side='left')
+        button(top_row,'Apply',self.change_adjust,secondary=True,width=70,height=32).pack(side='left')
 
         sizes=ctk.CTkFrame(bar,fg_color='transparent');sizes.pack(fill='x',padx=18,pady=(0,13))
         label(sizes,'Uniform grid size for ALL photos (mm):',size=11,color='#A2ACC5').pack(side='left',padx=(0,6))
@@ -82,10 +82,10 @@ class PictureSheet:
         button(btn_grid,'＋ Add pictures',self.add,height=36).grid(row=0,column=0,sticky='ew',padx=(0,4),pady=(0,7))
         self.undo_btn=button(btn_grid,'↶ Undo',self.undo,secondary=True,height=36)
         self.undo_btn.grid(row=0,column=1,sticky='ew',padx=(4,0),pady=(0,7))
-        button(btn_grid,'✂ Crop selected',self.crop_selected,secondary=True,height=34).grid(row=1,column=0,sticky='ew',padx=(0,4),pady=(0,7))
+        button(btn_grid,'Crop selected',self.crop_selected,secondary=True,height=34).grid(row=1,column=0,sticky='ew',padx=(0,4),pady=(0,7))
         button(btn_grid,'↻ Rotate 90°',self.rotate,secondary=True,height=34).grid(row=1,column=1,sticky='ew',padx=(4,0),pady=(0,7))
-        button(btn_grid,'⧉ Duplicate',self.duplicate,secondary=True,height=34).grid(row=2,column=0,sticky='ew',padx=(0,4))
-        button(btn_grid,'✕ Delete',self.remove,secondary=True,height=34).grid(row=2,column=1,sticky='ew',padx=(4,0))
+        button(btn_grid,'Duplicate',self.duplicate,secondary=True,height=34).grid(row=2,column=0,sticky='ew',padx=(0,4))
+        button(btn_grid,'Delete',self.remove,secondary=True,height=34).grid(row=2,column=1,sticky='ew',padx=(4,0))
         label(pic_box,'Tip: In Free layout, adding, duplicating or deleting keeps your other frames’ custom positions & sizes.',size=11,color='#A2ACC5',wraplength=320,justify='left').pack(anchor='w',padx=14,pady=(0,12))
 
         size_box=ctk.CTkFrame(right_col,fg_color='#232E44',corner_radius=12,border_width=1,border_color='#34415A')
@@ -103,11 +103,11 @@ class PictureSheet:
         save_box=ctk.CTkFrame(right_col,fg_color='#232E44',corner_radius=12,border_width=1,border_color='#34415A')
         save_box.pack(fill='x')
         label(save_box,'Export & project',size=14,bold=True).pack(anchor='w',padx=14,pady=(12,8))
-        button(save_box,'⬇ Save A4 PDF',self.save,fg_color='#B9FF70',hover_color='#A9EB65',text_color='#142018',height=38).pack(fill='x',padx=14,pady=(0,8))
+        button(save_box,'Save A4 PDF',self.save,fg_color='#B9FF70',hover_color='#A9EB65',text_color='#142018',height=38).pack(fill='x',padx=14,pady=(0,8))
         proj_row=ctk.CTkFrame(save_box,fg_color='transparent');proj_row.pack(fill='x',padx=14,pady=(0,12))
         proj_row.grid_columnconfigure((0,1),weight=1)
-        button(proj_row,'💾 Save project',lambda:app.save_project('sheet'),secondary=True,height=34).grid(row=0,column=0,sticky='ew',padx=(0,4))
-        button(proj_row,'📂 Open project',app.open_project,secondary=True,height=34).grid(row=0,column=1,sticky='ew',padx=(4,0))
+        button(proj_row,'Save project',lambda:app.save_project('sheet'),secondary=True,height=34).grid(row=0,column=0,sticky='ew',padx=(0,4))
+        button(proj_row,'Open project',app.open_project,secondary=True,height=34).grid(row=0,column=1,sticky='ew',padx=(4,0))
 
         self.draw()
 
