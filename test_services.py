@@ -1762,6 +1762,62 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn('$("#appView").classList.add("hidden")', dash)
 
 
+class ButtonLayoutTests(unittest.TestCase):
+    """The desktop app uses one button scale + grouped rows instead of ad-hoc widths."""
+
+    repo = Path(__file__).resolve().parent
+
+    def test_button_scale_exists_and_has_three_tiers(self):
+        import ast
+        tree = ast.parse((self.repo / 'app.py').read_text(encoding='utf-8'))
+        heights = None
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, 'id', None) == 'BTN_HEIGHT' for t in node.targets):
+                heights = ast.literal_eval(node.value)
+        self.assertIsNotNone(heights, 'BTN_HEIGHT scale missing from app.py')
+        self.assertEqual(set(heights), {'primary', 'secondary', 'ghost'})
+        # Primary and secondary share a height so rows line up; ghost is the small tier.
+        self.assertEqual(heights['primary'], heights['secondary'])
+        self.assertLess(heights['ghost'], heights['primary'])
+
+    def test_button_helper_supports_ghost_tier(self):
+        src = (self.repo / 'app.py').read_text(encoding='utf-8')
+        self.assertIn('def button(parent,text,cmd,secondary=False,ghost=False', src)
+        self.assertIn("BTN_HEIGHT['ghost']", src)
+        self.assertIn('def action_row(', src)
+        self.assertIn('def button_row(', src)
+
+    def test_crowded_screens_use_grouped_rows(self):
+        src = (self.repo / 'app.py').read_text(encoding='utf-8')
+        # These screens previously hand-picked a width for every button in a tight row.
+        for fragment in (
+            "primary=(('Save business settings',save),)",
+            "primary=(('Save Multi-PC & Cloud Settings',save_mp),)",
+            "primary=(('Save career project',lambda:self.save_project('career')),)",
+            "primary=(('Save price list',save),)",
+        ):
+            self.assertIn(fragment, src, f'missing grouped row: {fragment[:50]}')
+
+    def test_receipt_actions_are_ordered_by_importance(self):
+        src = (self.repo / 'app.py').read_text(encoding='utf-8')
+        # Record sale is the primary action; undo/new are quiet utilities.
+        self.assertIn("button(buttons,'Record sale',record).pack(side='left'", src)
+        self.assertIn("button(buttons,'Undo last item',remove_line,ghost=True).pack(side='left'", src)
+        self.assertIn("button(buttons,'New receipt',new_receipt,ghost=True).pack(side='left')", src)
+
+    def test_copy_utilities_are_ghost_not_equal_weight(self):
+        src = (self.repo / 'app.py').read_text(encoding='utf-8')
+        for fragment in (
+            "'⧉ Copy',lambda:copy_val(mid_val,'Machine ID'),ghost=True",
+            "'⧉ Copy email',lambda:copy_val(services.DEVELOPER_EMAIL,'Email address'),ghost=True",
+            "'⧉ Copy link',lambda:copy_val(services.DEVELOPER_GITHUB_URL,'GitHub profile URL'),ghost=True",
+            "'⧉ Copy link',lambda:copy_val(services.DEVELOPER_REPO_URL,'Repository URL'),ghost=True",
+            "'⧉ Copy number',lambda:copy_val('0722279505','WhatsApp number'),ghost=True",
+        ):
+            self.assertIn(fragment, src, f'copy action should be a ghost button: {fragment[:50]}')
+
+
 class LoginPrivacyTests(unittest.TestCase):
     """The owner's email must never be published on the site, in the login form, or in the SQL schema."""
 

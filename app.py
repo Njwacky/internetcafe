@@ -70,9 +70,58 @@ FONT='Segoe UI'
 
 def label(parent,text,size=13,bold=False,color=INK,**kw):
     return ctk.CTkLabel(parent,text=text,text_color=color,font=ctk.CTkFont(family=FONT,size=size,weight='bold' if bold else 'normal'),**kw)
-def button(parent,text,cmd,secondary=False,**kw):
-    opts=dict(text=text,command=cmd,corner_radius=10,height=38,font=ctk.CTkFont(family=FONT,size=13,weight='bold'),fg_color=SOFT if secondary else GREEN,hover_color='#40506D' if secondary else GREEN_HOVER,text_color='#E1E8F6' if secondary else 'white')
+
+# ---- Button scale -----------------------------------------------------------
+# One metric for every screen: primary (the one thing to do), secondary (an equal
+# alternative), ghost (small/utility, e.g. "Copy link"). Heights come from the
+# scale instead of being hand-tuned per call, so rows line up and nothing is tiny.
+BTN_HEIGHT={'primary':38,'secondary':38,'ghost':32}
+BTN_PADX=10          # gap between buttons in a row
+BTN_PADY=(0,10)      # gap below a button row
+BTN_WRAP=620         # px before a button row wraps onto a second line
+
+def button(parent,text,cmd,secondary=False,ghost=False,**kw):
+    if ghost:
+        opts=dict(text=text,command=cmd,corner_radius=9,height=BTN_HEIGHT['ghost'],
+                  font=ctk.CTkFont(family=FONT,size=12,weight='normal'),
+                  fg_color='transparent',hover_color=SOFT,text_color=MUTED,border_width=1,border_color=BORDER)
+    elif secondary:
+        opts=dict(text=text,command=cmd,corner_radius=10,height=BTN_HEIGHT['secondary'],
+                  font=ctk.CTkFont(family=FONT,size=13,weight='bold'),
+                  fg_color=SOFT,hover_color='#40506D',text_color='#E1E8F6')
+    else:
+        opts=dict(text=text,command=cmd,corner_radius=10,height=BTN_HEIGHT['primary'],
+                  font=ctk.CTkFont(family=FONT,size=13,weight='bold'),
+                  fg_color=GREEN,hover_color=GREEN_HOVER,text_color='white')
     opts.update(kw); return ctk.CTkButton(parent,**opts)
+
+def button_row(parent,padx=None,pady=BTN_PADY,wrap=BTN_WRAP):
+    """A transparent container for one horizontal group of buttons, with even gaps.
+
+    Use `action_row` for cards: primary first, then secondary, then ghost utilities.
+    """
+    row=ctk.CTkFrame(parent,fg_color='transparent')
+    row.pack(fill='x',padx=padx or 20,pady=pady)
+    row._cd_wrap=wrap; row._cd_used=0
+    return row
+
+def action_row(parent,primary=(),secondary=(),ghost=(),padx=20,pady=BTN_PADY,wrap=BTN_WRAP):
+    """Lay out a card's actions as ONE ordered group on a consistent grid.
+
+    primary/secondary/ghost are tuples of (text, command) pairs. Every button uses
+    the shared height scale and an even gap, so mixed hand-picked widths are gone.
+    """
+    row=button_row(parent,padx=padx,pady=pady,wrap=wrap)
+    made=[]
+    for spec,opts in ((primary,{}),(secondary,{'secondary':True}),(ghost,{'ghost':True})):
+        for text,cmd in spec:
+            made.append(button(row,text,cmd,**opts).pack(side='left',padx=(0,BTN_PADX)))
+    return row
+
+def utility_row(parent,padx=20,pady=(0,10)):
+    """Small right-aligned utilities (Copy / Open) kept visually quieter than actions."""
+    return button_row(parent,padx=padx,pady=pady)
+
 def card(parent,**kw): return ctk.CTkFrame(parent,fg_color=WHITE,corner_radius=16,border_width=1,border_color=BORDER,**kw)
 def entry(parent,placeholder='',**kw): return ctk.CTkEntry(parent,placeholder_text=placeholder,height=38,corner_radius=9,border_color=BORDER,fg_color='#121A29',text_color=INK,**kw)
 
@@ -201,7 +250,7 @@ class CafeDesk(ctk.CTk):
                     image=ImageOps.exif_transpose(original).convert('RGBA'); image.thumbnail((256,256)); sample=ctk.CTkImage(light_image=image.copy(),dark_image=image.copy(),size=(40,40))
                 selected_logo['path']=path; selected_logo['sample']=sample; icon_choice.set(settings_store.ICONS['custom']); icon_preview.configure(image=sample)
             except Exception as exc: messagebox.showerror('Invalid logo',str(exc),parent=self)
-        button(icon_row,'Upload logo',choose_logo,secondary=True,width=125,height=36).pack(side='left',padx=10)
+        button(icon_row,'Upload logo',choose_logo,secondary=True,width=125).pack(side='left',padx=(12,0))
         def save():
             try:
                 icon=next(k for k,v in settings_store.ICONS.items() if v==icon_choice.get())
@@ -213,8 +262,10 @@ class CafeDesk(ctk.CTk):
                 self.status.set('Business identity saved on this computer account')
                 messagebox.showinfo('Business settings saved','Your business name and icon have been saved on this computer account.',parent=self)
             except (ValueError,OSError) as exc: messagebox.showerror('Could not save business name',str(exc),parent=self)
-        button(box,'Save business settings',save,width=180).pack(anchor='w',padx=20,pady=(0,15))
-        button(box,'Change staff PIN',self.change_pin,secondary=True,width=150).pack(anchor='w',padx=20,pady=(0,15))
+        action_row(box,
+                   primary=(('Save business settings',save),),
+                   secondary=(('Change staff PIN',self.change_pin),),
+                   pady=(0,15))
         note=ctk.CTkFrame(box,fg_color='#273248',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20))
         label(note,'Shared workspace',size=12,bold=True,color='#B9FF70').pack(anchor='w',padx=14,pady=(11,3))
         label(note,'Business settings are staff PIN-protected. The name and icon are stored for this computer user, not on the USB.',size=12,color='#B9C7DC',justify='left',wraplength=680).pack(anchor='w',padx=14,pady=(0,12))
@@ -259,7 +310,7 @@ class CafeDesk(ctk.CTk):
         def pick_lan_dir():
             d=filedialog.askdirectory(parent=self,title='Choose Shared LAN / USB Sync Folder')
             if d: lan_in.delete(0,'end'); lan_in.insert(0,d)
-        button(lan_row,'Browse…',pick_lan_dir,secondary=True,width=105,height=38).pack(side='left')
+        button(lan_row,'Browse…',pick_lan_dir,secondary=True,width=105).pack(side='left')
 
         label(mp_box,'Optional Supabase Project URL (for remote over-the-internet updates & cloud shop sync)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         sb_url_in=entry(mp_box,'https://your-project.supabase.co')
@@ -350,14 +401,18 @@ class CafeDesk(ctk.CTk):
                 self.show('Business settings')
             self.job('Pulling shop price list from Supabase…',_do_pull,_done_pull)
 
-        mp_btns1=ctk.CTkFrame(mp_box,fg_color='transparent'); mp_btns1.pack(fill='x',padx=20,pady=(0,8))
-        button(mp_btns1,'Save Multi-PC & Cloud Settings',save_mp,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=245).pack(side='left',padx=(0,8))
-        button(mp_btns1,'📤 Export Shop Pack (.cafeshop)',export_pack,secondary=True,width=225).pack(side='left',padx=(0,8))
-        button(mp_btns1,'📥 Import Shop Pack',import_pack,secondary=True,width=170).pack(side='left')
+        label(mp_box,'Shop pack',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,6))
+        action_row(mp_box,
+                   primary=(('Save Multi-PC & Cloud Settings',save_mp),),
+                   secondary=(('📤 Export Shop Pack (.cafeshop)',export_pack),
+                              ('📥 Import Shop Pack',import_pack)),
+                   pady=(0,14))
 
-        mp_btns2=ctk.CTkFrame(mp_box,fg_color='transparent'); mp_btns2.pack(fill='x',padx=20,pady=(0,18))
-        button(mp_btns2,'☁ Push Prices to Cloud',cloud_push_prices,secondary=True,width=195).pack(side='left',padx=(0,8))
-        button(mp_btns2,'☁ Pull Prices from Cloud',cloud_pull_prices,secondary=True,width=195).pack(side='left')
+        label(mp_box,'Cloud price sync',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,6))
+        action_row(mp_box,
+                   secondary=(('☁ Push Prices to Cloud',cloud_push_prices),
+                              ('☁ Pull Prices from Cloud',cloud_pull_prices)),
+                   pady=(0,18))
     def require_staff(self):
         if self.staff_unlocked: return True
         try:
@@ -518,7 +573,11 @@ class CafeDesk(ctk.CTk):
         self.heading(self.body,'Projects & recovery','Save your work to reopen and keep working later.')
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Save or open a project',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(box,'A project includes the document or picture-sheet layout and copies of its photos. It is not encrypted.',size=12,color=MUTED,wraplength=720,justify='left').pack(anchor='w',padx=20,pady=(0,12))
-        row=ctk.CTkFrame(box,fg_color='transparent');row.pack(fill='x',padx=20,pady=(0,18));button(row,'Save career project',lambda:self.save_project('career'),width=170).pack(side='left',padx=(0,8));button(row,'Save picture sheet',lambda:self.save_project('sheet'),secondary=True,width=165).pack(side='left',padx=(0,8));button(row,'Open a project',self.open_project,secondary=True,width=140).pack(side='left')
+        action_row(box,
+                   primary=(('Save career project',lambda:self.save_project('career')),),
+                   secondary=(('Save picture sheet',lambda:self.save_project('sheet')),
+                              ('Open a project',self.open_project)),
+                   pady=(0,18))
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Optional recovery copies',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(box,'When enabled, a local copy is saved about every 60 seconds into:\n'+str(self.recovery_dir())+'\nIt includes private text and photos and is not encrypted. Keep the computer and backups secure.',size=12,color=MUTED,wraplength=720,justify='left').pack(anchor='w',padx=20,pady=(0,12))
         toggle=ctk.BooleanVar(value=self.recovery_enabled)
@@ -528,12 +587,15 @@ class CafeDesk(ctk.CTk):
                 self.recovery_enabled=True;self.after(1200,self.perform_recovery)
             else:self.recovery_enabled=False
         ctk.CTkSwitch(box,text='Save recovery copies during this session',variable=toggle,command=change).pack(anchor='w',padx=20,pady=(0,14))
-        row=ctk.CTkFrame(box,fg_color='transparent');row.pack(fill='x',padx=20,pady=(0,14));button(row,'Recover career',lambda:self.recover_project('career'),secondary=True,width=140).pack(side='left',padx=(0,8));button(row,'Recover picture sheet',lambda:self.recover_project('sheet'),secondary=True,width=170).pack(side='left',padx=(0,8))
+        recovery_row=action_row(box,
+                   secondary=(('Recover career',lambda:self.recover_project('career')),
+                              ('Recover picture sheet',lambda:self.recover_project('sheet'))),
+                   pady=(0,14))
         def delete():
             if self.busy:return messagebox.showinfo('Please wait','Wait until the current task finishes.',parent=self)
             if not self.require_staff():return
             if messagebox.askyesno('Delete recovery copies?','Delete the local career and picture-sheet recovery copies? Saved project files are not deleted.',parent=self):self.recovery_enabled=False;toggle.set(False);self.delete_recovery_copies()
-        button(box,'Delete recovery copies',delete,secondary=True,width=175).pack(anchor='w',padx=20,pady=(0,18))
+        destroy_row=button_row(box,pady=(0,18));button(destroy_row,'Delete recovery copies',delete,ghost=True).pack(side='left')
     def quick_help(self):
         messages={
             'Home':'Use the menu to choose a tool. Open Help & privacy for a step-by-step guide.',
@@ -566,7 +628,7 @@ class CafeDesk(ctk.CTk):
         manual_banner=card(self.body);manual_banner.pack(fill='x',pady=(0,10))
         label(manual_banner,'Full Printable User Manual, Menu Guide & Sales Handbook',size=15,bold=True,color=LIME).pack(anchor='w',padx=18,pady=(15,4))
         label(manual_banner,'Open the complete formatted HTML handbook (all 17 sidebar tools, 5-minute shop setup, 30-second pitch & printable A4 handout) locally in your browser.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,10))
-        button(manual_banner,'📖 Open Full Manual & Sales Guide (HTML)  ↗',self.open_user_manual,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=330).pack(anchor='w',padx=18,pady=(0,15))
+        button(manual_banner,'📖 Open Full Manual & Sales Guide (HTML)  ↗',self.open_user_manual,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(anchor='w',padx=18,pady=(0,15))
         sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Add services in Receipts. Saving a receipt PDF does not record a sale. Staff choose Record sale; staff-only Sales reports show recorded totals. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
         for title,description in sections:
             box=card(self.body);box.pack(fill='x',pady=(0,8));label(box,title,size=14,bold=True).pack(anchor='w',padx=18,pady=(14,4));label(box,description,size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,14))
@@ -584,9 +646,9 @@ class CafeDesk(ctk.CTk):
             self.status.set('Copied Tesseract OCR link to clipboard')
             messagebox.showinfo('Link copied',f'Copied to clipboard:\n{services.TESSERACT_DOWNLOAD_URL}',parent=self)
         ocr_btns=ctk.CTkFrame(ocr_box,fg_color='transparent');ocr_btns.pack(fill='x',padx=18,pady=(0,10))
-        button(ocr_btns,'Download Tesseract OCR (Windows .exe)  ↗',lambda:open_ocr_url(True),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=290).pack(side='left',padx=(0,8))
-        button(ocr_btns,'Open Tesseract downloads page  ↗',lambda:open_ocr_url(False),secondary=True,width=235).pack(side='left',padx=(0,8))
-        button(ocr_btns,'Copy link',copy_ocr_url,secondary=True,width=95).pack(side='left')
+        button(ocr_btns,'Download Tesseract OCR (Windows .exe)  ↗',lambda:open_ocr_url(True),fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
+        button(ocr_btns,'Open downloads page  ↗',lambda:open_ocr_url(False),secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(ocr_btns,'Copy link',copy_ocr_url,ghost=True).pack(side='left')
         url_entry=entry(ocr_box);url_entry.insert(0,services.TESSERACT_DOWNLOAD_URL);url_entry.configure(state='readonly');url_entry.pack(fill='x',padx=18,pady=(0,16))
         usb_box=card(self.body);usb_box.pack(fill='x',pady=(0,10))
         label(usb_box,'Share Café Desk to other computers via USB',size=15,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(16,4))
@@ -594,7 +656,7 @@ class CafeDesk(ctk.CTk):
         label(usb_box,'1. Build once on Windows by double-clicking packaging\\build-windows.bat (or download CafeDesk-Windows-USB-Portable.zip from GitHub Actions on the repository).\n2. Copy the ENTIRE CafeDesk folder (including _internal) onto a USB flash drive — target Windows 10/11 PCs run CafeDesk.exe directly with NO Python installation needed.\n3. Optional USB Portable Data Mode: '+mode_note+'.\n4. Optional USB OCR: install Tesseract OCR on the target PC or place a Tesseract-OCR folder right inside the USB CafeDesk folder.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,16))
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Privacy, local data folders & file removal',size=15,bold=True).pack(anchor='w',padx=18,pady=(16,4));label(box,'Staff access locks after five minutes without activity. The PIN is basic app-level protection — run Café Desk inside a standard (non-Administrator) Windows/OS kiosk user account on shared PCs.\n\n• Session temp folder (wiped on Next customer & app close): '+str(self.session_temp.name)+'\n• App configuration, sales & recovery folder (protected from public exports): '+str(settings_store.settings_path().parent)+'\n\nNext customer clears in-app workspace data, temporary merge copies and recovery files, and locks staff, without deleting customer-saved PDFs or Downloads/Bluetooth files. A staff member can deliberately remove a selected customer file below.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,12))
         hbtns=ctk.CTkFrame(box,fg_color='transparent');hbtns.pack(fill='x',padx=18,pady=(0,18))
-        button(hbtns,'Delete a selected customer file',self.delete_selected_file,secondary=True,width=215).pack(side='left',padx=(0,8))
+        button(hbtns,'Delete a selected customer file',self.delete_selected_file,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         def open_data_folder():
             if not self.require_staff():return
             folder=str(settings_store.settings_path().parent)
@@ -604,7 +666,7 @@ class CafeDesk(ctk.CTk):
                 elif sys.platform=='darwin':subprocess.Popen(['open',folder])
                 else:subprocess.Popen(['xdg-open',folder])
             except Exception:messagebox.showinfo('Local data folder',f'App configuration & recovery folder:\n{folder}',parent=self)
-        button(hbtns,'📂 Staff: open local data folder',open_data_folder,secondary=True,width=225).pack(side='left')
+        button(hbtns,'📂 Staff: open local data folder',open_data_folder,ghost=True).pack(side='left')
     def about_screen(self):
         self.heading(self.body,'About & contact','Information about Café Desk, developer contacts, and GitHub repository.')
         hero=card(self.body);hero.pack(fill='x',pady=(0,12))
@@ -716,8 +778,8 @@ class CafeDesk(ctk.CTk):
             self.job('Syncing Machine ID approvals from cloud…',_do_k,_done_k)
 
         urow=ctk.CTkFrame(upd_box,fg_color='transparent'); urow.pack(fill='x',padx=20,pady=(0,18))
-        button(urow,'⬇ Check for App Updates',check_updates_click,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=215,height=36).pack(side='left',padx=(0,10))
-        button(urow,'☁ Sync Approved Keys Online',sync_keys_online_click,secondary=True,width=225,height=36).pack(side='left')
+        button(urow,'⬇ Check for App Updates',check_updates_click,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
+        button(urow,'☁ Sync Approved Keys Online',sync_keys_online_click,secondary=True).pack(side='left')
         lic_status=license_guard.current_license_status()
         lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12))
         lic_box.pack_forget()
@@ -744,8 +806,8 @@ class CafeDesk(ctk.CTk):
         label(lic_box,summary,size=12,bold=True,color=badge_color,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
         mrow=ctk.CTkFrame(lic_box,fg_color='transparent');mrow.pack(fill='x',padx=20,pady=(0,10))
         m_entry=entry(mrow);m_entry.insert(0,f'Machine ID: {mid_val}');m_entry.configure(state='readonly');m_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
-        button(mrow,'⧉ Copy Machine ID',lambda:copy_val(mid_val,'Machine ID'),secondary=True,width=155,height=34).pack(side='left',padx=(0,8))
-        button(mrow,'🔑 Enter / Renew 1-Year Key',lambda:license_ui.open_renewal_modal(self,on_updated=lambda _info:self.show('About & contact')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=205,height=34).pack(side='left')
+        button(mrow,'⧉ Copy',lambda:copy_val(mid_val,'Machine ID'),ghost=True).pack(side='left',padx=(0,BTN_PADX))
+        button(mrow,'🔑 Enter / Renew 1-Year Key',lambda:license_ui.open_renewal_modal(self,on_updated=lambda _info:self.show('About & contact')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left')
 
         addon_info=license_guard.current_addon_status(license_guard.FEATURE_PDF_UNLOCK)
         def view_saved_keys():
@@ -770,9 +832,9 @@ class CafeDesk(ctk.CTk):
 
             brow=ctk.CTkFrame(wrap,fg_color='transparent'); brow.pack(fill='x',padx=18,pady=(0,14))
             if lic_status.get('token'):
-                button(brow,'⧉ Copy CDLIC1 Key',lambda:copy_val(lic_status['token'],'CDLIC1 License Key'),secondary=True,width=165,height=34).pack(side='left',padx=(0,8))
+                button(brow,'⧉ Copy CDLIC1 Key',lambda:copy_val(lic_status['token'],'CDLIC1 License Key'),secondary=True).pack(side='left',padx=(0,BTN_PADX))
             if addon_info.get('token'):
-                button(brow,'⧉ Copy CDADD1 Key',lambda:copy_val(addon_info['token'],'CDADD1 Add-on Key'),secondary=True,width=165,height=34).pack(side='left',padx=(0,8))
+                button(brow,'⧉ Copy CDADD1 Key',lambda:copy_val(addon_info['token'],'CDADD1 Add-on Key'),secondary=True).pack(side='left',padx=(0,BTN_PADX))
             def open_lic_dir():
                 lic_path.parent.mkdir(parents=True,exist_ok=True)
                 try:
@@ -781,12 +843,12 @@ class CafeDesk(ctk.CTk):
                     else: subprocess.Popen(['xdg-open',str(lic_path.parent)])
                 except Exception:
                     messagebox.showinfo('License folder',f'Saved at:\n{lic_path.parent}',parent=dlg)
-            button(brow,'📂 Open License Folder',open_lic_dir,secondary=True,width=185,height=34).pack(side='left')
-            button(brow,'Close',dlg.destroy,secondary=True,width=85,height=34).pack(side='right')
+            button(brow,'📂 Open License Folder',open_lic_dir,ghost=True).pack(side='left')
+            button(brow,'Close',dlg.destroy,secondary=True,width=90).pack(side='right')
 
         krow=ctk.CTkFrame(lic_box,fg_color='transparent'); krow.pack(fill='x',padx=20,pady=(0,14))
         label(krow,f'Local license folder (private per-PC, never uploaded): {license_guard.host_license_dir()}',size=11,color=MUTED).pack(side='left',fill='x',expand=True,anchor='w')
-        button(krow,'👁 Staff: View Saved Keys on This PC',view_saved_keys,secondary=True,width=255,height=32).pack(side='right')
+        button(krow,'👁 View saved keys',view_saved_keys,ghost=True).pack(side='right')
         addon_bar=ctk.CTkFrame(lic_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER)
         addon_bar.pack(fill='x',padx=20,pady=(0,18))
         label(addon_bar,'PAID ADD-ON  •  PDF PASSWORD REMOVER (LOCKED TO THIS MACHINE ID)',size=10,bold=True,color='#FFDBA2').pack(anchor='w',padx=16,pady=(12,3))
@@ -798,7 +860,7 @@ class CafeDesk(ctk.CTk):
             a_txt='LOCKED  •  Requires owner approval & Paid Add-on Key (CDADD1...) for this Machine ID'
             a_col=MUTED
         label(arow,a_txt,size=12,bold=True,color=a_col).pack(side='left',fill='x',expand=True,anchor='w')
-        button(arow,'🔑 Enter / Renew PDF Unlock Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _info:self.show('About & contact')),secondary=bool(addon_info.get('valid')),fg_color=SOFT if addon_info.get('valid') else LIME,hover_color='#40506D' if addon_info.get('valid') else '#A9EB65',text_color='#E1E8F6' if addon_info.get('valid') else '#142018',width=235,height=34).pack(side='right')
+        button(arow,'🔑 Enter / Renew PDF Unlock Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _info:self.show('About & contact')),secondary=bool(addon_info.get('valid')),fg_color=SOFT if addon_info.get('valid') else LIME,hover_color='#40506D' if addon_info.get('valid') else '#A9EB65',text_color='#E1E8F6' if addon_info.get('valid') else '#142018').pack(side='right')
         label(contact_box,'Developer & support contacts',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
         label(contact_box,'Have feedback, feature ideas, or need help setting up Café Desk? Reach out directly or visit GitHub.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,14))
 
@@ -807,32 +869,32 @@ class CafeDesk(ctk.CTk):
         label(wa_card,'WHATSAPP SUPPORT & LICENSING',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
         wrow=ctk.CTkFrame(wa_card,fg_color='transparent');wrow.pack(fill='x',padx=16,pady=(0,12))
         w_entry=entry(wrow);w_entry.insert(0,f'{services.DEVELOPER_WHATSAPP_LOCAL}  (+27 72 227 9505)');w_entry.configure(state='readonly');w_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
-        button(wrow,'💬 WhatsApp chat',lambda:open_link(services.whatsapp_chat_url(f'Hi, I am using Cafe Desk (Machine ID: {mid_val}) and need assistance.'),'WhatsApp chat'),fg_color='#25D366',hover_color='#1EBE5D',text_color='#0B1F13',width=150,height=34).pack(side='left',padx=(0,8))
-        button(wrow,'⧉ Copy number',lambda:copy_val('0722279505','WhatsApp number'),secondary=True,width=130,height=34).pack(side='left')
+        button(wrow,'💬 WhatsApp chat',lambda:open_link(services.whatsapp_chat_url(f'Hi, I am using Cafe Desk (Machine ID: {mid_val}) and need assistance.'),'WhatsApp chat'),fg_color='#25D366',hover_color='#1EBE5D',text_color='#0B1F13').pack(side='left',padx=(0,BTN_PADX))
+        button(wrow,'⧉ Copy number',lambda:copy_val('0722279505','WhatsApp number'),ghost=True).pack(side='left')
 
         # Email row
         email_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);email_card.pack(fill='x',padx=20,pady=(0,10))
         label(email_card,'EMAIL',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
         erow=ctk.CTkFrame(email_card,fg_color='transparent');erow.pack(fill='x',padx=16,pady=(0,12))
         e_entry=entry(erow);e_entry.insert(0,services.DEVELOPER_EMAIL);e_entry.configure(state='readonly');e_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
-        button(erow,'✉ Send email',lambda:open_link('mailto:'+services.DEVELOPER_EMAIL,'email app'),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=130,height=34).pack(side='left',padx=(0,8))
-        button(erow,'⧉ Copy email',lambda:copy_val(services.DEVELOPER_EMAIL,'Email address'),secondary=True,width=120,height=34).pack(side='left')
+        button(erow,'✉ Send email',lambda:open_link('mailto:'+services.DEVELOPER_EMAIL,'email app'),fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
+        button(erow,'⧉ Copy email',lambda:copy_val(services.DEVELOPER_EMAIL,'Email address'),ghost=True).pack(side='left')
 
         # GitHub profile row
         gh_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);gh_card.pack(fill='x',padx=20,pady=(0,10))
         label(gh_card,'GITHUB PROFILE (@Njwacky)',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
         grow=ctk.CTkFrame(gh_card,fg_color='transparent');grow.pack(fill='x',padx=16,pady=(0,12))
         g_entry=entry(grow);g_entry.insert(0,services.DEVELOPER_GITHUB_URL);g_entry.configure(state='readonly');g_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
-        button(grow,'↗ Open GitHub',lambda:open_link(services.DEVELOPER_GITHUB_URL,'GitHub profile'),width=135,height=34).pack(side='left',padx=(0,8))
-        button(grow,'⧉ Copy link',lambda:copy_val(services.DEVELOPER_GITHUB_URL,'GitHub profile URL'),secondary=True,width=115,height=34).pack(side='left')
+        button(grow,'↗ Open GitHub',lambda:open_link(services.DEVELOPER_GITHUB_URL,'GitHub profile')).pack(side='left',padx=(0,BTN_PADX))
+        button(grow,'⧉ Copy link',lambda:copy_val(services.DEVELOPER_GITHUB_URL,'GitHub profile URL'),ghost=True).pack(side='left')
 
         # Project repository row
         repo_card=ctk.CTkFrame(contact_box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER);repo_card.pack(fill='x',padx=20,pady=(0,18))
         label(repo_card,'PROJECT REPOSITORY & UPDATES',size=10,bold=True,color=LIME).pack(anchor='w',padx=16,pady=(12,2))
         rrow=ctk.CTkFrame(repo_card,fg_color='transparent');rrow.pack(fill='x',padx=16,pady=(0,12))
         r_entry=entry(rrow);r_entry.insert(0,services.DEVELOPER_REPO_URL);r_entry.configure(state='readonly');r_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
-        button(rrow,'↗ Open repo',lambda:open_link(services.DEVELOPER_REPO_URL,'GitHub repository'),width=135,height=34).pack(side='left',padx=(0,8))
-        button(rrow,'⧉ Copy link',lambda:copy_val(services.DEVELOPER_REPO_URL,'Repository URL'),secondary=True,width=115,height=34).pack(side='left')
+        button(rrow,'↗ Open repo',lambda:open_link(services.DEVELOPER_REPO_URL,'GitHub repository')).pack(side='left',padx=(0,BTN_PADX))
+        button(rrow,'⧉ Copy link',lambda:copy_val(services.DEVELOPER_REPO_URL,'Repository URL'),ghost=True).pack(side='left')
 
         priv_box=card(self.body);priv_box.pack(fill='x',pady=(0,12))
         label(priv_box,'Local-first & privacy summary',size=15,bold=True).pack(anchor='w',padx=20,pady=(16,4))
@@ -874,16 +936,16 @@ class CafeDesk(ctk.CTk):
                     label(line,item['name'],size=13,bold=True,anchor='w',wraplength=490,justify='left').pack(side='left',fill='x',expand=True,padx=12,pady=10)
                     label(line,f"{currency} {item['price']}",size=13,bold=True,color='#B9FF70').pack(side='right',padx=12,pady=10)
         search.trace_add('write',render);render()
-        actions=ctk.CTkFrame(box,fg_color='transparent');actions.pack(fill='x',padx=20,pady=(0,18))
-        button(actions,'Create a receipt',lambda:self.show('Receipts'),width=145).pack(side='left',padx=(0,8))
+        actions=button_row(box,pady=(0,8))
+        button(actions,'Create a receipt',lambda:self.show('Receipts')).pack(side='left',padx=(0,BTN_PADX))
         def export():
             try:text=price_list.as_text(self.business_name.get(),currency,all_rows)
             except ValueError as exc:return messagebox.showinfo('Price list',str(exc),parent=self)
             out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF','*.pdf')],initialfile='price-list.pdf')
             if out:self.job('Saving price list…',lambda:services.export_document_pdf(text,out,'Price list',0),lambda _:messagebox.showinfo('Price list saved',f'All services saved to:\n{out}',parent=self))
-        button(actions,'Save full list as PDF',export,secondary=True,width=170).pack(side='left',padx=(0,8))
-        button(actions,'Staff: edit prices',lambda:self.show('Price settings'),secondary=True,width=145).pack(side='left',padx=(0,8))
-        button(actions,'Refresh',lambda:self.show('Price list'),secondary=True,width=90).pack(side='left')
+        button(actions,'Save full list as PDF',export,secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(actions,'Staff: edit prices',lambda:self.show('Price settings'),secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(actions,'Refresh',lambda:self.show('Price list'),ghost=True).pack(side='left')
         label(box,'The PDF includes the full list, even when a search filter is active.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,16))
     def price_screen(self):
         self.heading(self.body,'Price settings','Set your own services and prices. The initial list is empty.')
@@ -903,7 +965,7 @@ class CafeDesk(ctk.CTk):
                 settings_store.save_prices(currency.get(),rates.get('1.0','end-1c')); self.reset_receipt()
                 messagebox.showinfo('Price list saved','Your rates were saved. The current unsaved receipt has been cleared.',parent=self)
             except (ValueError,OSError) as exc: messagebox.showerror('Could not save rates',str(exc),parent=self)
-        button(box,'Save price list',save,width=150).pack(anchor='w',padx=20,pady=(0,20))
+        action_row(box,primary=(('Save price list',save),),pady=(0,20))
     def reset_receipt(self):
         self.receipt_items=[];self.receipt_currency=None;self.receipt_token=uuid.uuid4().hex;self.receipt_timestamp=None;self.receipt_business=None;self.receipt_recorded=False
     def receipt_screen(self):
@@ -934,8 +996,8 @@ class CafeDesk(ctk.CTk):
             if not self.receipt_items:
                 self.receipt_timestamp=datetime.now().astimezone().isoformat(timespec='seconds');self.receipt_business=self.business_name.get();self.receipt_currency=currency
             self.receipt_items.append({'name':choice.get(),'price':lookup[choice.get()],'qty':n});refresh()
-        button(row,'Add service',add,width=120).pack(side='left')
-        buttons=ctk.CTkFrame(box,fg_color='transparent');buttons.pack(fill='x',padx=20,pady=(0,10))
+        button(row,'Add service',add).pack(side='left')
+        buttons=button_row(box,pady=(0,10))
         def save_receipt():
             if not self.receipt_items:return messagebox.showinfo('Receipt','Add a service first.',parent=self)
             out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF','*.pdf')],initialfile='receipt.pdf')
@@ -961,7 +1023,10 @@ class CafeDesk(ctk.CTk):
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
             if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Start a new receipt?','The current receipt has not been recorded. Discard it?',parent=self):return
             self.reset_receipt();refresh()
-        button(buttons,'Save receipt PDF',save_receipt,width=135).pack(side='left',padx=(0,8));button(buttons,'Record sale',record,width=115).pack(side='left',padx=(0,8));button(buttons,'Undo last item',remove_line,secondary=True,width=125).pack(side='left',padx=(0,8));button(buttons,'New receipt',new_receipt,secondary=True,width=115).pack(side='left')
+        button(buttons,'Record sale',record).pack(side='left',padx=(0,BTN_PADX))
+        button(buttons,'Save receipt PDF',save_receipt,secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(buttons,'Undo last item',remove_line,ghost=True).pack(side='left',padx=(0,BTN_PADX))
+        button(buttons,'New receipt',new_receipt,ghost=True).pack(side='left')
         label(box,'Record sale is staff-only. No payment status, payment method or tax is tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
     def ocr_screen_part(self):
         show_ocr(self,self.body,card,label,button)
@@ -985,7 +1050,7 @@ class CafeDesk(ctk.CTk):
         self.lock_staff_btn=button(bar,'',self.lock_staff,secondary=True,image=self.icon_images['lock_staff'],width=38,height=34)
         self.lock_staff_btn.pack(side='right',padx=(0,8),pady=15)
         self.lock_staff_btn.bind('<Enter>',lambda _e:self.status.set('Click to lock staff access & clear AI key' if self.staff_unlocked else 'Staff access is locked'))
-        button(bar,'? Help',self.quick_help,secondary=True,width=75,height=34).pack(side='right',padx=(0,8),pady=15)
+        button(bar,'? Help',self.quick_help,secondary=True,width=80,height=34).pack(side='right',padx=(0,8),pady=15)
         ctk.CTkLabel(bar,textvariable=self.clock,text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=12,weight='bold')).pack(side='right',padx=(0,20))
         self.container=ctk.CTkFrame(main,fg_color='transparent'); self.container.grid(row=1,column=0,sticky='nsew',padx=28,pady=(0,8))
         footer=ctk.CTkFrame(main,fg_color='transparent',height=25); footer.grid(row=2,column=0,sticky='ew',padx=30,pady=(0,10)); label(footer,'●',size=10,color='#B9FF70').pack(side='left',padx=(0,5)); ctk.CTkLabel(footer,textvariable=self.status,text_color=MUTED,font=ctk.CTkFont(family=FONT,size=11)).pack(side='left')
@@ -1060,10 +1125,10 @@ class CafeDesk(ctk.CTk):
         label(hero,'YOUR ALL-IN-ONE WORKSPACE',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=26,pady=(25,6))
         label(hero,'Big help for life’s little paperwork.',size=27,bold=True,color='white').pack(anchor='w',padx=26)
         label(hero,'Everything you need for documents and your next career move.',size=13,color='#C3CEE1').pack(anchor='w',padx=26,pady=(7,17))
-        button(hero,'Create a career document   →',lambda:self.show('Career documents'),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=240).pack(anchor='w',padx=26,pady=(0,25))
+        button(hero,'Create a career document   →',lambda:self.show('Career documents'),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=260).pack(anchor='w',padx=26,pady=(0,25))
         hbtns=ctk.CTkFrame(self.body,fg_color='transparent'); hbtns.pack(anchor='w',pady=(0,17))
-        button(hbtns,'New here? Open the quick guide  →',lambda:self.show('Help & privacy'),secondary=True,width=270).pack(side='left',padx=(0,8))
-        button(hbtns,'ⓘ About & contact',lambda:self.show('About & contact'),secondary=True,width=160).pack(side='left')
+        button(hbtns,'New here? Open the quick guide  →',lambda:self.show('Help & privacy'),secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(hbtns,'ⓘ About & contact',lambda:self.show('About & contact'),ghost=True).pack(side='left')
         if self.recovery_exists(): label(self.body,'A recovery copy is available. Staff can open it from Projects & recovery.',size=11,color='#B9FF70').pack(anchor='w',pady=(0,10))
         label(self.body,'What can we help with?',size=19,bold=True).pack(anchor='w',pady=(0,11))
         grid=ctk.CTkFrame(self.body,fg_color='transparent'); grid.pack(fill='x'); grid.grid_columnconfigure((0,1),weight=1)
@@ -1071,7 +1136,7 @@ class CafeDesk(ctk.CTk):
             box=card(grid); box.grid(row=i//2,column=i%2,sticky='nsew',padx=(0,10) if i%2==0 else (0,0),pady=(0,10))
             if icon is None: ctk.CTkLabel(box,text='',image=self.icon_images['bluetooth_card']).pack(anchor='w',padx=18,pady=(14,4))
             else: label(box,icon,size=24,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(14,2))
-            label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),secondary=True,width=90,height=32).pack(anchor='w',padx=18,pady=(0,14))
+            label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),ghost=True).pack(anchor='w',padx=18,pady=(0,14))
     def job(self,description,fn,success,error_cb=None):
         if self.busy: return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
         self.busy=True; self.status.set(description)
@@ -1184,9 +1249,13 @@ class CafeDesk(ctk.CTk):
             if sel:
                 i=sel[0]; j=i+d
                 if 0<=j<len(files): files[i],files[j]=files[j],files[i]; refresh(j)
-        actions=ctk.CTkFrame(box,fg_color='transparent'); actions.pack(fill='x',padx=20,pady=(0,18))
-        for title,cmd in [('＋ Add files',add),('✕ Remove',remove),('Clear all',clear_all),('↑',lambda:move(-1)),('↓',lambda:move(1))]: button(actions,title,cmd,secondary=True,width=92 if len(title)>2 else 40,height=34).pack(side='left',padx=(0,7))
-        button(actions,'Merge & save' if kind=='pdf' else 'Convert to PDF',lambda:self.save_files(kind),width=145,height=34).pack(side='right')
+        actions=button_row(box,pady=(0,18))
+        button(actions,'Merge & save' if kind=='pdf' else 'Convert to PDF',lambda:self.save_files(kind),width=150).pack(side='left',padx=(0,BTN_PADX))
+        button(actions,'＋ Add files',add,secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(actions,'✕ Remove',remove,secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(actions,'Clear all',clear_all,ghost=True).pack(side='left',padx=(0,BTN_PADX))
+        button(actions,'↑',lambda:move(-1),ghost=True,width=38).pack(side='left',padx=(0,4))
+        button(actions,'↓',lambda:move(1),ghost=True,width=38).pack(side='left')
         refresh()
     def save_files(self,kind):
         paths=list(self.pdf_files if kind=='pdf' else self.image_files)
@@ -1270,20 +1339,20 @@ class CafeDesk(ctk.CTk):
                         messagebox.showinfo('PDF unlocked',f'{note}\n{pages_n} page(s) saved to:\n{dest}',parent=self)
                 self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
 
-            button(urow2,'🔓 Unlock & save PDF',lambda:run_unlock(False),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=175,height=36).pack(side='left',padx=(0,8))
-            button(urow2,'＋ Unlock to merge',lambda:run_unlock(True),secondary=True,width=155,height=36).pack(side='left')
+            button(urow2,'🔓 Unlock & save PDF',lambda:run_unlock(False),fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
+            button(urow2,'＋ Unlock to merge',lambda:run_unlock(True),secondary=True).pack(side='left')
         else:
             label(uhead,'🔒 PAID ADD-ON  •  OWNER APPROVAL REQUIRED',size=11,bold=True,color='#FFDBA2').pack(side='right')
             label(ubox,'Disable and strip passwords from customer PDFs (bank statements, payslips, e-statements & restricted PDFs) so they print and merge cleanly.\nThis is a paid add-on locked per computer — send this PC’s Machine ID to the owner for approval and paste your Paid Add-on Key (CDADD1...).',size=12,color=MUTED,wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,12))
             lock_row=ctk.CTkFrame(ubox,fg_color='#131B2A',corner_radius=10,border_width=1,border_color=BORDER); lock_row.pack(fill='x',padx=20,pady=(0,18))
             label(lock_row,f'Machine ID:  {mid_now}',size=13,bold=True,color=LIME).pack(side='left',padx=14,pady=12)
-            button(lock_row,'🔑 Activate Paid Add-on Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _i:self.show('PDF tools')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=215,height=34).pack(side='right',padx=12,pady=10)
+            button(lock_row,'🔑 Activate Paid Add-on Key',lambda:license_ui.open_addon_modal(self,on_updated=lambda _i:self.show('PDF tools')),fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='right',padx=12,pady=10)
             def ask_owner_wa():
                 try:
                     services.open_external_url(services.whatsapp_chat_url(f'Hi, I would like to pay for and activate the PDF Password Remover add-on for Machine ID: {mid_now}'))
                 except ValueError as exc:
                     messagebox.showerror('Could not open WhatsApp',str(exc),parent=self)
-            button(lock_row,'💬 Request Owner Approval',ask_owner_wa,fg_color='#25D366',hover_color='#1EBE5D',text_color='#0B1F13',width=205,height=34).pack(side='right',padx=(0,8),pady=10)
+            button(lock_row,'💬 Request Owner Approval',ask_owner_wa,secondary=True,width=210).pack(side='right',padx=(0,BTN_PADX),pady=10)
     def extract(self,spec):
         src=self.split_source
         if not src: return messagebox.showinfo('Select a PDF','Choose a PDF first.',parent=self)
@@ -1331,8 +1400,8 @@ class CafeDesk(ctk.CTk):
 
         photo_row=ctk.CTkFrame(form,fg_color='transparent'); photo_row.pack(fill='x',padx=20,pady=(8,0))
         self.cv_photo_label=label(photo_row,'CV photo: '+(Path(self.cv_photo).name if self.cv_photo else 'none'),size=11,color=MUTED); self.cv_photo_label.pack(side='left',padx=(0,8))
-        button(photo_row,'＋ Choose CV photo',self.choose_cv_photo,secondary=True,width=150,height=32).pack(side='left',padx=(0,8))
-        button(photo_row,'✕ Remove photo',self.remove_cv_photo,secondary=True,width=130,height=32).pack(side='left')
+        button(photo_row,'＋ Choose CV photo',self.choose_cv_photo,secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(photo_row,'✕ Remove photo',self.remove_cv_photo,ghost=True).pack(side='left')
         label(form,'Optional CV photo appears in the A4 preview and exported CV PDF.',size=11,color=MUTED,wraplength=700,justify='left').pack(anchor='w',padx=20,pady=(5,6))
         button(form,'Create draft   →',self.generate,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=165).pack(anchor='w',padx=20,pady=(2,18))
 
@@ -1481,9 +1550,9 @@ class CafeDesk(ctk.CTk):
             modal_state['page']=cl2; modal_state['total']=tot2
             modal_state['img']=ctk.CTkImage(light_image=im2,dark_image=im2,size=im2.size)
             big_lbl.configure(image=modal_state['img']); page_lbl.configure(text=f'Page {cl2} / {tot2}')
-        button(foot,'‹ Previous page',lambda:turn_big(-1),secondary=True,width=130,height=32).pack(side='left',padx=(0,8))
-        button(foot,'Next page ›',lambda:turn_big(1),secondary=True,width=115,height=32).pack(side='left')
-        button(foot,'✕ Close',win.destroy,secondary=True,width=100,height=32).pack(side='right')
+        button(foot,'‹ Previous page',lambda:turn_big(-1),secondary=True).pack(side='left',padx=(0,BTN_PADX))
+        button(foot,'Next page ›',lambda:turn_big(1),secondary=True).pack(side='left')
+        button(foot,'✕ Close',win.destroy,ghost=True).pack(side='right')
         win.grab_set(); win.focus_set()
 
     def change_doc_type(self,kind):
@@ -1565,8 +1634,8 @@ class CafeDesk(ctk.CTk):
             self.clipboard_clear(); self.clipboard_append(services.GOOGLE_AI_STUDIO_KEYS_URL); self.update_idletasks()
             self.status.set('Copied Google AI Studio link to clipboard')
             messagebox.showinfo('Copied',f'Copied link:\n{services.GOOGLE_AI_STUDIO_KEYS_URL}',parent=self)
-        button(gem_row,'↗ Get Gemini API key',open_gemini_keys,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=175,height=34).pack(side='left',padx=(0,8))
-        button(gem_row,'⧉ Copy link',copy_gemini_keys,secondary=True,width=105,height=34).pack(side='left')
+        button(gem_row,'↗ Get Gemini API key',open_gemini_keys,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
+        button(gem_row,'⧉ Copy link',copy_gemini_keys,ghost=True).pack(side='left')
 
         label(box,'Provider',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         custom_wrap=ctk.CTkFrame(box,fg_color='transparent')
