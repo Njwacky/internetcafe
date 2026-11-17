@@ -308,3 +308,11 @@ Café Desk works **100% offline-first** and also supports shops with **2, 4, or 
    - Protected by Supabase Auth (`disable_signup = true`, locked strictly to your owner email) + the `owner-admin` Supabase Edge Function, which signs genuine Ed25519 `CDLIC1` / `CDADD1` keys inside Supabase's secret vault so your private signing key never touches the browser or GitHub.
    - Issue single or Multi-PC shop keys in 1 tap, send keys straight to WhatsApp, approve pending customer requests, remotely revoke keys, and upload + SHA-256 publish new `CafeDesk-Setup.exe` updates from anywhere.
 
+
+### License requests and duplicate IDs
+
+For an existing Supabase database, apply `supabase/migrations/20261117_license_requests_and_duplicates.sql` in the Supabase SQL editor before releasing the new app and dashboard. Back up the database first. New installations can use `supabase_schema.sql`. The activation screen and About & contact now let a customer send their name, company, phone number and Machine ID to the owner request queue. Those details are sent to the configured Supabase project; customers should only submit them if they agree.
+
+For a single machine, the dashboard reuses its unexpired base key for the same customer. A different customer name pauses the existing key when the owner attempts approval; investigate before resuming. The database rejects new overlapping base keys even if one is paused. Existing duplicate unexpired base keys are paused on the next online check-in; the affected user sees a pause notice. Review duplicate records before resuming: all but one unexpired base record must be resolved, otherwise check-in pauses them again. Add-on keys are separate. The database rule does not cover offline keys signed and distributed without syncing to Supabase.
+
+**Security limitations:** The short Machine ID alone does not prove two requests came from different physical computers. A copied/spoofed ID or an offline PC cannot be reliably identified or paused by this mechanism. Online revocations take effect only when the app checks in, and a locally copied unexpired key can be re-entered offline. A secure inactivity lock and collision detection require an authenticated per-device identity and a defined check-in/offline policy; they are not implemented by the duplicate-key rule.

@@ -1857,11 +1857,11 @@ class ButtonLayoutTests(unittest.TestCase):
     def test_copy_utilities_are_ghost_not_equal_weight(self):
         src = (self.repo / 'app.py').read_text(encoding='utf-8')
         for fragment in (
-            "'⧉ Copy',lambda:copy_val(mid_val,'Machine ID'),ghost=True",
-            "'⧉ Copy email',lambda:copy_val(services.DEVELOPER_EMAIL,'Email address'),ghost=True",
-            "'⧉ Copy link',lambda:copy_val(services.DEVELOPER_GITHUB_URL,'GitHub profile URL'),ghost=True",
-            "'⧉ Copy link',lambda:copy_val(services.DEVELOPER_REPO_URL,'Repository URL'),ghost=True",
-            "'⧉ Copy number',lambda:copy_val('0722279505','WhatsApp number'),ghost=True",
+            "'Copy',lambda:copy_val(mid_val,'Machine ID'),ghost=True",
+            "'Copy email',lambda:copy_val(services.DEVELOPER_EMAIL,'Email address'),ghost=True",
+            "'Copy link',lambda:copy_val(services.DEVELOPER_GITHUB_URL,'GitHub profile URL'),ghost=True",
+            "'Copy link',lambda:copy_val(services.DEVELOPER_REPO_URL,'Repository URL'),ghost=True",
+            "'Copy number',lambda:copy_val('0722279505','WhatsApp number'),ghost=True",
         ):
             self.assertIn(fragment, src, f'copy action should be a ghost button: {fragment[:50]}')
 
@@ -2125,6 +2125,34 @@ class ReleaseArtifactKeyScanTests(unittest.TestCase):
             self.assertIn('YOUR KEY', res.stdout)
         finally:
             tmp.cleanup()
+
+
+class LicenseContactRequestTests(unittest.TestCase):
+    def test_contact_request_sends_required_fields_and_machine_id(self):
+        from unittest import mock
+        import cloud_sync
+        with mock.patch.object(cloud_sync, '_supabase_request', return_value={'ok': True}) as request:
+            cloud_sync.request_license_with_contact({'supabase_url': 'https://example.com', 'supabase_anon_key': 'public'},
+                machine_id='CD-1234-5678-90AB', name='  Jane  Doe ', company=' Example Shop ', phone='072 123 4567')
+        self.assertEqual(request.call_args.args[3], '/rest/v1/rpc/submit_license_contact_request')
+        payload = request.call_args.kwargs['payload']
+        self.assertEqual(payload['p_machine_id'], 'CD-1234-5678-90AB')
+        self.assertEqual(payload['p_contact_name'], 'Jane Doe')
+        self.assertEqual(payload['p_company'], 'Example Shop')
+        self.assertEqual(payload['p_contact_phone'], '072 123 4567')
+
+    def test_contact_request_rejects_missing_details_and_server_errors(self):
+        from unittest import mock
+        import cloud_sync
+        cfg = {'supabase_url': 'https://example.com', 'supabase_anon_key': 'public'}
+        with mock.patch.object(cloud_sync, '_supabase_request') as request:
+            for name, company, phone in [('', 'Shop', '0721234567'), ('Joe', '', '0721234567'), ('Joe', 'Shop', '123')]:
+                with self.assertRaises(ValueError):
+                    cloud_sync.request_license_with_contact(cfg, machine_id='CD-1234-5678-90AB', name=name, company=company, phone=phone)
+            request.assert_not_called()
+            request.return_value = {'ok': False, 'error': 'Unavailable'}
+            with self.assertRaisesRegex(RuntimeError, 'Unavailable'):
+                cloud_sync.request_license_with_contact(cfg, machine_id='CD-1234-5678-90AB', name='Joe', company='Shop', phone='0721234567')
 
 
 if __name__=='__main__': unittest.main()

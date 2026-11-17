@@ -464,6 +464,26 @@ def request_online_activation(
     raise RuntimeError(str(err or 'Activation request failed.'))
 
 
+def request_license_with_contact(settings: dict | None, *, name: str, company: str, phone: str,
+                                 machine_id: str | None = None) -> dict:
+    """Submit the customer's details; never send keys or private credentials."""
+    name, company, phone = (' '.join(str(v or '').split()) for v in (name, company, phone))
+    if not name or not company or not phone:
+        raise ValueError('Enter your name, company name and phone number.')
+    if len(re.sub(r'[^0-9]', '', phone)) < 7:
+        raise ValueError('Enter a valid phone number (at least 7 digits).')
+    url, key = resolve_client_supabase(settings)
+    if not url or not key:
+        raise ValueError('Online requests are not configured on this computer.')
+    mid = license_guard.normalize_machine_id(machine_id or license_guard.get_machine_id())
+    res = _supabase_request(url, key, 'POST', '/rest/v1/rpc/submit_license_contact_request',
+        payload={'p_machine_id': mid, 'p_contact_name': name, 'p_company': company,
+                 'p_contact_phone': phone, 'p_station_name': default_station_name()})
+    if not isinstance(res, dict) or not res.get('ok'):
+        raise RuntimeError(str(res.get('error') if isinstance(res, dict) else 'Unexpected cloud response.'))
+    return res
+
+
 def sync_machine_entitlements_from_cloud(
     settings: dict | None,
     *,
@@ -571,6 +591,10 @@ def sync_machine_entitlements_from_cloud(
         'machine_id': mid,
         'activated': activated_items,
         'revoked': revoked_items,
+        'revocation_reasons': sorted({str(r.get('reason') or '').strip()
+            for r in (res.get('revoked_keys') or [])
+            if isinstance(r, dict) and str(r.get('license_id') or '') in revoked_ids
+            and str(r.get('reason') or '').strip()}),
     }
 
 

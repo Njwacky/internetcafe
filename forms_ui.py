@@ -191,7 +191,7 @@ def show_forms(app, parent, card, label, button, entry):
                 rebuild_fields_ui()
                 schedule_preview()
 
-            button(top, '✕', delete_field, secondary=True, width=32, height=26).pack(side='right', padx=(4, 0))
+            button(top, 'Delete', delete_field, secondary=True, width=32, height=26).pack(side='right', padx=(4, 0))
             button(top, '↓', lambda i=idx: move_field(i, 1), secondary=True, width=32, height=26).pack(side='right', padx=(4, 0))
             button(top, '↑', lambda i=idx: move_field(i, -1), secondary=True, width=32, height=26).pack(side='right')
 
@@ -280,7 +280,7 @@ def show_forms(app, parent, card, label, button, entry):
         sc = ctk.CTkScrollableFrame(win, fg_color='#141C2B', corner_radius=12)
         sc.pack(fill='both', expand=True, padx=18, pady=(16, 8))
         ctk.CTkLabel(sc, text='', image=st['img']).pack(pady=8)
-        button(win, '✕ Close', win.destroy, secondary=True, width=100, height=32).pack(pady=(0, 14))
+        button(win, 'Close', win.destroy, secondary=True, width=100, height=32).pack(pady=(0, 14))
         win.grab_set()
 
     button(nav_row, '⛶ Enlarge', open_large_preview, secondary=True, width=96, height=30).pack(side='right')
