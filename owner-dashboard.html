@@ -486,7 +486,7 @@
 
         <div class="mt20 dl-hero">
           <h3>Hand customers the official download</h3>
-          <p>Your public download page is live at <b style="color:var(--lime)">internetcafe.vercel.app</b> — no password needed. Send the link and the customer installs the Windows app themselves; this console stays private.</p>
+          <p>Your public download page is live at <b style="color:var(--lime)" id="publicHostInline">this site</b> — no password needed. Send the link and the customer installs the Windows app themselves; this console stays private.</p>
           <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:14px">
             <a class="btn btn-primary" href="/" target="_blank" rel="noopener">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4.5h5.5V10"/><path d="M19 5l-7.5 7.5"/><path d="M18 14v4.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 014 18.5v-11A1.5 1.5 0 015.5 6H10"/></svg>
@@ -1849,7 +1849,14 @@ function openDownloadHub(target) {
 }
 
 function publicPageUrl() {
-  return "https://internetcafe.vercel.app/";
+  // Derived from wherever this console is actually served. The download page and the
+  // console live in the same Vercel project, so the origin is always correct — no
+  // hardcoded domain, and preview/custom-domain deployments work unchanged.
+  return window.location.origin + "/";
+}
+
+function publicHostLabel() {
+  return window.location.host;
 }
 
 function findAsset(ext) {
@@ -1885,6 +1892,13 @@ function wireShareLinks() {
 }
 
 function renderDownloadHub() {
+  // Show the real host of this deployment instead of a hardcoded domain.
+  const host = publicHostLabel();
+  const inline = $("#publicHostInline");
+  if (inline) inline.textContent = host;
+  const chip = $("#publicHostChip");
+  if (chip) chip.textContent = host;
+
   const gh = state.gh;
   const exe = findAsset(".exe");
   const zip = findAsset(".zip");
@@ -1933,7 +1947,7 @@ function renderDownloadHub() {
         </div>
         <a class="btn btn-primary" href="/" target="_blank" rel="noopener">Open download page</a>
         <div class="hash-row">
-          <span class="hash">internetcafe.vercel.app</span>
+          <span class="hash" id="publicHostChip">this site</span>
           <button class="icon-btn" onclick="copyPublicLink()" title="Copy page link">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5.5A1.5 1.5 0 0013.5 4H5.5A1.5 1.5 0 004 5.5v8A1.5 1.5 0 005.5 15"/></svg>
           </button>
