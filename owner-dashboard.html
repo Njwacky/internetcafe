@@ -685,7 +685,7 @@
           <div class="card-h">
             <div>
               <h3>All machines &amp; shops</h3>
-              <div class="sub">Search by shop, machine ID or license ID. Revoke to lock a PC remotely; WhatsApp to send renewals.</div>
+              <div class="sub">Search by shop, machine ID or license ID. Pause or resume every key on a PC, or manage one key at a time. A paused PC locks on its next online check-in.</div>
             </div>
             <div class="actions">
               <button class="btn btn-ghost btn-sm" onclick="exportCsv()">⬇ Export CSV</button>
@@ -774,6 +774,24 @@
 
         <div class="card mt16">
           <div class="card-h">
+            <div><h3>Send a customer notification</h3><div class="sub">Publish what is coming in the next update, service notices, or promotions. Customers see these the next time they check for updates in Café Desk.</div></div>
+          </div>
+          <div class="grid g-3" style="gap:12px">
+            <div><label>Type</label><select id="announcementKind"><option value="update">What’s new / next update</option><option value="promotion">Promotion</option><option value="info">Service notice</option></select></div>
+            <div style="grid-column:span 2"><label>Title</label><input id="announcementTitle" maxlength="100" placeholder="e.g. New photo tools arriving soon"></div>
+          </div>
+          <label>Message</label>
+          <textarea id="announcementMessage" maxlength="1200" style="min-height:82px;font-family:inherit" placeholder="Tell customers what to expect or share promotion details…"></textarea>
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn btn-primary" id="sendAnnouncementBtn" onclick="publishAnnouncement()">📣 Send notification</button>
+          </div>
+          <div class="table-wrap mt16">
+            <table><thead><tr><th>Type</th><th>Title &amp; message</th><th>Published</th><th>Status</th><th>Action</th></tr></thead><tbody id="announcementsTbody"></tbody></table>
+          </div>
+        </div>
+
+        <div class="card mt16">
+          <div class="card-h">
             <div><h3>Published releases</h3><div class="sub">Auto-update offers these to every customer PC</div></div>
           </div>
           <div class="table-wrap">
@@ -785,8 +803,8 @@
         </div>
 
         <div class="card mt16">
-          <div class="card-h"><div><h3>Kill switch</h3><div class="sub">Instantly revoke a stolen or unpaid PC</div></div></div>
-          <div class="note">Revoking takes effect the next time that PC checks in online. Restore at any time from <b>Issue &amp; sign keys</b>.</div>
+          <div class="card-h"><div><h3>Pause / resume access</h3><div class="sub">Suspend a suspicious, lost, or unpaid computer remotely</div></div></div>
+          <div class="note">Pausing marks the machine key as revoked; Café Desk locks it at its next online key check-in. It cannot force an offline computer to lock immediately. Resume access at any time from <b>Issue &amp; sign keys</b>.</div>
           <div class="table-wrap mt16">
             <table>
               <thead><tr><th>Machine ID</th><th>Shop</th><th>Expires</th><th>Status</th><th>Action</th></tr></thead>
@@ -892,7 +910,7 @@ const DL_PAGE = `https://github.com/${REPO}/releases/latest`;
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const state = {
-  keys: [], reqs: [], releases: [], visits: [], stations: [], sales: [],
+  keys: [], reqs: [], releases: [], announcements: [], visits: [], stations: [], sales: [],
   gh: null, sums: null, days: 14, view: "overview", email: "",
   lastSync: null, telemetryError: false, loading: false,
 };
@@ -1145,10 +1163,11 @@ async function refreshAll(manual = false) {
   const since = new Date(Date.now() - 120 * 86400000);
   const sinceIso = since.toISOString();
 
-  const [keysRes, reqRes, relRes, visitsRes, stationsRes, salesRes] = await Promise.all([
+  const [keysRes, reqRes, relRes, annRes, visitsRes, stationsRes, salesRes] = await Promise.all([
     sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).limit(1000),
     sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
     sb.from("app_releases").select("*").order("published_at", { ascending: false }).limit(30),
+    sb.from("app_announcements").select("*").order("published_at", { ascending: false }).limit(50),
     fetchPaged(() => sb.from("workspace_tool_visits")
       .select("visit_date,machine_id,shop_id,shop_name,city_label,screen_name,visit_count,last_visited_at")
       .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true })).catch(() => null),
@@ -1162,6 +1181,7 @@ async function refreshAll(manual = false) {
   state.keys = keysRes.data || [];
   state.reqs = reqRes.data || [];
   state.releases = relRes.data || [];
+  state.announcements = annRes.error ? [] : (annRes.data || []);
 
   state.telemetryError = visitsRes === null;
   state.visits = visitsRes || [];
@@ -1601,9 +1621,10 @@ function renderKeysTable() {
         <div class="row-actions">
           <button class="btn btn-ghost btn-sm" data-copy="${attr(k.token)}">Copy key</button>
           <button class="btn btn-ghost btn-sm" data-wa="${attr(k.machine_id)}" data-token="${attr(k.token)}" data-cust="${attr(k.customer || "")}" data-exp="${attr(String(k.expires_at || "").slice(0, 10))}">WhatsApp</button>
+          ${(() => { const group = state.keys.filter(x => x.machine_id === k.machine_id); const paused = group.length > 0 && group.every(x => x.revoked); return `<button class="btn ${paused ? "btn-ghost" : "btn-danger"} btn-sm" data-pause-machine="${attr(k.machine_id)}" data-on="${paused ? "0" : "1"}">${paused ? "Resume PC" : "Pause PC"}</button>`; })()}
           ${k.revoked
-            ? `<button class="btn btn-ghost btn-sm" data-revoke="${attr(k.license_id)}" data-on="0">Restore</button>`
-            : `<button class="btn btn-danger btn-sm" data-revoke="${attr(k.license_id)}" data-on="1">Revoke</button>`}
+            ? `<button class="btn btn-ghost btn-sm" data-revoke="${attr(k.license_id)}" data-on="0">Resume key</button>`
+            : `<button class="btn btn-danger btn-sm" data-revoke="${attr(k.license_id)}" data-on="1">Pause key</button>`}
         </div>
       </td>
     </tr>`;
@@ -1647,6 +1668,14 @@ function renderFleet() {
       </tr>`).join("")
     : `<tr><td colspan="5" class="empty">No remote updates published yet. Builds from GitHub Actions publish automatically once synced.</td></tr>`;
 
+  const at = $("#announcementsTbody");
+  if (at) at.innerHTML = state.announcements.length ? state.announcements.map((a) => `
+    <tr><td><span class="badge ${a.kind === "promotion" ? "b-warn" : a.kind === "update" ? "b-blue" : "b-mute"}">${esc(a.kind || "info")}</span></td>
+      <td><strong>${esc(a.title)}</strong><div class="cell-sub" style="white-space:normal;max-width:440px">${esc(a.message)}</div></td>
+      <td class="mono" style="font-size:11px">${esc(String(a.published_at || "").slice(0, 10))}</td>
+      <td><span class="badge ${a.active ? "b-ok" : "b-mute"}">${a.active ? "Live" : "Hidden"}</span></td>
+      <td><button class="btn btn-ghost btn-sm" data-announcement-toggle="${attr(a.id)}" data-active="${a.active ? "1" : "0"}">${a.active ? "Hide" : "Show"}</button></td></tr>`).join("") : `<tr><td colspan="5" class="empty">No notifications published yet.</td></tr>`;
+
   const kt = state.keys.slice(0, 25);
   $("#killTbody").innerHTML = kt.length
     ? kt.map((k) => {
@@ -1657,7 +1686,7 @@ function renderFleet() {
           <td>${esc(k.customer || "—")}</td>
           <td class="mono" style="font-size:11.4px">${esc(String(k.expires_at || "").slice(0, 10))}</td>
           <td>${badge}</td>
-          <td><button class="btn ${k.revoked ? "btn-ghost" : "btn-danger"} btn-sm" data-revoke="${attr(k.license_id)}" data-on="${k.revoked ? "0" : "1"}">${k.revoked ? "Restore" : "Revoke"}</button></td>
+          <td><button class="btn ${k.revoked ? "btn-ghost" : "btn-danger"} btn-sm" data-revoke="${attr(k.license_id)}" data-on="${k.revoked ? "0" : "1"}">${k.revoked ? "Resume key" : "Pause key"}</button></td>
         </tr>`;
       }).join("")
     : `<tr><td colspan="5" class="empty">No machines yet.</td></tr>`;
@@ -1683,20 +1712,48 @@ document.addEventListener("click", async (e) => {
     return;
   }
 
+  const pauseMachineBtn = e.target.closest("[data-pause-machine]");
+  if (pauseMachineBtn) {
+    const machineId = pauseMachineBtn.dataset.pauseMachine;
+    const pause = pauseMachineBtn.dataset.on === "1";
+    const licenses = state.keys.filter((k) => k.machine_id === machineId && Boolean(k.revoked) !== pause);
+    if (!licenses.length) return;
+    if (!confirm(`${pause ? "Pause" : "Resume"} all ${licenses.length} key(s) for ${machineId}? ${pause ? "The app will lock on its next online key check-in." : "The computer can check in and reactivate its keys again."}`)) return;
+    pauseMachineBtn.disabled = true;
+    try {
+      for (const key of licenses) await callOwnerAdmin({ action: "set_revoked", license_id: key.license_id, revoked: pause });
+      toast(pause ? `All keys paused for ${machineId}.` : `All keys resumed for ${machineId}.`);
+      await refreshAll();
+    } catch (err) { toast(err.message, "err"); pauseMachineBtn.disabled = false; }
+    return;
+  }
+
   const revokeBtn = e.target.closest("[data-revoke]");
   if (revokeBtn) {
     const lid = revokeBtn.dataset.revoke;
     const on = revokeBtn.dataset.on === "1";
-    if (!confirm(`${on ? "REVOKE (remotely lock)" : "RESTORE"} license ${lid}?`)) return;
+    if (!confirm(`${on ? "PAUSE this computer's access" : "RESUME this computer's access"} for license ${lid}? ${on ? "It will take effect when the PC next checks in online." : "The key will be active again."}`)) return;
     revokeBtn.disabled = true;
     try {
       await callOwnerAdmin({ action: "set_revoked", license_id: lid, revoked: on });
-      toast(on ? "Machine revoked — it will lock on next check-in." : "License restored.");
+      toast(on ? "Access paused — the PC will be locked on its next online check-in." : "Access resumed — the PC can check in again.");
       await refreshAll();
     } catch (err) {
       toast(err.message, "err");
       revokeBtn.disabled = false;
     }
+    return;
+  }
+
+  const announcementBtn = e.target.closest("[data-announcement-toggle]");
+  if (announcementBtn) {
+    announcementBtn.disabled = true;
+    try {
+      const active = announcementBtn.dataset.active !== "1";
+      const { error } = await sb.from("app_announcements").update({ active }).eq("id", announcementBtn.dataset.announcementToggle);
+      if (error) throw error;
+      toast(active ? "Notification is live again." : "Notification hidden from customers.", "info"); await refreshAll();
+    } catch (err) { toast(err.message || "Could not update notification.", "err"); announcementBtn.disabled = false; }
     return;
   }
 
@@ -1824,6 +1881,21 @@ async function publishReleaseNow() {
     btn.disabled = false;
     btn.textContent = "🚀 Upload & publish";
   }
+}
+
+async function publishAnnouncement() {
+  const title = $("#announcementTitle").value.trim();
+  const message = $("#announcementMessage").value.trim();
+  const kind = $("#announcementKind").value;
+  if (!title || !message) return toast("Enter a title and message first.", "err");
+  const btn = $("#sendAnnouncementBtn"); btn.disabled = true;
+  try {
+    const { error } = await sb.from("app_announcements").insert({ title, message, kind, active: true });
+    if (error) throw error;
+    $("#announcementTitle").value = ""; $("#announcementMessage").value = "";
+    toast("Notification published; customers will see it when they check for updates."); await refreshAll();
+  } catch (err) { toast(err.message || "Could not publish notification.", "err"); }
+  finally { btn.disabled = false; }
 }
 
 async function syncGithubRelease() {

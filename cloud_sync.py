@@ -301,6 +301,24 @@ def check_for_app_update(
     }
 
 
+
+def fetch_app_announcements(settings: dict | None = None, *, limit: int = 10, timeout: float = 8.0) -> list[dict]:
+    """Fetch currently active customer-facing notices and promotions."""
+    url, key = resolve_client_supabase(settings)
+    if not url or not key:
+        return []
+    try:
+        rows = _supabase_request(
+            url, key, 'GET',
+            '/rest/v1/app_announcements?select=title,message,kind,published_at&active=eq.true&order=published_at.desc&limit=' + str(max(1, min(int(limit), 30))),
+            timeout=timeout,
+        )
+    except Exception:
+        # Older installations may not have applied the optional announcements migration yet.
+        return []
+    return rows if isinstance(rows, list) else []
+
+
 def compute_file_sha256(file_path: Path | str) -> str:
     h = hashlib.sha256()
     with open(file_path, 'rb') as fh:

@@ -1475,6 +1475,13 @@ class DiagnosticRemediationTests(unittest.TestCase):
                     self.assertTrue(upd['update_available'])
                     self.assertEqual(upd['latest_version'],'0.9.0')
 
+                with mock.patch.object(cloud_sync,'_supabase_request',return_value=[{'title':'Summer offer','message':'Save on renewals this month.','kind':'promotion'}]) as request:
+                    notices=cloud_sync.fetch_app_announcements(cfg)
+                    self.assertEqual(notices[0]['kind'],'promotion')
+                    self.assertIn('app_announcements?',request.call_args.args[3])
+                with mock.patch.object(cloud_sync,'resolve_client_supabase',return_value=('','')):
+                    self.assertEqual(cloud_sync.fetch_app_announcements({}),[])
+
                 # Online sync activates both base 1-year seat license and PDF unlock add-on
                 with mock.patch.object(cloud_sync,'_supabase_request',return_value={
                     'ok':True,
