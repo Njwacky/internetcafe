@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "customtkinter>=5.2.2,<6",
-    "pypdf>=5,<7",
+    "pypdf>=5,<8",
     "Pillow>=13.0.0,<14",
     "reportlab>=4,<5",
     "requests>=2.31,<3",
