@@ -1,4 +1,4 @@
-customtkinter>=5.2.2,<6
+customtkinter>=5.2.2,<7
 pypdf>=5,<8
 Pillow>=13.0.0,<14
 reportlab>=4,<6
