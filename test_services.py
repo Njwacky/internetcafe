@@ -1948,6 +1948,50 @@ class ReleaseKeyGuardTests(unittest.TestCase):
             self.assertLess(src.index('check_release_key.py'), src.index('PyInstaller'),
                             f'{name} runs the guard after packaging')
 
+    def test_rejects_private_key_and_malformed_secret_values(self):
+        """A pasted secret must be a real 32-byte Ed25519 PUBLIC key.
+
+        The dangerous case: an Ed25519 private key is also 32 bytes, so it passes every
+        structural check but breaks activation on every customer PC.
+        """
+        import base64, shutil, subprocess, sys, os
+        from cryptography.hazmat.primitives import serialization as _s
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            priv = Ed25519PrivateKey.generate()
+            priv_b64 = base64.urlsafe_b64encode(priv.private_bytes(
+                encoding=_s.Encoding.Raw, format=_s.PrivateFormat.Raw,
+                encryption_algorithm=_s.NoEncryption())).decode().rstrip('=')
+            pub_b64 = base64.urlsafe_b64encode(priv.public_key().public_bytes(
+                encoding=_s.Encoding.Raw, format=_s.PublicFormat.Raw)).decode().rstrip('=')
+            # Simulate the owner's laptop, where the private key file exists.
+            (root / 'owner-keys').mkdir()
+            (root / 'owner-keys' / 'cafedesk_owner.private.key').write_text(priv_b64, encoding='utf-8')
+
+            ok = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': pub_b64})
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+
+            leak = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': priv_b64})
+            self.assertEqual(leak.returncode, 1, 'pasting the PRIVATE key must be refused')
+            self.assertIn('PRIVATE signing key', leak.stdout + leak.stderr)
+
+            for bad, why in (
+                ('tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLE', 'short key'),
+                ('CDLIC1.eyJ2IjoxfQ.abc', 'licence token'),
+                ('-----BEGIN PUBLIC KEY-----', 'PEM block'),
+            ):
+                res = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': bad})
+                self.assertEqual(res.returncode, 1, f'{why} must be refused')
+                self.assertIn('Invalid CAFE_DESK_PUBLIC_KEY secret', res.stdout + res.stderr)
+
+            # Quotes / stray whitespace around a correct key are tolerated.
+            messy = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': f'  "{pub_b64}"  '})
+            self.assertEqual(messy.returncode, 0, messy.stdout + messy.stderr)
+        finally:
+            tmp.cleanup()
+
     def test_allow_demo_flag_and_env_escape_hatch(self):
         import os
         tmp = tempfile.TemporaryDirectory()

@@ -25,6 +25,7 @@ Exit codes: 0 = ok / warned, 1 = enforcement failed.
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import re
 import subprocess
@@ -36,6 +37,60 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import admin_keygen  # noqa: E402
+
+
+_B64U_RE = re.compile(r'^[A-Za-z0-9_-]+={0,2}$')
+
+
+def validate_public_key_material(value: str) -> str:
+    """Reject anything that is not a usable Ed25519 PUBLIC key.
+
+    A pasted value can be wrong in ways that are invisible at build time and only
+    surface at the customer's desk:
+
+    * an Ed25519 PRIVATE key is also 32 bytes, so pasting `cafedesk_owner.private.key`
+      by mistake would be embedded as the verification key and every activation would
+      fail with "Configured owner public key is invalid";
+    * a `.cafedesk` license token, a PEM block, or a key with a trailing newline
+      silently corrupts the embedded constant;
+    * a key of the wrong length can never verify a signature.
+
+    Returns the cleaned key, or raises ValueError with a copy-pasteable message.
+    """
+    raw = (value or '').strip().strip('"').strip("'")
+    if not raw:
+        raise ValueError('The value is empty.')
+    if 'BEGIN' in raw or 'PRIVATE' in raw.upper():
+        raise ValueError('That looks like a PEM/private key file. Use the CONTENTS of '
+                         'owner-keys/cafedesk_owner.public.txt only.')
+    if raw.startswith(('CDLIC1.', 'CDADD1.')):
+        raise ValueError('That is a customer license/activation key, not the owner public key.')
+    if not _B64U_RE.match(raw):
+        raise ValueError('That is not a base64url string. Copy the single line from '
+                         'owner-keys/cafedesk_owner.public.txt with no spaces or quotes.')
+    padded = raw + '=' * ((4 - len(raw) % 4) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded)
+    except Exception as exc:
+        raise ValueError(f'That is not valid base64url ({exc}).') from exc
+    if len(decoded) != 32:
+        raise ValueError(f'An Ed25519 public key must decode to 32 bytes; this decodes to '
+                         f'{len(decoded)}. Copy the line from owner-keys/cafedesk_owner.public.txt.')
+
+    # A 32-byte PRIVATE key is byte-for-byte indistinguishable from a public key by shape,
+    # and pasting it would pass every structural check yet break activation on every
+    # customer PC ("Configured owner public key is invalid"). On the owner's own machine we
+    # can compare against the private key file directly; in CI the file does not exist
+    # (it is gitignored), so this is skipped there.
+    priv_path = REPO_ROOT / 'owner-keys' / 'cafedesk_owner.private.key'
+    if priv_path.is_file():
+        try:
+            if priv_path.read_text(encoding='utf-8').strip() == raw:
+                raise ValueError('That is your PRIVATE signing key. Never put it in a GitHub secret. '
+                                 'Use owner-keys/cafedesk_owner.public.txt instead.')
+        except OSError:
+            pass
+    return raw
 
 
 def _emit(level: str, title: str, message: str) -> None:
@@ -68,6 +123,13 @@ def main(argv: list[str] | None = None) -> int:
             _emit('error', 'Missing signing key', 'CAFE_DESK_PUBLIC_KEY is empty; cannot apply the owner public key.')
             return 1
         try:
+            secret = validate_public_key_material(secret)
+        except ValueError as exc:
+            _emit('error', 'Invalid CAFE_DESK_PUBLIC_KEY secret',
+                  f'{exc} (Expected the 32-byte Ed25519 PUBLIC key from '
+                  f'owner-keys/cafedesk_owner.public.txt.)')
+            return 1
+        try:
             admin_keygen.apply_public_key_to_guard(secret)
         except (RuntimeError, OSError) as exc:
             _emit('error', 'Could not apply owner public key', str(exc))
@@ -77,6 +139,11 @@ def main(argv: list[str] | None = None) -> int:
     # imported module would still see the pre-`--apply` value in this process, which
     # would wrongly block every correctly-signed release build.
     active = _key_in_source()
+    try:
+        active = validate_public_key_material(active)
+    except ValueError as exc:
+        _emit('error', 'Embedded owner key is unusable', str(exc))
+        return 1
     demo_active = active == _pristine_demo_key()
     if demo_active:
         _emit(
