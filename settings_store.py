@@ -168,24 +168,39 @@ def load_settings(path=None,strict=False):
         if strict: raise
         return _default_dict()
 def load_name(path=None): return load_settings(path)['business_name']
+def _harden(path):
+    """Owner-only permissions: POSIX 0600 + Windows icacls (chmod alone is a no-op on Windows)."""
+    try:
+        os.chmod(path,0o600)
+    except OSError:
+        pass
+    if sys.platform=='win32':
+        try:
+            import subprocess
+            user=os.environ.get('USERNAME','').strip()
+            if user:
+                subprocess.run(['icacls',str(path),'/inheritance:r','/grant:r',f'{user}:F'],capture_output=True,timeout=10,check=False)
+        except (OSError,subprocess.SubprocessError):
+            pass
+
 def _write(data,path=None):
     target=Path(path or settings_path()); target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     backup=target.with_name(target.name+'.bak')
     fd,tmp=tempfile.mkstemp(prefix='.settings-',suffix='.json',dir=target.parent)
     try:
         with os.fdopen(fd,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False,indent=2)
-        try: os.chmod(tmp,0o600)
-        except OSError: pass
+        _harden(tmp)
         os.replace(tmp,target)
+        _harden(target)
         # Keep settings.json.bak synchronized with the latest verified good state
         try:
             _parse_settings_file(target)
             fd_b,tmp_b=tempfile.mkstemp(prefix='.settings-bak-',suffix='.json',dir=target.parent)
             try:
                 with os.fdopen(fd_b,'wb') as fb: fb.write(target.read_bytes())
-                try: os.chmod(tmp_b,0o600)
-                except OSError: pass
+                _harden(tmp_b)
                 os.replace(tmp_b,backup)
+                _harden(backup)
             finally:
                 if os.path.exists(tmp_b): os.unlink(tmp_b)
         except Exception:

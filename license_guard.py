@@ -79,6 +79,19 @@ def is_demo_public_key_active() -> bool:
     return configured_public_key_b64() == DEFAULT_OWNER_PUBLIC_KEY_B64
 
 
+DEMO_KEY_WARNING = (
+    '⚠ DEMO SIGNING KEY ACTIVE: This build still uses the sample Ed25519 public key '
+    'shipped in the repo. Run `python admin_keygen.py --init-keys --apply-public-key` '
+    'on your private laptop and rebuild before selling or distributing this app. '
+    'Licenses signed with the demo key must not be trusted in production.'
+)
+
+
+def demo_key_warning() -> str | None:
+    """Return a warning string if the demo public key is active, else None."""
+    return DEMO_KEY_WARNING if is_demo_public_key_active() else None
+
+
 def is_license_required() -> bool:
     """Frozen `.exe` builds ALWAYS enforce license activation.
 

@@ -151,7 +151,7 @@ def show_reports(app,parent,card,label,button,entry):
             )
         secret=simpledialog.askstring(
             'Multi-PC Cloud Sales Sync',
-            f"Enter Shop Sync Passcode for {cfg.get('shop_id')} (4+ characters):",
+            f"Enter Shop Sync Passcode for {cfg.get('shop_id')} (10+ characters):",
             show='•',
             parent=app,
         )

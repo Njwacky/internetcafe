@@ -324,7 +324,7 @@ class CafeDesk(ctk.CTk):
                 return messagebox.showerror('Check settings',str(exc),parent=self)
             if not saved.get('shop_id') or not cloud_sync.is_supabase_configured(saved):
                 return messagebox.showinfo('Setup needed','Enter a Shop ID plus your Supabase Project URL and Anon Key above first.',parent=self)
-            sec=simpledialog.askstring('Push Shop Prices to Supabase',f"Set/enter Shop Sync Passcode for {saved['shop_id']} (4+ characters):",show='•',parent=self)
+            sec=simpledialog.askstring('Push Shop Prices to Supabase',f"Set/enter Shop Sync Passcode for {saved['shop_id']} (10+ characters):",show='•',parent=self)
             if not sec: return
             self.job('Uploading shop price list to Supabase…',lambda:cloud_sync.push_shop_price_profile(saved,sec),lambda _:messagebox.showinfo('Prices Pushed to Cloud',f"Uploaded {len(saved.get('prices',[]))} price(s) for {saved['shop_id']}. Other PCs in your shop can now click 'Pull Prices from Cloud'.",parent=self))
 
@@ -670,6 +670,7 @@ class CafeDesk(ctk.CTk):
                         res['sha256'],
                         dl_dir,
                         version_label=res['latest_version'],
+                        expected_signature=res.get('signature',''),
                     )
                 def _done_dl(saved_installer):
                     self.status.set(f'Verified update downloaded: {saved_installer.name}')
@@ -722,6 +723,9 @@ class CafeDesk(ctk.CTk):
         lic_box.pack_forget()
         lic_box.pack(fill='x',pady=(0,12),before=contact_box)
         label(lic_box,'1-Year Computer License & Machine ID',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
+        _demo_warn=license_guard.demo_key_warning()
+        if _demo_warn:
+            label(lic_box,_demo_warn,size=12,bold=True,color='#FFB8B0',wraplength=740,justify='left').pack(anchor='w',padx=20,pady=(0,10))
         mid_val=lic_status.get('machine_id') or license_guard.get_machine_id()
         if lic_status.get('valid'):
             days_left=lic_status.get('days_remaining',0)
@@ -845,7 +849,7 @@ class CafeDesk(ctk.CTk):
         if not messagebox.askyesno('Permanent deletion',f'Permanently delete this file? It will not go to the Recycle Bin and cannot be undone:\n\n{path}\n\nDeleting an original photo can break a project. This does not securely erase other copies or backups.',parent=self):return
         confirm=simpledialog.askstring('Confirm deletion','Type DELETE to permanently remove the selected file:',parent=self)
         if confirm!='DELETE':return
-        try:p.unlink();messagebox.showinfo('File deleted','The selected file was deleted. Other copies and backups were not removed.',parent=self)
+        try:services.secure_delete(p);messagebox.showinfo('File deleted','The selected file was securely overwritten and deleted. Other copies and backups were not removed.',parent=self)
         except OSError as exc:messagebox.showerror('Could not delete file',str(exc),parent=self)
     def price_list_screen(self):
         self.heading(self.body,'Price list','A clear, read-only guide to this business’s services and prices.')

@@ -1686,4 +1686,80 @@ class WorkspaceTelemetryTests(unittest.TestCase):
             self.assertIn(fragment,wf)
 
 
+class SecurityHardeningTests(unittest.TestCase):
+    """Regression tests for the security audit fixes (demo key, sync secret, CSP, release signing)."""
+
+    def test_demo_key_warning_is_surfaced(self):
+        import license_guard
+        self.assertTrue(license_guard.is_demo_public_key_active())
+        self.assertIn('DEMO SIGNING KEY', license_guard.demo_key_warning())
+        ui_src = (Path(__file__).resolve().parent / 'license_ui.py').read_text(encoding='utf-8')
+        self.assertIn('is_demo_public_key_active', ui_src)
+        self.assertIn('DEMO_KEY_WARNING', ui_src)
+        app_src = (Path(__file__).resolve().parent / 'app.py').read_text(encoding='utf-8')
+        self.assertIn('demo_key_warning', app_src)
+
+    def test_shop_sync_secret_requires_10_chars(self):
+        import cloud_sync
+        self.assertEqual(cloud_sync.SHOP_SYNC_MIN_SECRET_LEN, 10)
+        with self.assertRaisesRegex(ValueError, '10\\+ characters'):
+            cloud_sync.hash_shop_sync_secret('SHOP-SUNRISE', 'short')
+        digest = cloud_sync.hash_shop_sync_secret('SHOP-SUNRISE', 'longenoughpass1')
+        self.assertEqual(len(digest), 64)
+        # Domain-separated: same secret under different shop IDs differs.
+        self.assertNotEqual(digest, cloud_sync.hash_shop_sync_secret('SHOP-OTHER', 'longenoughpass1'))
+
+    def test_vercel_sets_csp_hsts_and_permissions_policy(self):
+        import json
+        repo = Path(__file__).resolve().parent
+        cfg = json.loads((repo / 'vercel.json').read_text(encoding='utf-8'))
+        headered = {h['source']: {x['key']: x['value'] for x in h['headers']} for h in cfg['headers']}
+        root = headered['/(.*)']
+        self.assertIn('Content-Security-Policy', root)
+        self.assertIn("frame-ancestors 'none'", root['Content-Security-Policy'])
+        self.assertIn('cdn.jsdelivr.net', root['Content-Security-Policy'])
+        self.assertIn('max-age=63072000', root['Strict-Transport-Security'])
+        self.assertIn('camera=()', root['Permissions-Policy'])
+        # Owner console must never be cached.
+        self.assertIn('no-store', headered['/owner-dashboard.html']['Cache-Control'])
+
+    def test_release_signature_roundtrip_and_tamper_rejection(self):
+        import base64
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        import cloud_sync
+        priv = Ed25519PrivateKey.generate()
+        priv_b64 = base64.urlsafe_b64encode(priv.private_bytes(
+            encoding=__import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding']).Encoding.Raw,
+            format=__import__('cryptography.hazmat.primitives.serialization', fromlist=['PrivateFormat']).PrivateFormat.Raw,
+            encryption_algorithm=__import__('cryptography.hazmat.primitives.serialization', fromlist=['NoEncryption']).NoEncryption(),
+        )).decode('ascii').rstrip('=')
+        pub_b64 = base64.urlsafe_b64encode(priv.public_key().public_bytes(
+            encoding=__import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding']).Encoding.Raw,
+            format=__import__('cryptography.hazmat.primitives.serialization', fromlist=['PublicFormat']).PublicFormat.Raw,
+        )).decode('ascii').rstrip('=')
+        sha = 'a' * 64
+        sig = cloud_sync.sign_release_sha256('0.8.3', sha, priv_b64)
+        self.assertTrue(cloud_sync.verify_release_signature('0.8.3', sha, sig, pub_b64))
+        # Tampered hash or version must fail.
+        self.assertFalse(cloud_sync.verify_release_signature('0.8.3', 'b' * 64, sig, pub_b64))
+        self.assertFalse(cloud_sync.verify_release_signature('0.8.4', sha, sig, pub_b64))
+        self.assertFalse(cloud_sync.verify_release_signature('0.8.3', sha, 'not-a-sig', pub_b64))
+
+    def test_secure_delete_overwrites_and_removes(self):
+        import services
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'secret.txt'
+            p.write_bytes(b'SENSITIVE-DATA-12345')
+            services.secure_delete(p)
+            self.assertFalse(p.exists())
+        finally:
+            tmp.cleanup()
+
+    def test_owner_dashboard_hard_gates_non_owner(self):
+        dash = (Path(__file__).resolve().parent / 'owner-dashboard.html').read_text(encoding='utf-8')
+        self.assertIn('Access denied', dash)
+        self.assertIn('$("#appView").classList.add("hidden")', dash)
+
+
 if __name__=='__main__': unittest.main()
