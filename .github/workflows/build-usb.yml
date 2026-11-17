@@ -142,7 +142,7 @@ jobs:
           } | ConvertTo-Json -Depth 4 | Set-Content -Path "CafeDesk-Release-Checksums.json" -Encoding UTF8
 
       - name: Upload Windows USB Portable ZIP & Setup.exe artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CafeDesk-Windows-USB-and-Installer
           path: |
