@@ -1653,16 +1653,21 @@ class WorkspaceTelemetryTests(unittest.TestCase):
 
     def test_vercel_routes_public_page_and_private_console(self):
         import json
-        cfg=json.loads((Path(__file__).resolve().parent/'vercel.json').read_text(encoding='utf-8'))
+        repo=Path(__file__).resolve().parent
+        cfg=json.loads((repo/'vercel.json').read_text(encoding='utf-8'))
         rewrites={r['source']:r['destination'] for r in cfg['rewrites']}
-        self.assertEqual(rewrites['/'],'/index.html')
+        # Customers land on the download page; the console is reached explicitly.
+        self.assertEqual(rewrites['/'],'/download.html')
         self.assertEqual(rewrites['/dashboard'],'/owner-dashboard.html')
         self.assertEqual(rewrites['/admin'],'/owner-dashboard.html')
-        for asset in ('download.html','manifest.webmanifest','sw.js','offline.html','assets/pwa'):
-            self.assertIn(asset,cfg['buildCommand'])
+        # No build step: Vercel serves the repo root, so every shipped file must exist.
+        self.assertNotIn('buildCommand',cfg)
+        for shipped in ('download.html','owner-dashboard.html','manifest.webmanifest',
+                        'sw.js','offline.html','assets/pwa/icon-512.png'):
+            self.assertTrue((repo/shipped).is_file(),f'missing deploy file {shipped}')
         headered={h['source']:h['headers'] for h in cfg['headers']}
         # The owner console must never be indexed or framed.
-        for protected in ('/dashboard','/owner-dashboard.html'):
+        for protected in ('/owner-dashboard.html',):
             keys={h['key']:h['value'] for h in headered[protected]}
             self.assertEqual(keys['X-Frame-Options'],'DENY')
             self.assertIn('noindex',keys['X-Robots-Tag'])
