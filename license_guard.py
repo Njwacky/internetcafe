@@ -46,9 +46,16 @@ KNOWN_PAID_FEATURES = {FEATURE_PDF_UNLOCK}
 MACHINE_ID_SALT = b'CafeDesk-Hardware-Lock-v1'
 CLOCK_ROLLBACK_GRACE_DAYS = 2
 
+# The sample Ed25519 owner key that ships in this repository. NEVER trust it in a
+# customer build — CI (.github/workflows/build-usb.yml) and packaging/build-windows.bat
+# refuse to produce a release while DEFAULT_OWNER_PUBLIC_KEY_B64 still equals this.
+DEMO_OWNER_PUBLIC_KEY_B64 = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
+
 # Default embedded Ed25519 public key (32 raw bytes, URL-safe base64).
 # Run `python admin_keygen.py --init-keys` once on YOUR private laptop to generate
 # your own private/public keypair and replace this public key before selling builds!
+# NOTE: rewritten in-place by `admin_keygen.py --apply-public-key` — the line shape must stay
+# `DEFAULT_OWNER_PUBLIC_KEY_B64 = '<base64>'` so the rewrite keeps working.
 DEFAULT_OWNER_PUBLIC_KEY_B64 = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
 
 
@@ -84,8 +91,25 @@ def configured_public_key_b64() -> str:
     return DEFAULT_OWNER_PUBLIC_KEY_B64
 
 
+def embedded_public_key_b64() -> str:
+    """The public key baked into this build (never the environment override)."""
+    return DEFAULT_OWNER_PUBLIC_KEY_B64
+
+
+def embedded_public_key_is_demo() -> bool:
+    """True while the embedded key is the sample demo key from this repo.
+
+    Release pipelines must hard-fail on this: every customer would otherwise
+    verify licences (and update signatures) against a public key committed to
+    the repository, so anyone could mint themselves a licence. Unlike
+    `configured_public_key_b64()`, this deliberately ignores CAFE_DESK_PUBLIC_KEY.
+    """
+    return DEFAULT_OWNER_PUBLIC_KEY_B64 == DEMO_OWNER_PUBLIC_KEY_B64
+
+
 def is_demo_public_key_active() -> bool:
-    return configured_public_key_b64() == DEFAULT_OWNER_PUBLIC_KEY_B64
+    """True when this run cannot be trusted in production because a demo key is in play."""
+    return embedded_public_key_is_demo() or configured_public_key_b64() == DEMO_OWNER_PUBLIC_KEY_B64
 
 
 DEMO_KEY_WARNING = (

@@ -1,4 +1,4 @@
-# Café Desk — Local-First Desktop Document Studio (`v0.7.0`)
+# Café Desk — Local-First Desktop Document Studio (`v0.8.2`)
 
 A local-first desktop application for internet cafés, copy shops, and walk-in service desks, written in Python with CustomTkinter. Staff and customers use the same workspace; administrative settings, sales reports, recovery copies, and optional AI polishing require a staff PIN. For shared walk-in computers, always run Café Desk inside a standard (non-Administrator) operating-system user account.
 
@@ -92,7 +92,7 @@ Python 3.11+ and internet access are needed only on the build computer:
 
 Unsigned Windows/macOS builds can show SmartScreen/Gatekeeper prompts (`More info` → `Run anyway` on Windows); wider distribution may use code signing.
 
-## Commercial Per-Computer Locking & 1-Year Licensing (`v0.7.0`)
+## Commercial Per-Computer Locking & 1-Year Licensing (`v0.8.2`)
 
 Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 1 — Offline Hardware Machine-ID + 1-Year Ed25519 Signed Activation**:
 
@@ -129,6 +129,7 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
    *Why the demo key must never ship:* it is a placeholder that lives in this repository. The matching **private** half was never committed, so a stranger cannot forge a licence from it today — but you have no control over who holds it, you cannot revoke or rotate it away from copies already distributed, and anyone who ever obtained it (an old contractor, a leaked backup) could issue themselves keys you can never distinguish from your own. A build signed with your own keypair is the only one you control.
 
    - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.
+   - **CI release builds and local `build-windows.bat` both refuse to build while the demo key is embedded** (pull requests only warn — those artifacts are throw-away). Frozen `.exe` builds also ignore the `CAFE_DESK_PUBLIC_KEY` environment override entirely; source runs and the test suite keep it for development.
 
 2. **Installing & Activating on a Customer's Computer:**
    - Copy `dist\CafeDesk` (or `CafeDesk-Setup.exe`) from your USB onto the customer's PC and launch `CafeDesk.exe`.

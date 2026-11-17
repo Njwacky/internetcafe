@@ -92,6 +92,13 @@ def generate_owner_keypair(priv_path: Path = DEFAULT_PRIV_PATH, pub_path: Path =
 def apply_public_key_to_guard(pub_b64: str, guard_file: Path | None = None) -> None:
     """Update `DEFAULT_OWNER_PUBLIC_KEY_B64` inside `license_guard.py` before building customer `.exe`."""
     target = guard_file or (REPO_DIR / 'license_guard.py')
+    pub_b64 = str(pub_b64 or '').strip()
+    try:
+        raw = _b64u_decode(pub_b64)
+    except Exception as exc:
+        raise RuntimeError(f'Owner public key is not valid URL-safe base64: {exc}') from exc
+    if len(raw) != 32:
+        raise RuntimeError(f'Owner public key must decode to 32 bytes (Ed25519), got {len(raw)} bytes.')
     src = target.read_text(encoding='utf-8')
     updated, count = re.subn(
         r"^DEFAULT_OWNER_PUBLIC_KEY_B64\s*=\s*'[^']*'",

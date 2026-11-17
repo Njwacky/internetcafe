@@ -34,3 +34,13 @@ make_nav('bluetooth-nav-muted',lambda p:p([(6,7),(14,13),(10,17),(10,3),(14,7),(
 make_nav('enlarge',lambda p:(p([(3,8),(3,3),(8,3)]),p([(12,3),(17,3),(17,8)]),p([(17,12),(17,17),(12,17)]),p([(8,17),(3,17),(3,12)]),p([(3.5,3.5),(7.5,7.5)]),p([(16.5,3.5),(12.5,7.5)]),p([(16.5,16.5),(12.5,12.5)]),p([(3.5,16.5),(7.5,12.5)])),'#FFFFFF')
 
 
+
+# --- Windows application icon (used by PyInstaller --icon and Inno Setup SetupIconFile) ---
+def make_ico():
+    src=Path(__file__).parent/'assets'/'pwa'/'icon-512.png'
+    out=Path(__file__).parent/'assets'/'icons'/'cafedesk.ico'
+    im=Image.open(src).convert('RGBA')
+    im.save(out,sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
+    return out
+if __name__=='__main__':
+    print('Wrote', make_ico())
