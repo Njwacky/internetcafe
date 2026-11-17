@@ -1,6 +1,6 @@
 """Local document operations for Café Desk. No GUI dependencies."""
 from pathlib import Path
-import os, tempfile, io, shutil
+import os, tempfile, io, shutil, subprocess, sys
 from xml.sax.saxutils import escape
 from pypdf import PdfReader, PdfWriter
 from PIL import Image, ImageOps, ImageSequence
@@ -19,6 +19,53 @@ MAX_PDF_PAGES=2000
 MAX_PDF_FILE_BYTES=150*1024*1024
 MAX_PDF_PAGE_DIM_PT=14400.0
 Image.MAX_IMAGE_PIXELS=MAX_IMAGE_PIXELS
+
+def harden_file_permissions(path):
+    """Best-effort owner-only permissions. POSIX chmod 0600; Windows icacls owner-only ACL.
+
+    Windows `os.chmod` is a no-op for ACLs, so without this step settings/sales
+    files inherit broad profile permissions on shared café PCs.
+    """
+    p = Path(path)
+    try:
+        if sys.platform == 'win32':
+            user = os.environ.get('USERNAME', '').strip()
+            if user:
+                subprocess.run(
+                    ['icacls', str(p), '/inheritance:r', '/grant:r', f'{user}:F'],
+                    capture_output=True, timeout=10, check=False,
+                )
+        else:
+            os.chmod(p, 0o600)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def secure_delete(path):
+    """Overwrite file contents with random bytes, then unlink (best-effort secure erase).
+
+    SSDs / copy-on-write filesystems may retain data regardless; this is strictly
+    better than a plain unlink for magnetic media and shared-PC hygiene.
+    """
+    p = Path(path)
+    try:
+        size = p.stat().st_size
+    except OSError:
+        size = 0
+    if size > 0 and p.is_file() and not p.is_symlink():
+        try:
+            with open(p, 'r+b') as fh:
+                remaining = size
+                while remaining > 0:
+                    chunk = os.urandom(min(1024 * 1024, remaining))
+                    fh.write(chunk)
+                    remaining -= len(chunk)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError:
+            pass
+    p.unlink(missing_ok=True)
+
 
 def assert_safe_user_input(source, data_dir=None):
     """Refuse to open or exfiltrate files inside Café Desk's internal settings/sales/recovery directory."""

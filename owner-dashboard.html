@@ -1811,7 +1811,7 @@ async function publishReleaseNow() {
     if (!download_url.startsWith("https://")) throw new Error("Download URL must start with https://");
     btn.textContent = "Publishing…";
     const { error } = await sb.from("app_releases").upsert({
-      version, download_url, sha256, release_notes, mandatory: false, published_at: new Date().toISOString(),
+      version, download_url, sha256, signature: "", release_notes, mandatory: false, published_at: new Date().toISOString(),
     });
     if (error) throw new Error(error.message);
     toast(`Published Café Desk v${version} — every shop can update remotely.`);
@@ -2009,7 +2009,14 @@ function applySession(session) {
   $("#ownerEmailSide").textContent = state.email;
   $("#avatarInitial").textContent = (pretty[0] || "N").toUpperCase();
   if (state.email.toLowerCase() !== OWNER_EMAIL) {
+    // Hard gate: non-owner sessions never see the console (RLS also blocks data server-side).
+    $("#appView").classList.add("hidden");
+    $("#authView").classList.remove("hidden");
+    $("#authMsg").textContent = "This account is not the registered owner. Access denied.";
+    $("#authMsg").style.color = "#ff9488";
     toast("This account is not the registered owner.", "err");
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    return;
   }
   switchView("overview");
   refreshAll();

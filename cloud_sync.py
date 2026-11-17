@@ -11,12 +11,18 @@ Architecture & Security Guarantees:
      exclusively in gitignored `owner-keys/supabase-owner.json` on your own PC.
 3. Tamper-Proof Remote App Updates:
    - Remote installer downloads enforce `https://`, stream in chunks, and verify an
-     exact 64-hex SHA-256 checksum BEFORE allowing execution. Updating `CafeDesk.exe`
-     preserves `%APPDATA%\\CafeDesk\\` (licenses, PIN, prices, and sales DB stay intact).
+     exact 64-hex SHA-256 checksum BEFORE allowing execution. Releases are also
+     Ed25519-signed by the owner (`app_releases.signature` over
+     `CAFE-DESK-RELEASE-V1:{version}:{sha256}`) and verified against the embedded
+     public key — a compromised Supabase account alone cannot push a fake installer.
+     Unsigned legacy releases still download (SHA-256 only) with a visible warning.
+   - Updating `CafeDesk.exe` preserves `%APPDATA%\\CafeDesk\\` (licenses, PIN,
+     prices, and sales DB stay intact).
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -75,12 +81,23 @@ def is_newer_version(remote_version: str, current_version: str = APP_VERSION) ->
     return tuple(rem) > tuple(cur)
 
 
+SHOP_SYNC_MIN_SECRET_LEN = 10
+
+
 def hash_shop_sync_secret(shop_id: str, sync_secret: str) -> str:
-    """Derive a domain-separated SHA-256 hex digest so raw shop sync passwords aren't sent in cleartext."""
+    """Derive a domain-separated SHA-256 hex digest so raw shop sync passwords aren't sent in cleartext.
+
+    Requires 10+ characters (security fix: 4-char secrets were brute-forceable online).
+    Existing shops with shorter passcodes must rotate: the owner deletes their
+    `shop_sync_profiles` row in Supabase, then the shop re-pushes with a new 10+ char passcode.
+    """
     norm_shop = re.sub(r'[^A-Z0-9_-]', '', str(shop_id or '').upper())[:40]
     secret = str(sync_secret or '').strip()
-    if not norm_shop or len(secret) < 4:
-        raise ValueError('Enter both a Shop ID (e.g. SHOP-SUNRISE) and a Shop Sync Passcode (4+ characters).')
+    if not norm_shop or len(secret) < SHOP_SYNC_MIN_SECRET_LEN:
+        raise ValueError(
+            f'Enter both a Shop ID (e.g. SHOP-SUNRISE) and a Shop Sync Passcode '
+            f'({SHOP_SYNC_MIN_SECRET_LEN}+ characters, letters + numbers recommended).'
+        )
     material = f'CAFE-DESK-SYNC-V1:{norm_shop}:{secret}'.encode('utf-8')
     return hashlib.sha256(material).hexdigest()
 
@@ -171,6 +188,58 @@ def _supabase_request(
 # ---------------------------------------------------------------------------
 # 1. Remote Over-the-Internet App Updater (No physical shop visits needed!)
 # ---------------------------------------------------------------------------
+RELEASE_SIGNING_DOMAIN = 'CAFE-DESK-RELEASE-V1'
+
+
+def release_signing_message(version: str, sha256_hex: str) -> bytes:
+    """Canonical bytes signed for a release: `CAFE-DESK-RELEASE-V1:{version}:{sha256}`."""
+    clean_ver = str(version or '').strip().lstrip('vV')
+    clean_hash = str(sha256_hex or '').strip().lower()
+    return f'{RELEASE_SIGNING_DOMAIN}:{clean_ver}:{clean_hash}'.encode('utf-8')
+
+
+def _b64u_decode_loose(text: str) -> bytes:
+    cleaned = re.sub(r'\s+', '', str(text or ''))
+    pad = '=' * ((4 - len(cleaned) % 4) % 4)
+    return base64.urlsafe_b64decode(cleaned + pad)
+
+
+def sign_release_sha256(version: str, sha256_hex: str, private_key_b64: str) -> str:
+    """Sign a release SHA-256 with the owner's Ed25519 private key (owner laptop only)."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    raw = _b64u_decode_loose(private_key_b64)
+    if len(raw) != 32:
+        raise ValueError('Owner Ed25519 private key must decode to 32 bytes.')
+    priv = Ed25519PrivateKey.from_private_bytes(raw)
+    sig = priv.sign(release_signing_message(version, sha256_hex))
+    return base64.urlsafe_b64encode(sig).decode('ascii').rstrip('=')
+
+
+def verify_release_signature(
+    version: str,
+    sha256_hex: str,
+    signature_b64: str,
+    public_key_b64: str | None = None,
+) -> bool:
+    """Verify a release signature against the embedded owner public key. Never raises."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    try:
+        pub_raw = _b64u_decode_loose(public_key_b64 or license_guard.configured_public_key_b64())
+        if len(pub_raw) != 32:
+            return False
+        pub = Ed25519PublicKey.from_public_bytes(pub_raw)
+        sig = _b64u_decode_loose(signature_b64)
+        pub.verify(sig, release_signing_message(version, sha256_hex))
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+    except Exception:
+        return False
+
+
 def check_for_app_update(
     settings: dict | None = None,
     *,
@@ -187,13 +256,23 @@ def check_for_app_update(
             'configured': False,
             'error': 'Cloud updates are not configured yet. Add your Supabase Project URL and Anon Key in Business Settings.',
         }
-    rows = _supabase_request(
-        url,
-        key,
-        'GET',
-        '/rest/v1/app_releases?select=version,download_url,sha256,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
-        timeout=timeout,
-    )
+    try:
+        rows = _supabase_request(
+            url,
+            key,
+            'GET',
+            '/rest/v1/app_releases?select=version,download_url,sha256,signature,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
+            timeout=timeout,
+        )
+    except RuntimeError:
+        # Backward compat: DBs migrated before release signing lack `signature`.
+        rows = _supabase_request(
+            url,
+            key,
+            'GET',
+            '/rest/v1/app_releases?select=version,download_url,sha256,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
+            timeout=timeout,
+        )
     if not isinstance(rows, list) or not rows:
         return {
             'ok': True,
@@ -215,6 +294,7 @@ def check_for_app_update(
         'latest_version': latest_ver,
         'download_url': str(best.get('download_url') or '').strip(),
         'sha256': str(best.get('sha256') or '').strip().lower(),
+        'signature': str(best.get('signature') or '').strip(),
         'release_notes': str(best.get('release_notes') or '').strip(),
         'mandatory': bool(best.get('mandatory', False)),
         'published_at': str(best.get('published_at') or ''),
@@ -238,10 +318,17 @@ def download_and_verify_update(
     dest_dir: Path | str,
     *,
     version_label: str = 'latest',
+    expected_signature: str = '',
     progress_cb: Callable[[int, int], None] | None = None,
     timeout: float = 60.0,
 ) -> Path:
-    """Download a remote Café Desk installer/zip over HTTPS and strictly verify its SHA-256 digest."""
+    """Download a remote Café Desk installer/zip over HTTPS and strictly verify its SHA-256 digest.
+
+    If `expected_signature` is provided, the Ed25519 owner signature over
+    `CAFE-DESK-RELEASE-V1:{version}:{sha256}` is also verified and a mismatch
+    refuses the file. Unsigned legacy releases (empty signature) still download
+    with SHA-256-only protection for backward compatibility.
+    """
     raw_url = str(download_url or '').strip()
     parsed = urllib.parse.urlparse(raw_url)
     if parsed.scheme != 'https' and parsed.hostname not in ('127.0.0.1', 'localhost'):
@@ -286,6 +373,15 @@ def download_and_verify_update(
             f'Security check failed: downloaded installer SHA-256 ({actual_hash[:12]}…) '
             f'did not match owner signature ({clean_hash[:12]}…). File deleted.'
         )
+
+    clean_sig = str(expected_signature or '').strip()
+    if clean_sig:
+        if not verify_release_signature(version_label, clean_hash, clean_sig):
+            part_path.unlink(missing_ok=True)
+            raise ValueError(
+                'Security check failed: installer Ed25519 signature is invalid or was not '
+                'issued by the owner. File deleted. Do not run this installer.'
+            )
 
     os.replace(part_path, final_path)
     return final_path
@@ -724,10 +820,24 @@ def owner_publish_app_release(
             raise FileNotFoundError(f'Installer file not found (and not a 64-char SHA-256 hash): {candidate}')
         sha256_hex = compute_file_sha256(fpath)
 
+    # Sign the release with the owner Ed25519 private key when available so
+    # customer PCs can verify the installer even if Supabase is compromised.
+    signature = ''
+    priv_path = Path(__file__).resolve().parent / 'owner-keys' / 'cafedesk_owner.private.key'
+    priv_b64 = os.environ.get('CAFE_DESK_PRIVATE_KEY', '').strip()
+    if not priv_b64 and priv_path.is_file():
+        try:
+            priv_b64 = priv_path.read_text(encoding='utf-8').strip()
+        except OSError:
+            priv_b64 = ''
+    if priv_b64:
+        signature = sign_release_sha256(clean_ver, sha256_hex, priv_b64)
+
     row = {
         'version': clean_ver,
         'download_url': str(download_url).strip(),
         'sha256': sha256_hex,
+        'signature': signature,
         'release_notes': str(release_notes or '').strip(),
         'mandatory': bool(mandatory),
     }

@@ -33,6 +33,8 @@ def connect(path=None):
     target=Path(path or db_path()); target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     try:
         conn=sqlite3.connect(target,timeout=10)
+        try: settings_store._harden(target)
+        except Exception: pass
         conn.execute('PRAGMA foreign_keys=ON')
         conn.execute('PRAGMA busy_timeout=10000')
         conn.execute('''CREATE TABLE IF NOT EXISTS sales (

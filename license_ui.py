@@ -1,6 +1,7 @@
 """Activation Dialog & License Status Card for Café Desk (Hardware Machine-ID + 1-Year Lock)."""
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
@@ -224,6 +225,17 @@ def ensure_computer_licensed() -> dict | None:
 
     Returns license status dict if allowed to run, or `None` if the user closed ActivationWindow.
     """
+    # Fail loudly if a production build still ships the demo signing key.
+    if license_guard.is_demo_public_key_active() and getattr(sys, 'frozen', False):
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            'Demo signing key — do not distribute',
+            license_guard.DEMO_KEY_WARNING,
+            parent=root,
+        )
+        root.destroy()
     status = license_guard.current_license_status()
     if status.get('valid'):
         return status

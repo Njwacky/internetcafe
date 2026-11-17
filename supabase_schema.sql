@@ -13,6 +13,15 @@
 --   Customer PDFs, IDs, scans, and photos NEVER touch Supabase. Only software
 --   release metadata, Machine ID seat approvals, shop price lists, and anonymized
 --   line-item totals are stored when a shop opts in.
+--
+-- Security notes (audit 2026-11-17):
+--   * Shop Sync Passcodes now require 10+ characters (client-enforced in
+--     cloud_sync.hash_shop_sync_secret). Shops with older 4-char passcodes must
+--     rotate: owner runs `DELETE FROM public.shop_sync_profiles WHERE shop_id='...';`
+--     then the shop re-pushes prices with a new 10+ char passcode.
+--   * Releases are Ed25519-signed (app_releases.signature). Publish via
+--     cloud_sync.owner_publish_app_release (signs with owner-keys private key)
+--     or update the owner-admin Edge Function to sign before upserting.
 -- =============================================================================
 
 create extension if not exists pgcrypto;
@@ -24,11 +33,15 @@ create table if not exists public.app_releases (
     version         text primary key,
     download_url    text not null,
     sha256          text not null,
+    signature       text not null default '', -- Ed25519 sig over CAFE-DESK-RELEASE-V1:{version}:{sha256}
     release_notes   text not null default '',
     mandatory       boolean not null default false,
     min_os          text not null default 'Windows 10+',
     published_at    timestamptz not null default now()
 );
+
+-- Migration for projects created before release signing (safe to re-run):
+alter table public.app_releases add column if not exists signature text not null default '';
 
 alter table public.app_releases enable row level security;
 
