@@ -1649,7 +1649,12 @@ class WorkspaceTelemetryTests(unittest.TestCase):
             self.assertIn(fragment,dash)
         # Bottom of the funnel must point customers at the public page, not the console.
         self.assertIn('publicPageUrl',dash)
-        self.assertIn('internetcafe.vercel.app',dash)
+        # The public link is derived from the serving origin, never hardcoded: the
+        # project's own domain moved once already and a stale literal sent shop
+        # owners to somebody else's deployment.
+        self.assertIn('window.location.origin',dash)
+        self.assertNotIn('internetcafe.vercel.app',dash)
+        self.assertNotIn('https://internetcafe',dash)
 
     def test_vercel_routes_public_page_and_private_console(self):
         import json
