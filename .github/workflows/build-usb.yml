@@ -35,6 +35,10 @@ jobs:
       - name: Run unit test suite
         run: python .github/run_tests.py
 
+      - name: Warn if the demo signing key would ship (pull requests only)
+        if: github.event_name == 'pull_request'
+        run: python .github/check_release_key.py --warn-only
+
   build-windows-usb:
     name: Windows 10/11 USB Portable & Setup.exe
     needs: unit-tests
@@ -55,6 +59,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
+
+      # Pull requests build throw-away artifacts that are never handed to a customer, so a
+      # missing secret must not break contributor CI — warn, and keep the demo key.
+      # Release builds (push to main / v* tags / manual dispatch) fail closed instead:
+      # shipping the demo key would let anyone mint a licence.
+      - name: Inject owner Ed25519 public key (release builds fail closed)
+        shell: bash
+        env:
+          CAFE_DESK_PUBLIC_KEY: ${{ secrets.CAFE_DESK_PUBLIC_KEY }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python .github/check_release_key.py --warn-only --apply-if-available || true
+          elif [ -z "$CAFE_DESK_PUBLIC_KEY" ]; then
+            echo "::error title=Missing repository secret::Set the CAFE_DESK_PUBLIC_KEY secret to your owner Ed25519 PUBLIC key (see README: One-time Owner Keypair Setup). Shipping without it would verify licenses against the demo key."
+            exit 1
+          else
+            python .github/check_release_key.py --apply
+          fi
 
       - name: Build USB-ready 1-Year Licensed folder (dist\CafeDesk)
         shell: cmd

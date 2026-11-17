@@ -15,7 +15,9 @@ Architecture & Security Guarantees:
      Ed25519-signed by the owner (`app_releases.signature` over
      `CAFE-DESK-RELEASE-V1:{version}:{sha256}`) and verified against the embedded
      public key — a compromised Supabase account alone cannot push a fake installer.
-     Unsigned legacy releases still download (SHA-256 only) with a visible warning.
+     The `anon` key is public by design (embedded in the app and the web UI), so
+     the release row is the only attack surface; unsigned releases are therefore
+     REFUSED outright (no SHA-256-only fallback) on customer PCs.
    - Updating `CafeDesk.exe` preserves `%APPDATA%\\CafeDesk\\` (licenses, PIN,
      prices, and sales DB stay intact).
 """
@@ -28,6 +30,7 @@ import json
 import os
 import re
 import socket
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -264,8 +267,13 @@ def check_for_app_update(
             '/rest/v1/app_releases?select=version,download_url,sha256,signature,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
             timeout=timeout,
         )
-    except RuntimeError:
-        # Backward compat: DBs migrated before release signing lack `signature`.
+    except RuntimeError as exc:
+        # Backward compat: databases migrated before release signing lack the `signature`
+        # column (PostgREST answers 400/42703). Any OTHER failure — bad key, network,
+        # rate limit — must surface as-is instead of silently downgrading the caller to
+        # the unsigned release path.
+        if not re.search(r'\b(400|42703|column .*signature .*does not exist)\b', str(exc), re.IGNORECASE):
+            raise
         rows = _supabase_request(
             url,
             key,
@@ -339,13 +347,19 @@ def download_and_verify_update(
     expected_signature: str = '',
     progress_cb: Callable[[int, int], None] | None = None,
     timeout: float = 60.0,
+    allow_unsigned: bool = False,
 ) -> Path:
     """Download a remote Café Desk installer/zip over HTTPS and strictly verify its SHA-256 digest.
 
     If `expected_signature` is provided, the Ed25519 owner signature over
     `CAFE-DESK-RELEASE-V1:{version}:{sha256}` is also verified and a mismatch
-    refuses the file. Unsigned legacy releases (empty signature) still download
-    with SHA-256-only protection for backward compatibility.
+    refuses the file.
+
+    Security (audit fix): the unsigned path is now CLOSED on customer PCs. A missing
+    signature used to fall through to SHA-256-only verification, which meant a leaked
+    Supabase anon key (public by design, and embedded in the app) plus a writable
+    `app_releases` row could push an arbitrary `.exe` to every café. `allow_unsigned`
+    exists only for the test suite / owner tooling; it is refused in frozen builds.
     """
     raw_url = str(download_url or '').strip()
     parsed = urllib.parse.urlparse(raw_url)
@@ -354,6 +368,16 @@ def download_and_verify_update(
     clean_hash = str(expected_sha256 or '').strip().lower()
     if not _HEX64_RE.match(clean_hash):
         raise ValueError('Refusing update download: release is missing a valid 64-character SHA-256 checksum.')
+
+    # Fail closed BEFORE downloading: no signature means no update on a customer PC.
+    clean_sig = str(expected_signature or '').strip()
+    unsigned_allowed = bool(allow_unsigned) and not getattr(sys, 'frozen', False)
+    if not clean_sig and not unsigned_allowed:
+        raise ValueError(
+            'Refusing update download: this release is not signed by the owner. '
+            'Ask the owner to publish a signed release (this build will not install '
+            'an unverified installer).'
+        )
 
     out_folder = Path(dest_dir)
     out_folder.mkdir(parents=True, exist_ok=True)
@@ -392,7 +416,6 @@ def download_and_verify_update(
             f'did not match owner signature ({clean_hash[:12]}…). File deleted.'
         )
 
-    clean_sig = str(expected_signature or '').strip()
     if clean_sig:
         if not verify_release_signature(version_label, clean_hash, clean_sig):
             part_path.unlink(missing_ok=True)

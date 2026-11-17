@@ -1447,15 +1447,22 @@ class DiagnosticRemediationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'HTTPS'):
                 cloud_sync.download_and_verify_update('http://evil.example.com/CafeDesk.exe',good_sha,tmp_p)
 
-            # 2. Tampered / mismatched SHA-256 deletes temporary file and raises security error
+            # 2. Unsigned releases are refused before any download happens (fail closed).
+            #    This is what stops a leaked/compromised public anon key from pushing an exe.
+            with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)) as urlopen_mock:
+                with self.assertRaisesRegex(ValueError,'not signed by the owner'):
+                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1')
+                urlopen_mock.assert_not_called()
+
+            # 3. Tampered / mismatched SHA-256 deletes temporary file and raises security error
             with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
                 with self.assertRaisesRegex(ValueError,'Security check failed'):
-                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',wrong_sha,tmp_p,version_label='0.8.1')
+                    cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',wrong_sha,tmp_p,version_label='0.8.1',allow_unsigned=True)
             self.assertEqual(list(tmp_p.glob('*CafeDesk*')),[])
 
-            # 3. Matching SHA-256 saves verified installer cleanly
+            # 4. Matching SHA-256 saves verified installer cleanly (legacy opt-in path for tests only)
             with mock.patch('urllib.request.urlopen',return_value=_FakeHTTPResp(fake_exe_bytes)):
-                saved_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1')
+                saved_exe=cloud_sync.download_and_verify_update('https://releases.example.com/CafeDeskSetup.exe',good_sha,tmp_p,version_label='0.8.1',allow_unsigned=True)
             self.assertTrue(saved_exe.is_file())
             self.assertEqual(saved_exe.read_bytes(),fake_exe_bytes)
 
@@ -1880,6 +1887,330 @@ class LoginPrivacyTests(unittest.TestCase):
         self.assertIn('cafedesk_owner_digest', sql)
         expected = hashlib.sha256(('CAFE-DESK-OWNER-V1|' + self.EMAIL).encode()).hexdigest()
         self.assertEqual(expected, self.DIGEST)
+
+
+class ReleaseKeyGuardTests(unittest.TestCase):
+    """The CI demo-key guard must block a demo-signed build and allow a real key."""
+
+    def _tree(self, tmp):
+        """Copy the files the guard needs into a throw-away tree (no .git)."""
+        import shutil
+        root = Path(tmp)
+        repo = Path(__file__).resolve().parent
+        for name in ('license_guard.py', 'admin_keygen.py', 'cloud_sync.py'):
+            shutil.copy2(repo / name, root / name)
+        (root / '.github').mkdir(exist_ok=True)
+        shutil.copy2(repo / '.github' / 'check_release_key.py', root / '.github' / 'check_release_key.py')
+        return root
+
+    def _run(self, root, args, extra_env=None):
+        import os, subprocess, sys
+        env = {k: v for k, v in os.environ.items() if k != 'CAFE_DESK_PUBLIC_KEY'}
+        env.update(extra_env or {})
+        return subprocess.run([sys.executable, str(root / '.github' / 'check_release_key.py'), *args],
+                              cwd=str(root), env=env, capture_output=True, text=True, timeout=120)
+
+    def test_release_build_is_blocked_while_the_demo_key_is_embedded(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            res = self._run(root, [])                     # enforcement mode (release job)
+            self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+            self.assertIn('Release blocked', res.stdout + res.stderr)
+            res2 = self._run(root, ['--warn-only'])       # pull-request mode
+            self.assertEqual(res2.returncode, 0, res2.stdout + res2.stderr)
+        finally:
+            tmp.cleanup()
+
+    def test_pull_request_build_does_not_hard_fail_without_the_secret(self):
+        """PR artifacts are throw-away; only release builds must fail closed."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            res = self._run(root, ['--warn-only', '--apply-if-available'])
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn('keeps the demo key', res.stdout + res.stderr)
+            # ...but the release path with --apply must still refuse.
+            hard = self._run(root, ['--apply'])
+            self.assertEqual(hard.returncode, 1, hard.stdout + hard.stderr)
+        finally:
+            tmp.cleanup()
+
+    def test_local_build_scripts_refuse_the_demo_key(self):
+        """`packaging/build-*` must run the guard, not just the CI workflow."""
+        repo = Path(__file__).resolve().parent
+        win = (repo / 'packaging' / 'build-windows.bat').read_text(encoding='utf-8', errors='replace')
+        unix = (repo / 'packaging' / 'build-unix.sh').read_text(encoding='utf-8', errors='replace')
+        for name, src in (('build-windows.bat', win), ('build-unix.sh', unix)):
+            self.assertIn('check_release_key.py', src, f'{name} does not run the demo-key guard')
+            self.assertIn('CAFE_DESK_ALLOW_DEMO_KEY', src, f'{name} has no documented escape hatch')
+            # The guard must run BEFORE PyInstaller packages anything.
+            self.assertLess(src.index('check_release_key.py'), src.index('PyInstaller'),
+                            f'{name} runs the guard after packaging')
+
+    def test_rejects_private_key_and_malformed_secret_values(self):
+        """A pasted secret must be a real 32-byte Ed25519 PUBLIC key.
+
+        The dangerous case: an Ed25519 private key is also 32 bytes, so it passes every
+        structural check but breaks activation on every customer PC.
+        """
+        import base64, shutil, subprocess, sys, os
+        from cryptography.hazmat.primitives import serialization as _s
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            priv = Ed25519PrivateKey.generate()
+            priv_b64 = base64.urlsafe_b64encode(priv.private_bytes(
+                encoding=_s.Encoding.Raw, format=_s.PrivateFormat.Raw,
+                encryption_algorithm=_s.NoEncryption())).decode().rstrip('=')
+            pub_b64 = base64.urlsafe_b64encode(priv.public_key().public_bytes(
+                encoding=_s.Encoding.Raw, format=_s.PublicFormat.Raw)).decode().rstrip('=')
+            # Simulate the owner's laptop, where the private key file exists.
+            (root / 'owner-keys').mkdir()
+            (root / 'owner-keys' / 'cafedesk_owner.private.key').write_text(priv_b64, encoding='utf-8')
+
+            ok = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': pub_b64})
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+
+            leak = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': priv_b64})
+            self.assertEqual(leak.returncode, 1, 'pasting the PRIVATE key must be refused')
+            self.assertIn('PRIVATE signing key', leak.stdout + leak.stderr)
+
+            for bad, why in (
+                ('tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLE', 'short key'),
+                ('CDLIC1.eyJ2IjoxfQ.abc', 'licence token'),
+                ('-----BEGIN PUBLIC KEY-----', 'PEM block'),
+            ):
+                res = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': bad})
+                self.assertEqual(res.returncode, 1, f'{why} must be refused')
+                self.assertIn('Invalid CAFE_DESK_PUBLIC_KEY secret', res.stdout + res.stderr)
+
+            # Quotes / stray whitespace around a correct key are tolerated.
+            messy = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': f'  "{pub_b64}"  '})
+            self.assertEqual(messy.returncode, 0, messy.stdout + messy.stderr)
+        finally:
+            tmp.cleanup()
+
+    def test_allow_demo_flag_and_env_escape_hatch(self):
+        import os
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            self.assertEqual(self._run(root, []).returncode, 1)
+            self.assertEqual(self._run(root, ['--allow-demo']).returncode, 0)
+            env = self._run(root, [], {'CAFE_DESK_ALLOW_DEMO_KEY': '1'})
+            self.assertEqual(env.returncode, 0, env.stdout + env.stderr)
+        finally:
+            tmp.cleanup()
+
+    def test_apply_injects_the_secret_and_then_passes(self):
+        import base64
+        from cryptography.hazmat.primitives import serialization as _s
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            # Missing secret must fail closed, not silently build a demo-signed exe.
+            missing = self._run(root, ['--apply'])
+            self.assertEqual(missing.returncode, 1, missing.stdout + missing.stderr)
+            self.assertIn('Missing signing key', missing.stdout + missing.stderr)
+
+            priv = Ed25519PrivateKey.generate()
+            pub = base64.urlsafe_b64encode(priv.public_key().public_bytes(
+                encoding=_s.Encoding.Raw, format=_s.PublicFormat.Raw)).decode().rstrip('=')
+            applied = self._run(root, ['--apply'], {'CAFE_DESK_PUBLIC_KEY': pub})
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertIn(pub, (root / 'license_guard.py').read_text(encoding='utf-8'))
+            # A second enforcement run in the same tree must now pass (regression:
+            # the guard used to read a stale in-process module and block itself).
+            recheck = self._run(root, [])
+            self.assertEqual(recheck.returncode, 0, recheck.stdout + recheck.stderr)
+        finally:
+            tmp.cleanup()
+
+
+if __name__=='__main__': unittest.main()
+
+
+class TimerAndPrivacyHardeningTests(unittest.TestCase):
+    """Regression tests for the 2026-11-17 audit fixes.
+
+    The timer tests exercise the REAL `CafeDesk.poll_events` / `check_idle` /
+    `recovery_tick` bodies against a stub object, so they keep guarding the
+    behaviour even without a display (tkinter is not importable in CI sandbox).
+    """
+
+    def _methods(self):
+        """Return the unbound methods from app.py without importing tkinter/the GUI."""
+        import ast, textwrap
+        src = (Path(__file__).resolve().parent / 'app.py').read_text(encoding='utf-8')
+        tree = ast.parse(src)
+        wanted = {'poll_events', 'check_idle', 'recovery_tick', 'report_callback_exception',
+                  '_log_exception', '_quiet_job_error', 'job', '_note_screen_visit',
+                  '_flush_telemetry_async'}
+        module_src = src
+        ns = {'queue': __import__('queue'), 'threading': __import__('threading'),
+              'uuid': __import__('uuid'), 'time': __import__('time'),
+              'traceback': __import__('traceback'), 'datetime': __import__('datetime').datetime,
+              'messagebox': __import__('types').SimpleNamespace(showerror=lambda *a, **k: None,
+                                                                 showinfo=lambda *a, **k: None),
+              '_QUIET_JOB_ERROR_TAGS': ('Auto-recovery', 'recovery copy', 'Temporary files')}
+        out = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in wanted:
+                code = ast.get_source_segment(module_src, node)
+                exec(textwrap.dedent(code), ns)
+                out[node.name] = ns[node.name]
+        return out
+
+    @staticmethod
+    def _names(callbacks):
+        """Timer names of captured `after()` callbacks (they are `functools.partial`s)."""
+        import functools
+        out = []
+        for f in callbacks:
+            target = f.func if isinstance(f, functools.partial) else f
+            out.append(getattr(target, '__name__', ''))
+        return out
+
+    def _stub(self, m):
+        import queue, threading, types, functools
+        class Stub:
+            pass
+        s = Stub()
+        s.events = queue.Queue(); s.busy = False; s._active_job_id = None
+        s.pending = []; s.statuses = []
+        s._telemetry_lock = threading.Lock(); s._telemetry_counts = {}
+        s._telemetry_inflight = False; s._telemetry_enabled = False
+        s._last_telemetry_flush = 0.0; s.current = 'Home'
+        s.after = lambda ms, fn=None: s.pending.append(fn)
+        s.status = types.SimpleNamespace(set=lambda v: s.statuses.append(v),
+                                        get=lambda: '')
+        s.key = types.SimpleNamespace(set=lambda v: None)
+        s.staff_unlocked = True
+        s.idle = types.SimpleNamespace(expired=lambda: True)
+        s.lock_staff = lambda: None
+        s.update_lock_button = lambda: None
+        s.perform_recovery = lambda: None
+        s._log_exception = lambda where: s.statuses.append(f'logged:{where}')
+        # Bind the extracted bodies as attributes: they call `self.<timer>(...)` to re-arm.
+        # `_log_exception` keeps the stub so expected failures stay out of the test log.
+        for name, fn in m.items():
+            if name == '_log_exception':
+                continue
+            setattr(s, name, functools.partial(fn, s))
+        return s
+
+    # ---- #1/#2: timers must ALWAYS re-arm ---------------------------------
+    def test_event_pump_rearms_even_when_callback_raises(self):
+        m = self._methods(); s = self._stub(m)
+        s.events.put(('ok', lambda r: (_ for _ in ()).throw(RuntimeError('widget destroyed')), 1, 'job1'))
+        s._active_job_id = 'job1'
+        m['poll_events'](s)
+        self.assertEqual(self._names(s.pending), ['poll_events'],
+                         'poll_events must reschedule itself even if a callback raises')
+        self.assertFalse(s.busy, 'a failing callback must not leave the desk busy forever')
+
+    def test_event_pump_still_delivers_later_results(self):
+        m = self._methods(); s = self._stub(m)
+        seen = []
+        s.events.put(('ok', lambda r: (_ for _ in ()).throw(RuntimeError('boom')), 1, None))
+        s.events.put(('ok', lambda r: seen.append(r), 2, None))
+        m['poll_events'](s)
+        self.assertEqual(seen, [2], 'one bad result must not swallow later results')
+
+    def test_event_pump_ignores_abandoned_watchdog_job(self):
+        m = self._methods(); s = self._stub(m)
+        ran = []
+        s._active_job_id = 'new-job'
+        s.events.put(('ok', lambda r: ran.append('stale'), 1, 'old-job'))
+        m['poll_events'](s)
+        self.assertEqual(ran, [], 'a result from an abandoned job must be dropped')
+        self.assertTrue(s.busy is False)
+
+    def test_out_of_band_event_does_not_cancel_a_running_job(self):
+        """Remote entitlement sync pushes job_id=None; it must not complete the active job."""
+        m = self._methods(); s = self._stub(m)
+        seen = []
+        s._active_job_id = 'real-job'
+        s.busy = True
+        s.events.put(('ok', lambda r: seen.append('oob'), 'sync-result', None))   # entitlement sync
+        s.events.put(('ok', lambda r: seen.append('job'), 'job-result', 'real-job'))  # the real job
+        m['poll_events'](s)
+        self.assertEqual(seen, ['oob', 'job'])
+        self.assertFalse(s.busy)
+
+    def test_check_idle_rearms_and_fails_closed(self):
+        m = self._methods(); s = self._stub(m)
+        s.lock_staff = lambda: (_ for _ in ()).throw(RuntimeError('settings unwritable'))
+        m['check_idle'](s)
+        self.assertEqual(self._names(s.pending), ['check_idle'], 'idle timer must keep running')
+        self.assertFalse(s.staff_unlocked, 'a failing idle lock must still drop staff access')
+
+    def test_recovery_tick_rearms_on_failure(self):
+        m = self._methods(); s = self._stub(m)
+        s.perform_recovery = lambda: (_ for _ in ()).throw(OSError('No space left on device'))
+        m['recovery_tick'](s)
+        self.assertEqual(self._names(s.pending), ['recovery_tick'])
+
+    def test_job_watchdog_frees_a_wedged_worker(self):
+        m = self._methods(); s = self._stub(m)
+        s.after = lambda ms, fn=None: (s.pending.append(fn), ms)[1]   # capture, don't run
+        import threading
+        gate = threading.Event()
+        m['job'](s, 'Stuck scanner', lambda: gate.wait(5), lambda r: None, timeout=45)
+        self.assertTrue(s.busy, 'job should start busy')
+        # Simulate the watchdog firing while the worker is still blocked.
+        watchdog = [f for f in s.pending if f is not None][-1]
+        watchdog()
+        self.assertFalse(s.busy, 'watchdog must release the desk after a hang')
+        self.assertIn('abandoned', ' '.join(s.statuses))
+        gate.set()
+
+    # ---- #3: telemetry is opt-in -----------------------------------------
+    def test_telemetry_records_nothing_until_opted_in(self):
+        m = self._methods(); s = self._stub(m)
+        s._telemetry_enabled = False
+        m['_note_screen_visit'](s, 'PDF tools')
+        self.assertEqual(s._telemetry_counts, {}, 'no counters may be collected before opt-in')
+        m['_flush_telemetry_async'](s, force=True)
+        self.assertEqual(s._telemetry_counts, {})
+
+    def test_telemetry_preference_defaults_to_off(self):
+        import settings_store
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'settings.json'
+            self.assertFalse(settings_store.telemetry_enabled(p))
+            settings_store.save_telemetry_preference(True, path=p)
+            self.assertTrue(settings_store.telemetry_enabled(p))
+            settings_store.save_telemetry_preference(False, path=p)
+            self.assertFalse(settings_store.telemetry_enabled(p))
+        finally:
+            tmp.cleanup()
+
+    def test_corrupt_settings_means_telemetry_off(self):
+        import settings_store
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = Path(tmp.name) / 'settings.json'
+            p.write_text('{not json', encoding='utf-8')
+            self.assertFalse(settings_store.telemetry_enabled(p), 'damaged settings must fail closed')
+        finally:
+            tmp.cleanup()
+
+    # ---- #5: env public-key override ignored in frozen builds -------------
+    def test_public_key_env_override_is_ignored_in_frozen_build(self):
+        import os, sys as _sys
+        from unittest import mock
+        import license_guard
+        with mock.patch.dict(os.environ, {'CAFE_DESK_PUBLIC_KEY': 'attacker-key'}, clear=False):
+            with mock.patch.object(_sys, 'frozen', True, create=True):
+                self.assertEqual(license_guard.configured_public_key_b64(),
+                                 license_guard.DEFAULT_OWNER_PUBLIC_KEY_B64)
+            # ...but still honoured for the test suite / owner pipeline.
+            self.assertEqual(license_guard.configured_public_key_b64(), 'attacker-key')
 
 
 if __name__=='__main__': unittest.main()

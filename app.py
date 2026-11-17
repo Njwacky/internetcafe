@@ -1,5 +1,5 @@
 """Café Desk — CustomTkinter desktop application."""
-import os, sys, subprocess, queue, threading, webbrowser, tempfile, uuid
+import os, sys, subprocess, queue, threading, webbrowser, tempfile, uuid, traceback
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
@@ -7,7 +7,6 @@ from tkinter import filedialog, messagebox, simpledialog
 import time
 import customtkinter as ctk
 from PIL import Image, ImageOps
-import requests
 
 # CustomTkinter 5.2.x can fire placeholder callbacks after a widget has been destroyed,
 # which raises TclError during screen changes. Guard the callbacks so the desktop app
@@ -67,6 +66,10 @@ ctk.set_default_color_theme('green')
 APP_BUILD='0.8.2'
 BG='#101522'; WHITE='#1B2333'; INK='#F2F4FA'; MUTED='#A2ACC5'; GREEN='#445A86'; GREEN_HOVER='#536B9D'; LIME='#B9FF70'; BORDER='#34415A'; SOFT='#303C55'; RED='#E89886'
 FONT='Segoe UI'
+
+# Background-job failures carrying these markers are reported in the status bar instead of
+# interrupting staff with a blocking modal dialog (auto-recovery runs every 60 s).
+_QUIET_JOB_ERROR_TAGS=('Auto-recovery','recovery copy','Temporary files')
 
 def label(parent,text,size=13,bold=False,color=INK,**kw):
     return ctk.CTkLabel(parent,text=text,text_color=color,font=ctk.CTkFont(family=FONT,size=size,weight='bold' if bold else 'normal'),**kw)
@@ -135,9 +138,33 @@ class CafeDesk(ctk.CTk):
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self.create_shell(); self.title(self.business_name.get()); self.show('Home'); self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick)
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
+        # A crash while drawing one screen must never leave a half-built, unusable window.
+        # The shell, the timers and the event pump are created first, so even a missing
+        # asset or a bad widget option still leaves staff a working app plus a clear status.
+        try: self.create_shell()
+        except Exception as exc:
+            traceback.print_exc(); self._startup_error=f'The workspace shell could not be drawn: {exc}'
+        try: self.title(self.business_name.get())
+        except Exception: pass
+        self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick)
+        try:
+            self._telemetry_enabled=settings_store.telemetry_enabled()
+            self._telemetry_consent_asked=bool(preferences.get('telemetry_consent_asked'))
+        except Exception:
+            self._telemetry_enabled=False; self._telemetry_consent_asked=False
+        if not self._startup_error:
+            try: self.show('Home')
+            except Exception as exc:
+                traceback.print_exc(); self._startup_error=f'The Home screen could not be drawn: {exc}'
+        if self._startup_error:
+            try: self.status.set('⚠ Startup problem • '+self._startup_error+' • use the sidebar or Help & privacy')
+            except Exception: pass
         if settings_corrupted:
             self.status.set('⚠ Settings file damaged • staff access locked fail-closed until restored')
+        if not settings_corrupted and not self._startup_error:
+            try: self.after(2500,self._maybe_ask_telemetry_consent)
+            except Exception: self._log_exception('telemetry consent schedule')
         for sequence in ('<KeyPress>','<ButtonPress>','<MouseWheel>','<Motion>'): self.bind_all(sequence,self.note_activity,add='+')
         self.bind_all('<F1>',lambda _e:self.quick_help(),add='+')
         self.bind_all('<Control-l>',lambda _e:self.lock_staff(),add='+')
@@ -149,8 +176,17 @@ class CafeDesk(ctk.CTk):
             self.status.set(f"⚠ License expires in {lic_init['days_remaining']} day(s) ({lic_init['expires_at']}) • open About & contact to renew")
     def note_activity(self,event=None): self.idle.touch()
     def check_idle(self):
-        if self.staff_unlocked and self.idle.expired(): self.lock_staff(); self.status.set('Staff access locked after five minutes of inactivity')
-        self.after(5000,self.check_idle)
+        # Security: the idle lock MUST keep rescheduling even if locking raises.
+        # A dead timer would silently disable the 5-minute auto-lock for the whole session.
+        try:
+            if self.staff_unlocked and self.idle.expired(): self.lock_staff(); self.status.set('Staff access locked after five minutes of inactivity')
+        except Exception:
+            # Fail closed: drop staff privileges rather than leave the desk unlocked.
+            try: self.staff_unlocked=False; self.key.set(''); self.update_lock_button()
+            except Exception: pass
+            self._log_exception('check_idle')
+        finally:
+            self.after(5000,self.check_idle)
     def has_unsaved_work(self):
         """Return True if any active tool holds unsaved customer text, files, scans, cards or forms."""
         if self.current=='Career documents': self.sync_long_fields()
@@ -194,7 +230,12 @@ class CafeDesk(ctk.CTk):
             or form_dirty
         )
     def close_app(self):
-        if self.busy: return messagebox.showinfo('Please wait','A document is still being processed. Wait for it to finish before closing.',parent=self)
+        # Ask once if a job is still running, but never trap the user: the watchdog frees
+        # `busy` after a timeout, and a second attempt always closes.
+        if self.busy and not getattr(self,'_close_confirmed_busy',False):
+            self._close_confirmed_busy=True
+            if not messagebox.askyesno('Task still running','A document is still being processed. Closing now abandons that task.\n\nClose Café Desk anyway?',parent=self):
+                self._close_confirmed_busy=False; return
         if self.has_unsaved_work() and not messagebox.askyesno('Close Café Desk?','Current workspace data (drafts, scans, OCR text/images, PDF queues, cards, forms or sheets) will be closed. Save any work you need first. If recovery is enabled, the latest copy may not include recent changes. Close anyway?',parent=self): return
         self.remove_session_files(); self.destroy()
     def remove_session_files(self):
@@ -226,8 +267,9 @@ class CafeDesk(ctk.CTk):
         except (OSError,ValueError): images['custom']=images['office']
         return images
     def update_clock(self):
-        self.clock.set(datetime.now().strftime('%a, %d %b  %H:%M:%S'))
-        self.after(1000,self.update_clock)
+        try: self.clock.set(datetime.now().strftime('%a, %d %b  %H:%M:%S'))
+        except Exception: self._log_exception('update_clock')
+        finally: self.after(1000,self.update_clock)
     def business_screen(self):
         self.heading(self.body,'Business settings','Make this workspace feel like your own.')
         box=card(self.body); box.pack(fill='x')
@@ -566,19 +608,27 @@ class CafeDesk(ctk.CTk):
                 projects.save(kind,data,str(cur_file),allow_internal=True)
         def on_fail(err_msg):
             self.status.set(f'⚠ Auto-recovery failed ({err_msg}) • save your work manually!')
+            self._last_recovery_error=str(err_msg)
         self.job('Saving recovery copy…',work,lambda _:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted'),error_cb=on_fail)
     def recovery_tick(self):
-        self.perform_recovery();self.after(60000,self.recovery_tick)
+        try: self.perform_recovery()
+        except Exception: self._log_exception('recovery_tick')
+        finally: self.after(60000,self.recovery_tick)
     def remote_entitlement_tick(self):
         # Remote pause/resume and new approvals are applied on launch and every 10 minutes.
         self.after(600000,self.remote_entitlement_tick)
-        cfg=settings_store.load_settings()
-        if self._entitlement_sync_running or not cloud_sync.is_supabase_configured(cfg): return
-        self._entitlement_sync_running=True
+        try:
+            cfg=settings_store.load_settings()
+            if self._entitlement_sync_running or not cloud_sync.is_supabase_configured(cfg): return
+            self._entitlement_sync_running=True
+        except Exception:
+            self._log_exception('remote_entitlement_tick')
+            self._entitlement_sync_running=False
+            return
         def check_online():
             try: result=cloud_sync.sync_machine_entitlements_from_cloud(cfg)
             except Exception as exc: result={'ok':False,'error':str(exc)}
-            self.events.put(('ok',self._finish_remote_entitlement_sync,result))
+            self.events.put(('ok',self._finish_remote_entitlement_sync,result,None))
         threading.Thread(target=check_online,daemon=True).start()
     def _finish_remote_entitlement_sync(self,result):
         self._entitlement_sync_running=False
@@ -619,6 +669,65 @@ class CafeDesk(ctk.CTk):
             if not self.require_staff():return
             if messagebox.askyesno('Delete recovery copies?','Delete the local career and picture-sheet recovery copies? Saved project files are not deleted.',parent=self):self.recovery_enabled=False;toggle.set(False);self.delete_recovery_copies()
         destroy_row=button_row(box,pady=(0,18));button(destroy_row,'Delete recovery copies',delete,ghost=True).pack(side='left')
+    def _telemetry_card(self):
+        """Visible, always-available switch for the anonymized usage counters (default OFF)."""
+        box=card(self.body);box.pack(fill='x',pady=(0,10))
+        label(box,'Anonymous usage statistics (optional)',size=15,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(16,4))
+        label(box,
+              'OFF by default. When enabled, Café Desk sends small counters to the developer so it is clear '
+              'which tools cafés actually use. It never sends document contents, filenames, scanned images, '
+              'OCR text, customer names or sales figures.\n\n'
+              'What IS sent: this computer’s Machine ID, the business/shop name, station name, the city label '
+              'you entered, app version, operating system, and how many times each sidebar screen was opened.',
+              size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,10))
+        var=ctk.BooleanVar(value=bool(self._telemetry_enabled))
+        def toggle():
+            enabled=bool(var.get())
+            if enabled and not messagebox.askyesno(
+                'Share anonymous usage statistics?',
+                'Send anonymous usage counters and this computer’s Machine ID, business/town labels and app version '
+                'to the developer’s Supabase project?\n\n'
+                'No document contents, filenames, images, OCR text, customer details or sales amounts are sent.\n\n'
+                'You can switch this off again at any time on this screen.',
+                parent=self,
+            ):
+                var.set(False); return
+            try:
+                settings_store.save_telemetry_preference(enabled)
+            except Exception as exc:
+                var.set(not enabled)
+                return messagebox.showerror('Could not save preference',str(exc),parent=self)
+            self._telemetry_enabled=enabled
+            self._telemetry_consent_asked=True
+            if not enabled:
+                with self._telemetry_lock:
+                    self._telemetry_counts.clear()
+            self.status.set('Anonymous usage statistics ' + ('enabled • thank you' if enabled else 'disabled • nothing is uploaded'))
+        ctk.CTkSwitch(box,text='Share anonymous usage statistics',variable=var,command=toggle).pack(anchor='w',padx=18,pady=(0,10))
+        label(box,'Turning this off also stops the online station heartbeat. Licences, updates and key sync still work.',
+              size=11,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,16))
+
+    def _maybe_ask_telemetry_consent(self):
+        """Ask once, on the Home screen, whether this café wants to share usage counters."""
+        try:
+            if self._telemetry_consent_asked or self._telemetry_enabled: return
+            if not self.current=='Home': return
+            self._telemetry_consent_asked=True
+            answer=messagebox.askyesno(
+                'Help improve Café Desk?',
+                'May Café Desk send anonymous usage statistics to the developer?\n\n'
+                '• Default is NO — nothing is uploaded unless you agree.\n'
+                '• Only screen-open counters, this computer’s Machine ID, your business/town labels and the app version.\n'
+                '• Never document contents, filenames, images, OCR text, customer details or sales amounts.\n\n'
+                'You can change this later in Help & privacy.',
+                parent=self,
+            )
+            settings_store.save_telemetry_preference(bool(answer))
+            self._telemetry_enabled=bool(answer)
+            self.status.set('Anonymous usage statistics ' + ('enabled • thank you' if answer else 'left off • nothing is uploaded'))
+        except Exception:
+            self._log_exception('telemetry consent')
+
     def quick_help(self):
         messages={
             'Home':'Use the menu to choose a tool. Open Help & privacy for a step-by-step guide.',
@@ -673,6 +782,7 @@ class CafeDesk(ctk.CTk):
         button(ocr_btns,'Open downloads page  ↗',lambda:open_ocr_url(False),secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(ocr_btns,'Copy link',copy_ocr_url,ghost=True).pack(side='left')
         url_entry=entry(ocr_box);url_entry.insert(0,services.TESSERACT_DOWNLOAD_URL);url_entry.configure(state='readonly');url_entry.pack(fill='x',padx=18,pady=(0,16))
+        self._telemetry_card()
         usb_box=card(self.body);usb_box.pack(fill='x',pady=(0,10))
         label(usb_box,'Share Café Desk to other computers via USB',size=15,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(16,4))
         mode_note='ACTIVE (saving inside CafeDeskData beside the app)' if settings_store.is_portable_data_mode() else 'Per-PC mode (create a "CafeDeskData" folder beside CafeDesk.exe to store prices/settings on USB)'
@@ -756,10 +866,20 @@ class CafeDesk(ctk.CTk):
                     self.status.set(f'Up to date • Café Desk v{APP_BUILD}')
                     return messagebox.showinfo('Up to Date',f"You already have the latest Café Desk version (v{APP_BUILD}).",parent=self)
                 notes=res.get('release_notes') or 'Bug fixes and improvements.'
+                # Fail closed: this build refuses unsigned installers, so say so plainly
+                # instead of downloading something that will be rejected afterwards.
+                if not str(res.get('signature') or '').strip():
+                    return messagebox.showwarning(
+                        'Update Not Signed',
+                        f"Version {res['latest_version']} is published but is NOT signed by the owner.\n\n"
+                        'For safety this build will not download or install an unverified installer. '
+                        'Ask the owner to publish a signed release, then check again.',
+                        parent=self,
+                    )
                 ask_msg=(
                     f"New version available: Café Desk v{res['latest_version']} (you have v{APP_BUILD})\n\n"
                     f"What's new:\n{notes}\n\n"
-                    f"Download & verify the official SHA-256 signed update now?\n"
+                    f"Download & verify the owner-signed update (SHA-256 + Ed25519 signature)?\n"
                     f"(Your computer license, PIN, prices, and sales history are preserved.)"
                 )
                 if not messagebox.askyesno('Update Available!',ask_msg,parent=self):
@@ -1089,7 +1209,7 @@ class CafeDesk(ctk.CTk):
         column=ctk.CTkFrame(brand,fg_color='transparent'); column.pack(side='left'); self.brand_label=ctk.CTkLabel(column,textvariable=self.business_name,text_color='white',font=ctk.CTkFont(family=FONT,size=17,weight='bold'),wraplength=150,justify='left'); self.brand_label.pack(anchor='w'); label(column,f'DOCUMENT STUDIO • v{APP_BUILD}',size=10,bold=True,color='#99A9C3').pack(anchor='w')
         label(side,'WORKSPACE',size=10,bold=True,color='#8FA1BF').pack(anchor='w',padx=25,pady=(0,9))
         info=ctk.CTkFrame(side,fg_color='#273248',corner_radius=12); info.pack(side='bottom',fill='x',padx=15,pady=12)
-        label(info,'PRIVATE BY DEFAULT',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=13,pady=(12,3)); label(info,'Files stay on this computer\nunless you choose AI.',size=11,color='#B9C7DC',justify='left').pack(anchor='w',padx=13,pady=(0,12))
+        label(info,'PRIVATE BY DEFAULT',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=13,pady=(12,3)); label(info,'Files stay on this computer\nunless you choose AI.\nUsage stats are opt-in.',size=11,color='#B9C7DC',justify='left').pack(anchor='w',padx=13,pady=(0,12))
         nav=ctk.CTkScrollableFrame(side,fg_color='transparent',corner_radius=0);nav.pack(side='top',fill='both',expand=True,padx=(6,0))
         for name,icon in [('Home','⌂'),('Price list','≡'),('PDF tools','▤'),('Bluetooth files',None),('Scan & images','▧'),('A4 picture sheets','▦'),('Career documents','✎'),('Cards & invitations','▭'),('Forms creator','⊞'),('Receipts','▣'),('Sales reports','▧'),('Price settings','≡'),('Business settings','⚙'),('AI settings','✦'),('Projects & recovery','▣'),('About & contact','ⓘ'),('Help & privacy','?')]:
             btn_kw={'image':self.icon_images['bluetooth_nav_muted'],'compound':'left','text':f' {name}'} if icon is None else {'text':f'{icon}   {name}'}
@@ -1131,6 +1251,10 @@ class CafeDesk(ctk.CTk):
         self._note_screen_visit(name)
 
     def _note_screen_visit(self, screen_name):
+        # Privacy: usage counters are OPT-IN. Until staff explicitly enable them nothing
+        # is queued or uploaded, and no counts are accumulated in memory either.
+        if not self._telemetry_enabled:
+            return
         if screen_name not in cloud_sync.ALLOWED_TELEMETRY_SCREENS:
             return
         with self._telemetry_lock:
@@ -1141,6 +1265,8 @@ class CafeDesk(ctk.CTk):
             self._flush_telemetry_async()
 
     def _flush_telemetry_async(self, force=False):
+        if not self._telemetry_enabled:
+            return
         with self._telemetry_lock:
             if self._telemetry_inflight:
                 return
@@ -1167,8 +1293,9 @@ class CafeDesk(ctk.CTk):
         threading.Thread(target=_bg,daemon=True).start()
 
     def _telemetry_tick(self):
-        self._flush_telemetry_async(force=True)
-        self.after(90000,self._telemetry_tick)
+        try: self._flush_telemetry_async(force=True)
+        except Exception: self._log_exception('_telemetry_tick')
+        finally: self.after(90000,self._telemetry_tick)
     def heading(self,parent,title,subtitle):
         label(parent,title,size=24,bold=True).pack(anchor='w',pady=(2,3)); label(parent,subtitle,size=13,color=MUTED,wraplength=740,justify='left').pack(anchor='w',pady=(0,18))
     def home(self):
@@ -1188,25 +1315,101 @@ class CafeDesk(ctk.CTk):
             if icon is None: ctk.CTkLabel(box,text='',image=self.icon_images['bluetooth_card']).pack(anchor='w',padx=18,pady=(14,4))
             else: label(box,icon,size=24,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(14,2))
             label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),ghost=True).pack(anchor='w',padx=18,pady=(0,14))
-    def job(self,description,fn,success,error_cb=None):
+    def job(self,description,fn,success,error_cb=None,timeout=180):
+        """Run `fn` on a worker thread and deliver the result on the Tk main thread.
+
+        Audit fix: a single wedged worker (a stuck WIA scanner, a hung network call) used
+        to set `busy=True` forever, which blocked every later tool AND `close_app()`.
+        The watchdog frees the desk after `timeout` seconds so staff can carry on; the
+        abandoned thread is a daemon and its late result is ignored.
+        """
         if self.busy: return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
         self.busy=True; self.status.set(description)
+        job_id=uuid.uuid4().hex
+        self._active_job_id=job_id
         def work():
-            try: self.events.put(('ok',success,fn()))
-            except Exception as exc: self.events.put(('error',error_cb,str(exc)))
+            try: self.events.put(('ok',success,fn(),job_id))
+            except Exception as exc: self.events.put(('error',error_cb,str(exc),job_id))
         threading.Thread(target=work,daemon=True).start()
+        def _watchdog():
+            if self.busy and self._active_job_id==job_id:
+                self.busy=False; self._active_job_id=None
+                self.status.set(f'⚠ “{description}” took too long and was abandoned • the tool is free again')
+        try: self.after(int(max(30,timeout))*1000,_watchdog)
+        except tk.TclError: pass
+    def _log_exception(self, where):
+        """Record an unexpected GUI exception without letting it kill a timer or the app."""
+        try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(where)
+        except Exception: pass
+        try: traceback.print_exc()
+        except Exception: pass
+
+    def report_callback_exception(self, exc, val, tb):
+        """Tkinter callback watchdog.
+
+        Without this, an exception inside a widget callback is printed to a stdout that
+        does not exist in the shipped `--windowed` build and the UI is left half-updated
+        with no record of why. `poll_events`/timers keep their own guarantees; this is
+        the last line of defence for everything else (button clicks, bindings, redraws).
+        """
+        try: traceback.print_exception(exc, val, tb)
+        except Exception: pass
+        try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(val)
+        except Exception: pass
+        # Never let a broken background result wedge the whole desk: clear the busy flag.
+        try: self.busy=False
+        except Exception: pass
+
     def poll_events(self):
+        """Pump worker-thread results on the Tk main thread.
+
+        Hardening (audit fix): the reschedule lives in `finally` because a raising
+        success/error callback used to kill this pump permanently — every later job
+        result was then silently dropped and `self.busy` stayed True forever, which
+        also blocked `close_app()` so the user could not even quit.
+        """
         try:
             while True:
-                kind,callback,result=self.events.get_nowait(); self.busy=False
+                event=self.events.get_nowait()
+                kind,callback,result=event[0],event[1],event[2]
+                job_id=event[3] if len(event)>3 else None
+                if job_id is None:
+                    # Out-of-band event (e.g. remote entitlement sync). It must NOT disturb
+                    # the active job, otherwise that job's own result is dropped.
+                    if kind=='error':
+                        try: messagebox.showerror('Café Desk',result,parent=self)
+                        except Exception: self._log_exception('error dialog')
+                    else:
+                        try: callback(result)
+                        except Exception: self._log_exception('event callback')
+                    continue
+                if job_id!=getattr(self,'_active_job_id',None):
+                    continue   # result from a job the watchdog already abandoned
+                self.busy=False; self._active_job_id=None
                 if kind=='error':
-                    if callback is not None: callback(result)
+                    if callback is not None:
+                        try: callback(result)
+                        except Exception: self._log_exception('job error_cb')
                     else: self.status.set('Task could not be completed')
-                    messagebox.showerror('Café Desk',result,parent=self)
+                    # Background failures (auto-recovery, telemetry, entitlement sync) must not
+                    # open a blocking modal every tick — surface them in the status bar only.
+                    if not self._quiet_job_error(result):
+                        try: messagebox.showerror('Café Desk',result,parent=self)
+                        except Exception: self._log_exception('error dialog')
                 else:
-                    self.status.set('Ready  •  Task completed'); callback(result)
+                    try:
+                        self.status.set('Ready  •  Task completed'); callback(result)
+                    except Exception:
+                        self._log_exception('job callback')
         except queue.Empty: pass
-        self.after(100,self.poll_events)
+        finally:
+            # `TclError` means the window is gone (normal shutdown): stop quietly.
+            try: self.after(100,self.poll_events)
+            except tk.TclError: pass
+
+    def _quiet_job_error(self, message):
+        """True for background job failures that should not interrupt staff with a modal."""
+        return any(tag in str(message) for tag in _QUIET_JOB_ERROR_TAGS)
     def clear_customer(self):
         if self.busy: return messagebox.showinfo('Please wait','Please wait until the current task finishes.',parent=self)
         if not messagebox.askyesno('Next customer','Clear the current customer’s draft, project photos, picture sheet, cards, forms, OCR text/images, scanned pages, receipt, temporary merge copies, recovery copies and AI key? Staff will be locked. Saved PDFs, saved projects, Downloads and Bluetooth-received files on disk will NOT be deleted.',parent=self): return

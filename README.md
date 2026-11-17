@@ -46,6 +46,15 @@ If the PIN is forgotten, there is no built-in recovery. An administrator can res
 
 An API key is held in memory only; it is not encrypted or persisted. Do not unlock staff access or leave a key in an unattended customer session. AI sends the entire editor text to your chosen AI provider (Google Gemini, OpenRouter, OpenAI, Groq, DeepSeek, or custom endpoint) after confirmation. Obtain customer permission and review provider policies and charges. Scanner and saved-file usage can leave copies in other applications and recent-file lists.
 
+### Anonymous usage statistics (opt-in, off by default)
+
+Café Desk asks **once** on the Home screen whether it may send anonymous usage statistics, and the answer is **No unless you explicitly agree**. You can change it at any time under **Help & privacy → Anonymous usage statistics**. When it is on, Café Desk uploads only:
+
+- this computer's Machine ID (`CD-XXXX-XXXX-XXXX`), the **business/shop name**, the **station name**, and the **city label** you typed in settings;
+- the app version, the operating system, and a count of how many times each sidebar screen was opened.
+
+It never uploads document text, filenames, images, scanned pages, OCR text, customer names, ID numbers, or sales/receipt figures. Turning the switch off stops all uploads immediately and also stops the online station heartbeat; licensing, updates and key sync keep working. Because the business/town labels are sent with a machine identifier, treat this as personal information under POPIA and only enable it with the shop owner's agreement.
+
 ## Scan directly in the app (Windows)
 
 1. Install the scanner driver for your device, connect its USB cable and switch it on. The Epson EcoTank L3251 is an intended test device, but this feature **has not been tested on that device or on Windows**.
@@ -91,8 +100,28 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
    ```bash
    python admin_keygen.py --init-keys --apply-public-key
    ```
-   - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` (**gitignored — NEVER share or copy `owner-keys/` or `admin_keygen.py` onto customer USBs!**).
-   - Writes only your Ed25519 **public key** into `license_guard.py`, then commit & push (or run `packaging\build-windows.bat`) so your `.exe` builds verify signatures against **your** keypair.
+   - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` and the matching public key in `owner-keys/cafedesk_owner.public.txt` (**the whole `owner-keys/` folder is gitignored — NEVER share it, and never copy it or `admin_keygen.py` onto a customer USB!**).
+   - Writes only your Ed25519 **public key** into `license_guard.py`. Commit that change.
+   - `packaging\build-windows.bat` and `packaging/build-unix.sh` now **refuse to build** while the demo key is still embedded. For a throw-away test build only, set `CAFE_DESK_ALLOW_DEMO_KEY=1`.
+
+   **Then add the GitHub Actions secret (required for release builds):**
+
+   1. Print the public key (from your private laptop, inside the repo folder):
+      ```bash
+      cat owner-keys/cafedesk_owner.public.txt      # macOS / Linux
+      type owner-keys\cafedesk_owner.public.txt     # Windows
+      ```
+      It is a short one-line string such as `tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI`. **This is the PUBLIC half and is safe to paste.** Never use the contents of `cafedesk_owner.private.key`.
+   2. On GitHub open **Settings → Secrets and variables → Actions** (the repository's own settings, not your account settings).
+   3. Click **New repository secret**.
+   4. **Name:** `CAFE_DESK_PUBLIC_KEY` — exact spelling, upper case, underscores.
+   5. **Secret:** paste the public key line, with no quotes and no trailing spaces.
+   6. Click **Add secret**. Then re-run the **Build USB Portable & Installer Packages** workflow.
+
+   The release job then overwrites the embedded key with the secret before packaging and re-checks it, so a mismatched or missing secret cannot silently ship a demo-key build. `.github/check_release_key.py` is the guard: **release builds (push to `main`, `v*` tags, manual runs) fail closed** when the secret is missing or the demo key is embedded, while **pull-request builds only warn** — those artifacts are throw-away and must never be handed to a customer.
+
+   *Why the demo key must never ship:* it is a placeholder that lives in this repository. The matching **private** half was never committed, so a stranger cannot forge a licence from it today — but you have no control over who holds it, you cannot revoke or rotate it away from copies already distributed, and anyone who ever obtained it (an old contractor, a leaked backup) could issue themselves keys you can never distinguish from your own. A build signed with your own keypair is the only one you control.
+
    - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.
 
 2. **Installing & Activating on a Customer's Computer:**
