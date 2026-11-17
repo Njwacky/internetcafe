@@ -9,6 +9,25 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 .venv\Scripts\python.exe -m pip install -r requirements-build.txt
 if errorlevel 1 exit /b 1
+
+rem --- Refuse to build a distributable copy while the DEMO signing key is embedded. ---
+rem A build using the demo key lets anyone mint a valid 1-year licence. Run
+rem   python admin_keygen.py --init-keys --apply-public-key
+rem once on your private laptop first (only the PUBLIC half is committed).
+.venv\Scripts\python.exe .github\check_release_key.py
+if errorlevel 1 (
+  echo.
+  echo ======================================================================
+  echo  BUILD STOPPED: the DEMO owner signing key is still embedded.
+  echo  Anyone could generate their own licence with that key.
+  echo  Run this ONCE on your private laptop, then build again:
+  echo      python admin_keygen.py --init-keys --apply-public-key
+  echo  To build a throw-away test copy anyway:
+  echo      set CAFE_DESK_ALLOW_DEMO_KEY=1
+  echo ======================================================================
+  exit /b 1
+)
+
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name CafeDesk --exclude-module admin_keygen --collect-all customtkinter --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all reportlab --collect-all cryptography --hidden-import win32com.client --hidden-import pythoncom --add-data "assets;assets" --add-data "cv-design-gallery.html;." --add-data "cafe-desk-manual.html;." --add-data "README.md;." app.py
 if errorlevel 1 exit /b 1
 

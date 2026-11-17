@@ -100,9 +100,28 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
    ```bash
    python admin_keygen.py --init-keys --apply-public-key
    ```
-   - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` (**gitignored — NEVER share or copy `owner-keys/` or `admin_keygen.py` onto customer USBs!**).
-   - Writes only your Ed25519 **public key** into `license_guard.py`, then commit & push (or run `packaging\build-windows.bat`) so your `.exe` builds verify signatures against **your** keypair.
-   - **Required for GitHub Actions builds:** add a repository secret named **`CAFE_DESK_PUBLIC_KEY`** (Settings → Secrets and variables → Actions) whose value is that same public key. The Windows release job now *fails closed* if the secret is missing, because a build made from a plain checkout would otherwise verify licenses against the throw-away **demo** key that is committed in this repo — meaning anyone could mint themselves a licence. The check lives in `.github/check_release_key.py`: **release builds (push to `main`, `v*` tags, manual runs) fail closed** if the secret is missing, while **pull-request builds only warn** and keep the demo key so contributor CI still works — those artifacts must never be given to a customer.
+   - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` and the matching public key in `owner-keys/cafedesk_owner.public.txt` (**the whole `owner-keys/` folder is gitignored — NEVER share it, and never copy it or `admin_keygen.py` onto a customer USB!**).
+   - Writes only your Ed25519 **public key** into `license_guard.py`. Commit that change.
+   - `packaging\build-windows.bat` and `packaging/build-unix.sh` now **refuse to build** while the demo key is still embedded. For a throw-away test build only, set `CAFE_DESK_ALLOW_DEMO_KEY=1`.
+
+   **Then add the GitHub Actions secret (required for release builds):**
+
+   1. Print the public key (from your private laptop, inside the repo folder):
+      ```bash
+      cat owner-keys/cafedesk_owner.public.txt      # macOS / Linux
+      type owner-keys\cafedesk_owner.public.txt     # Windows
+      ```
+      It is a short one-line string such as `tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI`. **This is the PUBLIC half and is safe to paste.** Never use the contents of `cafedesk_owner.private.key`.
+   2. On GitHub open **Settings → Secrets and variables → Actions** (the repository's own settings, not your account settings).
+   3. Click **New repository secret**.
+   4. **Name:** `CAFE_DESK_PUBLIC_KEY` — exact spelling, upper case, underscores.
+   5. **Secret:** paste the public key line, with no quotes and no trailing spaces.
+   6. Click **Add secret**. Then re-run the **Build USB Portable & Installer Packages** workflow.
+
+   The release job then overwrites the embedded key with the secret before packaging and re-checks it, so a mismatched or missing secret cannot silently ship a demo-key build. `.github/check_release_key.py` is the guard: **release builds (push to `main`, `v*` tags, manual runs) fail closed** when the secret is missing or the demo key is embedded, while **pull-request builds only warn** — those artifacts are throw-away and must never be handed to a customer.
+
+   *Why the demo key must never ship:* it is a placeholder that lives in this repository. The matching **private** half was never committed, so a stranger cannot forge a licence from it today — but you have no control over who holds it, you cannot revoke or rotate it away from copies already distributed, and anyone who ever obtained it (an old contractor, a leaked backup) could issue themselves keys you can never distinguish from your own. A build signed with your own keypair is the only one you control.
+
    - *Tip for commercial sales:* Set your GitHub repository visibility to **Private** in GitHub Settings so buyers cannot download raw Python source code.
 
 2. **Installing & Activating on a Customer's Computer:**

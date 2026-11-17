@@ -1936,6 +1936,30 @@ class ReleaseKeyGuardTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_local_build_scripts_refuse_the_demo_key(self):
+        """`packaging/build-*` must run the guard, not just the CI workflow."""
+        repo = Path(__file__).resolve().parent
+        win = (repo / 'packaging' / 'build-windows.bat').read_text(encoding='utf-8', errors='replace')
+        unix = (repo / 'packaging' / 'build-unix.sh').read_text(encoding='utf-8', errors='replace')
+        for name, src in (('build-windows.bat', win), ('build-unix.sh', unix)):
+            self.assertIn('check_release_key.py', src, f'{name} does not run the demo-key guard')
+            self.assertIn('CAFE_DESK_ALLOW_DEMO_KEY', src, f'{name} has no documented escape hatch')
+            # The guard must run BEFORE PyInstaller packages anything.
+            self.assertLess(src.index('check_release_key.py'), src.index('PyInstaller'),
+                            f'{name} runs the guard after packaging')
+
+    def test_allow_demo_flag_and_env_escape_hatch(self):
+        import os
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            self.assertEqual(self._run(root, []).returncode, 1)
+            self.assertEqual(self._run(root, ['--allow-demo']).returncode, 0)
+            env = self._run(root, [], {'CAFE_DESK_ALLOW_DEMO_KEY': '1'})
+            self.assertEqual(env.returncode, 0, env.stdout + env.stderr)
+        finally:
+            tmp.cleanup()
+
     def test_apply_injects_the_secret_and_then_passes(self):
         import base64
         from cryptography.hazmat.primitives import serialization as _s

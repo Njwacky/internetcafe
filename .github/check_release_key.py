@@ -4,8 +4,11 @@ Why this exists
 ---------------
 `license_guard.py` ships with `DEFAULT_OWNER_PUBLIC_KEY_B64`, a throw-away "demo"
 public key that lives in this repository. Any artifact built straight from a plain
-checkout therefore verifies activation keys against a key whose *private* half is
-public knowledge — i.e. anyone could mint a license.
+checkout therefore verifies activation keys against that placeholder instead of the
+owner's real keypair — so nobody, including the owner, controls who can issue licences
+for it. (The demo *private* half was never committed, so a stranger cannot forge a key
+from the public half alone; the problem is loss of control and the inability to revoke,
+not immediate forgery. Shipping it is still unacceptable for a paid product.)
 
 The Windows release job must inject the owner's real public key (repository secret
 `CAFE_DESK_PUBLIC_KEY`) and apply it before PyInstaller runs. This script makes that
@@ -46,6 +49,8 @@ def _emit(level: str, title: str, message: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Verify the embedded owner Ed25519 public key is not the demo key.')
     parser.add_argument('--warn-only', action='store_true', help='Report but do not fail when the demo key is active.')
+    parser.add_argument('--allow-demo', action='store_true',
+                        help='Build a throw-away test copy with the demo key (also enabled by CAFE_DESK_ALLOW_DEMO_KEY=1).')
     parser.add_argument('--apply', action='store_true', help='Write $CAFE_DESK_PUBLIC_KEY into license_guard.py before checking (fails if unset).')
     parser.add_argument('--apply-if-available', action='store_true', help='Same as --apply, but continue quietly when the secret is unset (pull requests).')
     args = parser.parse_args(argv)
@@ -80,8 +85,9 @@ def main(argv: list[str] | None = None) -> int:
             'This build would verify licenses against the public demo key that ships in the repo. '
             'Set the CAFE_DESK_PUBLIC_KEY repository secret (or run --apply in the release job).',
         )
-        if args.warn_only:
-            print('Demo key active — allowed because this is a non-release build (--warn-only).')
+        if args.warn_only or args.allow_demo or os.environ.get('CAFE_DESK_ALLOW_DEMO_KEY', '').strip() in ('1', 'true', 'yes', 'on'):
+            print('Demo key active — allowed for this throw-away/test build only. '
+                  'NEVER hand this artifact to a customer.')
             return 0
         _emit('error', 'Release blocked', 'Refusing to package a build signed with the demo key.')
         return 1

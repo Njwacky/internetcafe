@@ -92,7 +92,7 @@ DEMO_KEY_WARNING = (
     '⚠ DEMO SIGNING KEY ACTIVE: This build still uses the sample Ed25519 public key '
     'shipped in the repo. Run `python admin_keygen.py --init-keys --apply-public-key` '
     'on your private laptop and rebuild before selling or distributing this app. '
-    'Licenses signed with the demo key must not be trusted in production.'
+    'This placeholder key was never meant for real customers, so you do not control it. '
 )
 
 
