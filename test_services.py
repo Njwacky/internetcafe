@@ -1922,6 +1922,20 @@ class ReleaseKeyGuardTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_pull_request_build_does_not_hard_fail_without_the_secret(self):
+        """PR artifacts are throw-away; only release builds must fail closed."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = self._tree(tmp.name)
+            res = self._run(root, ['--warn-only', '--apply-if-available'])
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn('keeps the demo key', res.stdout + res.stderr)
+            # ...but the release path with --apply must still refuse.
+            hard = self._run(root, ['--apply'])
+            self.assertEqual(hard.returncode, 1, hard.stdout + hard.stderr)
+        finally:
+            tmp.cleanup()
+
     def test_apply_injects_the_secret_and_then_passes(self):
         import base64
         from cryptography.hazmat.primitives import serialization as _s

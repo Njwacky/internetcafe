@@ -46,13 +46,20 @@ def _emit(level: str, title: str, message: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Verify the embedded owner Ed25519 public key is not the demo key.')
     parser.add_argument('--warn-only', action='store_true', help='Report but do not fail when the demo key is active.')
-    parser.add_argument('--apply', action='store_true', help='Write $CAFE_DESK_PUBLIC_KEY into license_guard.py before checking.')
+    parser.add_argument('--apply', action='store_true', help='Write $CAFE_DESK_PUBLIC_KEY into license_guard.py before checking (fails if unset).')
+    parser.add_argument('--apply-if-available', action='store_true', help='Same as --apply, but continue quietly when the secret is unset (pull requests).')
     args = parser.parse_args(argv)
 
     secret = os.environ.get('CAFE_DESK_PUBLIC_KEY', '').strip()
 
-    if args.apply:
+    apply_requested = args.apply or args.apply_if_available
+    if apply_requested:
         if not secret:
+            if args.apply_if_available:
+                _emit('notice', 'No signing key in this build',
+                      'CAFE_DESK_PUBLIC_KEY is not set; this pull-request artifact keeps the demo key '
+                      'and must not be distributed to a customer.')
+                return 0
             _emit('error', 'Missing signing key', 'CAFE_DESK_PUBLIC_KEY is empty; cannot apply the owner public key.')
             return 1
         try:
