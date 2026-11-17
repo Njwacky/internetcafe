@@ -1120,6 +1120,21 @@ async function callOwnerAdmin(payload) {
   return json;
 }
 
+// The signing seed and verification-key configuration stay on the server.
+async function callOwnerResign(payload) {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error("Please sign in first.");
+  const resp = await fetch(`${SUPABASE_URL}/functions/v1/owner-resign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify(payload),
+  });
+  let json = {};
+  try { json = await resp.json(); } catch (_) {}
+  if (!resp.ok || !json.ok) throw new Error(json.error || "Signature repair failed.");
+  return json;
+}
+
 /* ---------------- data loading ---------------- */
 async function fetchPaged(build, maxPages = 12) {
   const size = 1000;
@@ -1619,6 +1634,7 @@ function renderKeysTable() {
       <td>
         <div class="row-actions">
           <button class="btn btn-ghost btn-sm" data-copy="${attr(k.token)}">Copy key</button>
+          ${!k.revoked && d >= 0 ? `<button class="btn btn-ghost btn-sm" data-repair-signature="${attr(k.license_id)}">Repair signature</button>` : ""}
           <button class="btn btn-ghost btn-sm" data-wa="${attr(k.machine_id)}" data-token="${attr(k.token)}" data-cust="${attr(k.customer || "")}" data-exp="${attr(String(k.expires_at || "").slice(0, 10))}">WhatsApp</button>
           ${(() => { const group = state.keys.filter(x => x.machine_id === k.machine_id); const paused = group.length > 0 && group.every(x => x.revoked); return `<button class="btn ${paused ? "btn-ghost" : "btn-danger"} btn-sm" data-pause-machine="${attr(k.machine_id)}" data-on="${paused ? "0" : "1"}">${paused ? "Resume PC" : "Pause PC"}</button>`; })()}
           ${k.revoked
@@ -1708,6 +1724,20 @@ document.addEventListener("click", async (e) => {
       `Easiest: open Café Desk and click "Check Online Approval".\n\n` +
       `Or paste this offline key:\n${waBtn.dataset.token}`;
     window.open("https://wa.me/?text=" + encodeURIComponent(msg), "_blank");
+    return;
+  }
+
+  const repairBtn = e.target.closest("[data-repair-signature]");
+  if (repairBtn) {
+    const key = state.keys.find(k => k.license_id === repairBtn.dataset.repairSignature);
+    if (!key) return;
+    if (!confirm(`Repair the signature of ${key.license_id} for ${key.machine_id}? The stored key will be replaced without changing its dates, customer or ID. PCs using an older signing key may need an app update. Continue only after verifying the customer's app trusts the new public key.`)) return;
+    repairBtn.disabled = true;
+    try {
+      await callOwnerResign({ license_id: key.license_id });
+      toast("Signature repaired. Ask the customer to check online approval.");
+      await refreshAll();
+    } catch (err) { toast(err.message || "Signature repair failed.", "err"); repairBtn.disabled = false; }
     return;
   }
 

@@ -316,3 +316,31 @@ For an existing Supabase database, apply `supabase/migrations/20261117_license_r
 For a single machine, the dashboard reuses its unexpired base key for the same customer. A different customer name pauses the existing key when the owner attempts approval; investigate before resuming. The database rejects new overlapping base keys even if one is paused. Existing duplicate unexpired base keys are paused on the next online check-in; the affected user sees a pause notice. Review duplicate records before resuming: all but one unexpired base record must be resolved, otherwise check-in pauses them again. Add-on keys are separate. The database rule does not cover offline keys signed and distributed without syncing to Supabase.
 
 **Security limitations:** The short Machine ID alone does not prove two requests came from different physical computers. A copied/spoofed ID or an offline PC cannot be reliably identified or paused by this mechanism. Online revocations take effect only when the app checks in, and a locally copied unexpired key can be re-entered offline. A secure inactivity lock and collision detection require an authenticated per-device identity and a defined check-in/offline policy; they are not implemented by the duplicate-key rule.
+
+### Repairing a license signed by the wrong owner key
+
+The cloud signer reads the private Ed25519 seed from **`CAFEDESK_OWNER_PRIVATE_KEY_B64`**, not the GitHub Actions public-key setting `CAFE_DESK_PUBLIC_KEY`. Never paste the private seed into this chat, the web dashboard, GitHub, a terminal command, or a tracked file. Do not generate a new keypair. Changing this secret changes the signer for *future* licenses; it does not replace previously issued tokens or change the public key in an installed app.
+
+This repository includes a separately deployable `owner-resign` Edge Function and a **Repair signature** action. It verifies the original signature using a server-configured trusted old public key, validates the signed payload against the database, signs the *same payload* using the cloud secret, and verifies the new signature with a server-configured expected public key before an atomic compare-and-set. It preserves the license ID, machine, customer, issue/expiry dates, features and seat data; it refuses revoked, expired, inconsistent, concurrently changed or duplicate-base records. It is owner-authenticated, and its database update RPC is executable only by `service_role`. It does not change `owner-admin` or automatically repair records.
+
+**Before deployment:** Back up the database and verify the customer app actually embeds the intended public key. Already-installed apps that trust a different key will not accept the repaired signature; previously delivered offline tokens are not remotely invalidated. The previous duplicate-ID migration is a prerequisite because its issuance trigger takes the same machine lock as the repair RPC. It also pauses existing duplicate IDs on check-in, so review and resolve existing duplicate IDs before applying it. Apply `20261117193000_atomic_license_repair.sql` only after that prerequisite. Neither migration nor this function is deployed automatically by merging this repo. Test first in a non-production project.
+
+To configure the signer on the owner's Windows computer **after confirming its private/public files match**, use the Supabase CLI, not the browser. The following PowerShell example assumes the terminal is in the repository root, `owner-keys` is a private, access-restricted directory, and Supabase CLI authentication is already configured. Substitute your own project reference if different. It writes a short-lived `.env` file in the gitignored owner directory and deletes it even if the command fails; if PowerShell or the computer is interrupted, check that no `repair-*.env` file remains. Do not paste the file or command output containing secrets anywhere.
+
+```powershell
+$envFile = Join-Path (Resolve-Path .\owner-keys).Path ("repair-" + [guid]::NewGuid().ToString() + ".env")
+try {
+  $seed = (Get-Content .\owner-keys\cafedesk_owner.private.key -Raw).Trim()
+  $public = (Get-Content .\owner-keys\cafedesk_owner.public.txt -Raw).Trim()
+  $oldPublic = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI' # only if the original license verifies with this key
+  $content = "CAFEDESK_OWNER_PRIVATE_KEY_B64=$seed`nCAFEDESK_REPAIR_OLD_PUBLIC_KEY_B64=$oldPublic`nCAFEDESK_REPAIR_EXPECTED_PUBLIC_KEY_B64=$public`n"
+  [System.IO.File]::WriteAllText($envFile, $content, [System.Text.UTF8Encoding]::new($false))
+  npx --yes supabase secrets set --project-ref rmtkppzqzxuuuhbeufjy --env-file $envFile
+  if ($LASTEXITCODE -ne 0) { throw 'Supabase secrets update failed.' }
+} finally {
+  Remove-Item $envFile -ErrorAction SilentlyContinue
+  $seed = $null; $content = $null
+}
+```
+
+The two `CAFEDESK_REPAIR_*` values are **public** Ed25519 keys pinned for this repair; the demo value above is appropriate only for records actually verified as signed by that key. Confirm the expected public key also matches the key embedded in the customer's app. Configure the secrets only after planning the effect on other customers. Then deploy `owner-resign` with the Supabase CLI and deploy the updated owner dashboard. Under **Issue & sign keys**, select **Repair signature** for one verified, unpaused license. Ask that customer to check online approval; if offline, send them the newly repaired key. Do not create an overlapping license or delete the old record to work around a refusal. This repair cannot revoke old offline copies.
