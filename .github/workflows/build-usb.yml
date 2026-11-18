@@ -41,6 +41,14 @@ jobs:
       - name: Run unit test suite
         run: python .github/run_tests.py
 
+      - name: Set up Node 22 for signer tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test license signature repair
+        run: node --test tests/owner-resign.test.mjs
+
       - name: Warn if the demo signing key would ship (pull requests only)
         if: github.event_name == 'pull_request'
         run: python .github/check_release_key.py --warn-only
