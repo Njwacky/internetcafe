@@ -329,7 +329,7 @@
   <div class="wrap">
     <div class="hero">
       <div>
-        <span class="eyebrow"><i class="dot"></i> Café Desk v<span id="verInline">0.8.2</span> · 2-minute setup</span>
+        <span class="eyebrow"><i class="dot"></i> Café Desk v<span id="verInline">0.8.3</span> · 2-minute setup</span>
         <h1>Every document your café prints, in <em>one calm PC app</em>.</h1>
         <p class="lede">PDFs, CVs, scans, cards, forms, receipts and daily sales — all in one Windows application built for internet cafés and print shops. No spreadsheets, no browser tabs, no training needed.</p>
 
@@ -688,7 +688,7 @@
           Portable USB (.zip)
         </a>
       </div>
-      <div class="fine" id="finePrint">v0.8.2 · Windows 10 &amp; 11 (64-bit) · SHA-256 published for every build</div>
+      <div class="fine" id="finePrint">v0.8.3 · Windows 10 &amp; 11 (64-bit) · SHA-256 published for every build</div>
     </div>
   </div>
 </main>
@@ -788,7 +788,7 @@ async function loadRelease() {
       ? `Latest build <b>v${version}</b>${when ? " · published " + when : ""} · <a href="${LATEST}" target="_blank" rel="noopener">release notes</a>`
       : "Latest build is on the release page.";
     document.getElementById("finePrint").textContent =
-      `v${version || "0.8.2"} · Windows 10 & 11 (64-bit) · SHA-256 published for every build`;
+      `v${version || "0.8.3"} · Windows 10 & 11 (64-bit) · SHA-256 published for every build`;
 
     // Checksums: manifest first, then fall back to hashes in the release body.
     let ok = false;
@@ -813,7 +813,7 @@ async function loadRelease() {
       `Latest build lives on the <a href="${LATEST}" target="_blank" rel="noopener">GitHub release page</a>.`;
     document.getElementById("exeSha").textContent = "see release page";
     document.getElementById("zipSha").textContent = "see release page";
-    document.getElementById("verInline").textContent = "0.8.2";
+    document.getElementById("verInline").textContent = "0.8.3";
   }
 }
 

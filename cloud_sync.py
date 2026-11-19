@@ -34,6 +34,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -430,6 +431,35 @@ def download_and_verify_update(
 # ---------------------------------------------------------------------------
 # 2. Online Activation Request & One-Click Key Approval Pull (Customer PC)
 # ---------------------------------------------------------------------------
+def _activation_request_path() -> Path:
+    return license_guard.host_license_dir() / 'activation-request.json'
+
+
+def _save_activation_request_id(machine_id: str, request_id: object) -> None:
+    """Persist the unguessable request UUID used to authorize online key delivery."""
+    try:
+        clean_mid = license_guard.normalize_machine_id(machine_id)
+        clean_id = str(uuid.UUID(str(request_id or '').strip()))
+    except (ValueError, TypeError, AttributeError):
+        return
+    path = _activation_request_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps({'machine_id': clean_mid, 'request_id': clean_id}), encoding='utf-8')
+    os.replace(temp, path)
+
+
+def _load_activation_request_id(machine_id: str) -> str:
+    try:
+        clean_mid = license_guard.normalize_machine_id(machine_id)
+        data = json.loads(_activation_request_path().read_text(encoding='utf-8'))
+        if license_guard.normalize_machine_id(str(data.get('machine_id') or '')) != clean_mid:
+            return ''
+        return str(uuid.UUID(str(data.get('request_id') or '')))
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return ''
+
+
 def request_online_activation(
     settings: dict | None,
     *,
@@ -459,6 +489,7 @@ def request_online_activation(
         },
     )
     if isinstance(res, dict) and res.get('ok'):
+        _save_activation_request_id(mid, res.get('request_id'))
         return res
     err = res.get('error') if isinstance(res, dict) else 'Unexpected cloud response.'
     raise RuntimeError(str(err or 'Activation request failed.'))
@@ -481,6 +512,7 @@ def request_license_with_contact(settings: dict | None, *, name: str, company: s
                  'p_contact_phone': phone, 'p_station_name': default_station_name()})
     if not isinstance(res, dict) or not res.get('ok'):
         raise RuntimeError(str(res.get('error') if isinstance(res, dict) else 'Unexpected cloud response.'))
+    _save_activation_request_id(mid, res.get('request_id'))
     return res
 
 
@@ -503,7 +535,7 @@ def sync_machine_entitlements_from_cloud(
         key,
         'POST',
         '/rest/v1/rpc/check_machine_entitlements',
-        payload={'p_machine_id': mid},
+        payload={'p_machine_id': mid, 'p_request_id': _load_activation_request_id(mid) or None},
     )
     if not isinstance(res, dict) or not res.get('ok'):
         err = res.get('error') if isinstance(res, dict) else 'Could not check online keys.'

@@ -1237,7 +1237,9 @@ class DiagnosticRemediationTests(unittest.TestCase):
             unlocked_out=tmp_p/'unlocked-statement.pdf'
             env_pc1={'CAFE_DESK_PUBLIC_KEY':pub_b64,'CAFE_DESK_LICENSE_DIR':str(lic_dir),'CAFE_DESK_TEST_MACHINE_ID':pc1_mid}
 
-            with mock.patch.dict(os.environ,env_pc1,clear=False):
+            with mock.patch.dict(os.environ,env_pc1,clear=False), mock.patch.object(license_guard,'_today_utc',return_value=issue_day):
+                # Freeze the license clock for the whole scenario; real wall-clock time may
+                # be later than issue_day and correctly trip rollback protection otherwise.
                 # 1. Standard 1-year base license alone does NOT unlock paid PDF Password Remover
                 std_tok,_=admin_keygen.sign_license_token(pc1_mid,customer='Benoni Cafe',days=365,issued_date=issue_day,private_key_b64=priv_b64)
                 license_guard.activate_and_save_license(std_tok,today=issue_day)
@@ -1757,6 +1759,20 @@ class SecurityHardeningTests(unittest.TestCase):
         # Domain-separated: same secret under different shop IDs differs.
         self.assertNotEqual(digest, cloud_sync.hash_shop_sync_secret('SHOP-OTHER', 'longenoughpass1'))
 
+    def test_supabase_rpc_hardening_binds_keys_and_owner_registers_shop_sync(self):
+        repo = Path(__file__).resolve().parent
+        migration = (repo / 'supabase' / 'migrations' / '20261119200000_rpc_access_hardening.sql').read_text(encoding='utf-8')
+        dashboard = (repo / 'owner-dashboard.html').read_text(encoding='utf-8')
+        client = (repo / 'cloud_sync.py').read_text(encoding='utf-8')
+        self.assertIn('owner_register_shop_sync_profile', migration)
+        self.assertIn('This Shop ID is not registered yet', migration)
+        self.assertIn('p_request_id is not null', migration)
+        self.assertIn('activation_request_id = p_request_id', migration)
+        self.assertIn('enforce_machine_rpc_rate_limit', migration)
+        self.assertIn('registerShopSyncProfile()', dashboard)
+        self.assertIn('p_request_id', client)
+        self.assertIn('_save_activation_request_id', client)
+
     def test_vercel_sets_csp_hsts_and_permissions_policy(self):
         import json
         repo = Path(__file__).resolve().parent
@@ -2128,6 +2144,35 @@ class ReleaseArtifactKeyScanTests(unittest.TestCase):
 
 
 class LicenseContactRequestTests(unittest.TestCase):
+    def test_contact_request_saves_request_uuid_for_online_key_delivery(self):
+        from unittest import mock
+        import json, os, tempfile
+        import cloud_sync
+        request_id = '6dcb61c2-a018-4d4a-a0a9-123456789abc'
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {'CAFE_DESK_LICENSE_DIR': tmp}, clear=False):
+            with mock.patch.object(cloud_sync, '_supabase_request', return_value={'ok': True, 'request_id': request_id}):
+                cloud_sync.request_license_with_contact(
+                    {'supabase_url': 'https://example.com', 'supabase_anon_key': 'public'},
+                    machine_id='CD-1234-5678-90AB', name='Jane', company='Example Shop', phone='0721234567')
+            self.assertEqual(cloud_sync._load_activation_request_id('CD-1234-5678-90AB'), request_id)
+            saved = json.loads((Path(tmp) / 'activation-request.json').read_text(encoding='utf-8'))
+            self.assertEqual(saved['machine_id'], 'CD-1234-5678-90AB')
+
+    def test_entitlement_lookup_sends_saved_request_uuid(self):
+        from unittest import mock
+        import os, tempfile
+        import cloud_sync
+        request_id = '6dcb61c2-a018-4d4a-a0a9-123456789abc'
+        mid = 'CD-1234-5678-90AB'
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {'CAFE_DESK_LICENSE_DIR': tmp}, clear=False):
+            cloud_sync._save_activation_request_id(mid, request_id)
+            with mock.patch.object(cloud_sync, '_supabase_request', return_value={
+                'ok': True, 'machine_id': mid, 'active_keys': [], 'revoked_keys': []
+            }) as request:
+                cloud_sync.sync_machine_entitlements_from_cloud(
+                    {'supabase_url': 'https://example.com', 'supabase_anon_key': 'public'}, machine_id=mid)
+            self.assertEqual(request.call_args.kwargs['payload'], {'p_machine_id': mid, 'p_request_id': request_id})
+
     def test_contact_request_sends_required_fields_and_machine_id(self):
         from unittest import mock
         import cloud_sync

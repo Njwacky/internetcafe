@@ -619,7 +619,7 @@
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Station</th><th>Shop / area</th><th>Top tool</th><th style="text-align:right">Visits</th><th>Last seen</th></tr></thead>
+                <thead><tr><th>Station</th><th>Shop / area</th><th>Top tool</th><th style="text-align:right">Visits</th><th>Last seen</th><th>Action</th></tr></thead>
                 <tbody id="machineTable"></tbody>
               </table>
             </div>
@@ -679,6 +679,24 @@
           </div>
 
           <div id="issuedResultBox" class="result-box hidden"></div>
+        </div>
+
+        <div class="card mt16">
+          <div class="card-h">
+            <div>
+              <h3>Register shop cloud sync</h3>
+              <div class="sub">Owner-register the Shop ID before a shop can initialize cloud prices. The passcode is hashed in this browser; only the hash is sent to Supabase.</div>
+            </div>
+          </div>
+          <div class="grid g-3" style="gap:12px">
+            <div><label>Shop ID</label><input id="syncShopId" type="text" placeholder="e.g. SHOP-SUNRISE"></div>
+            <div><label>Shop sync passcode (10+ characters)</label><input id="syncShopPass" type="password" autocomplete="new-password" placeholder="Create a strong shared passcode"></div>
+            <div><label>Shop name (optional)</label><input id="syncShopName" type="text" placeholder="e.g. Sunrise Cyber Café"></div>
+          </div>
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:14px">
+            <button class="btn btn-primary" id="registerShopSyncBtn" onclick="registerShopSyncProfile()">Register shop sync</button>
+          </div>
+          <div class="field-hint">Share the passcode securely with the shop. If the ID is already registered, the function will refuse to overwrite its passcode.</div>
         </div>
 
         <div class="card mt16">
@@ -1102,6 +1120,38 @@ function renderCurrentView() {
 }
 
 /* ---------------- owner API ---------------- */
+async function sha256TextHex(text) {
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function registerShopSyncProfile() {
+  const btn = $("#registerShopSyncBtn");
+  const shopId = $("#syncShopId").value.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 40);
+  const passcode = $("#syncShopPass").value.trim();
+  const shopName = $("#syncShopName").value.trim().slice(0, 80) || "Internet Café";
+  if (shopId.length < 3) return toast("Enter a Shop ID with at least 3 letters or numbers.", "err");
+  if (passcode.length < 10) return toast("Use a shop sync passcode of at least 10 characters.", "err");
+  btn.disabled = true;
+  try {
+    const secretHash = await sha256TextHex(`CAFE-DESK-SYNC-V1:${shopId}:${passcode}`);
+    const { data, error } = await sb.rpc("owner_register_shop_sync_profile", {
+      p_shop_id: shopId,
+      p_sync_key_sha256: secretHash,
+      p_business_name: shopName,
+    });
+    if (error) throw error;
+    if (!data || data.ok !== true) throw new Error(data?.error || "Shop registration was not confirmed.");
+    $("#syncShopPass").value = "";
+    toast(`Cloud sync registered for ${shopId}. Share the passcode securely with that shop.`);
+  } catch (err) {
+    toast(err.message || "Could not register this shop.", "err");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function callOwnerAdmin(payload) {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) throw new Error("Please sign in first.");
@@ -1572,9 +1622,10 @@ function renderAnalytics() {
           <td><span class="badge b-blue">${esc(top ? top[0] : "—")}</span></td>
           <td style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${num(row.visits)}</td>
           <td style="color:var(--dim);font-size:11.5px">${st ? relTime(st.last_seen_at) : relTime(row.last)}</td>
+          <td><button class="btn btn-danger btn-sm" data-delete-machine="${attr(mid)}">Delete PC data</button></td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="5" class="empty">No machines reporting yet.</td></tr>`;
+    : `<tr><td colspan="6" class="empty">No machines reporting yet.</td></tr>`;
 
   const shops = [...a.salesByShop.entries()].sort((x, y) => y[1].cents - x[1].cents).slice(0, 8);
   const maxSales = shops.length ? shops[0][1].cents : 1;
@@ -1637,6 +1688,7 @@ function renderKeysTable() {
           ${!k.revoked && d >= 0 ? `<button class="btn btn-ghost btn-sm" data-repair-signature="${attr(k.license_id)}">Repair signature</button>` : ""}
           <button class="btn btn-ghost btn-sm" data-wa="${attr(k.machine_id)}" data-token="${attr(k.token)}" data-cust="${attr(k.customer || "")}" data-exp="${attr(String(k.expires_at || "").slice(0, 10))}">WhatsApp</button>
           ${(() => { const group = state.keys.filter(x => x.machine_id === k.machine_id); const paused = group.length > 0 && group.every(x => x.revoked); return `<button class="btn ${paused ? "btn-ghost" : "btn-danger"} btn-sm" data-pause-machine="${attr(k.machine_id)}" data-on="${paused ? "0" : "1"}">${paused ? "Resume PC" : "Pause PC"}</button>`; })()}
+          <button class="btn btn-danger btn-sm" data-delete-machine="${attr(k.machine_id)}">Delete PC data</button>
           ${k.revoked
             ? `<button class="btn btn-ghost btn-sm" data-revoke="${attr(k.license_id)}" data-on="0">Resume key</button>`
             : `<button class="btn btn-danger btn-sm" data-revoke="${attr(k.license_id)}" data-on="1">Pause key</button>`}
@@ -1665,6 +1717,7 @@ function renderReqsTable() {
         <div class="row-actions">
           <button class="btn btn-primary btn-sm" data-approve="${attr(r.id)}">✓ Approve &amp; sign</button>
           <button class="btn btn-danger btn-sm" data-dismiss="${attr(r.id)}">Dismiss</button>
+          <button class="btn btn-danger btn-sm" data-delete-machine="${attr(r.machine_id)}">Delete PC data</button>
         </div>
       </td>
     </tr>`).join("");
@@ -1754,6 +1807,32 @@ document.addEventListener("click", async (e) => {
       toast(pause ? `All keys paused for ${machineId}.` : `All keys resumed for ${machineId}.`);
       await refreshAll();
     } catch (err) { toast(err.message, "err"); pauseMachineBtn.disabled = false; }
+    return;
+  }
+
+  const deleteMachineBtn = e.target.closest("[data-delete-machine]");
+  if (deleteMachineBtn) {
+    const machineId = deleteMachineBtn.dataset.deleteMachine;
+    const confirmed = confirm(
+      `Permanently delete all cloud records containing Machine ID ${machineId}?\n\n` +
+      "This removes its issued keys, activation requests, heartbeat, tool-visit history, and hashed rate-limit state. Shop-level sales and shared shop records are kept because they are not reliably linked to one PC. " +
+      "This does not erase files or a signed license already stored on the customer’s computer; that license may keep working until expiry, including while offline. " +
+      "If that PC continues sending telemetry, its ID and new telemetry may reappear. This cannot be undone."
+    );
+    if (!confirmed) return;
+    deleteMachineBtn.disabled = true;
+    try {
+      const { data, error } = await sb.rpc("owner_purge_machine_records", { p_machine_id: machineId });
+      if (error) throw error;
+      if (!data || data.ok !== true) throw new Error(data?.error || "The server did not confirm the purge.");
+      const deleted = data.deleted || {};
+      const total = Object.values(deleted).reduce((sum, count) => sum + Number(count || 0), 0);
+      toast(`Purged ${total} cloud row(s) for ${machineId}; sales and shared shop data were kept.`);
+      await refreshAll();
+    } catch (err) {
+      toast(err.message || "Could not delete the computer's key records.", "err");
+      deleteMachineBtn.disabled = false;
+    }
     return;
   }
 
@@ -1857,6 +1936,15 @@ async function issueKeysNow(prefillReqId = null) {
       }
     }
     if (!res) res = await callOwnerAdmin({ action: "sign_keys", customer, mode, days, shop_id, machines, request_id: prefillReqId });
+    if (prefillReqId && Array.isArray(res.issued) && res.issued.length) {
+      const licenseIds = res.issued.map((item) => String(item.license_id || "")).filter(Boolean);
+      if (licenseIds.length) {
+        const { error } = await sb.from("issued_machine_keys")
+          .update({ activation_request_id: prefillReqId })
+          .in("license_id", licenseIds);
+        if (error) throw error;
+      }
+    }
     const box = $("#issuedResultBox");
     box.classList.remove("hidden");
     box.innerHTML = `<div class="ok">${res.reused ? "Reused the existing unexpired key" : "Signed &amp; live in Supabase"} — ${res.issued.length} computer key(s). The customer can tap “Check Online Approval” right now.</div>` +
