@@ -1,4 +1,4 @@
-# Café Desk — Local-First Desktop Document Studio (`v0.8.2`)
+# Café Desk — Local-First Desktop Document Studio (`v0.8.3`)
 
 A local-first desktop application for internet cafés, copy shops, and walk-in service desks, written in Python with CustomTkinter. Staff and customers use the same workspace; administrative settings, sales reports, recovery copies, and optional AI polishing require a staff PIN. For shared walk-in computers, always run Café Desk inside a standard (non-Administrator) operating-system user account.
 
@@ -92,7 +92,7 @@ Python 3.11+ and internet access are needed only on the build computer:
 
 Unsigned Windows/macOS builds can show SmartScreen/Gatekeeper prompts (`More info` → `Run anyway` on Windows); wider distribution may use code signing.
 
-## Commercial Per-Computer Locking & 1-Year Licensing (`v0.8.2`)
+## Commercial Per-Computer Locking & 1-Year Licensing (`v0.8.3`)
 
 Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 1 — Offline Hardware Machine-ID + 1-Year Ed25519 Signed Activation**:
 
@@ -296,6 +296,8 @@ Café Desk works **100% offline-first** and also supports shops with **2, 4, or 
    - In **Sales reports**, every sale records its **Computer / Station**, displays per-computer and combined shop totals, and merges sales across PCs with zero duplicates via **Sync Shared LAN Folder**, **Import Other PC File**, or **Sync via Supabase** (customer documents are **never** uploaded).
 3. **Supabase Setup & Remote Over-the-Internet App Updater (`supabase_schema.sql` + `cloud_sync.py`):**
    - Paste `supabase_schema.sql` into your Supabase SQL Editor and click **Run**.
+   - For an existing project, apply the required dated migrations listed below before using updated cloud features.
+   - Before a shop can push cloud prices for the first time, register its Shop ID and a 10+ character passcode in the owner dashboard's **Register shop cloud sync** card. Only the owner can initialize the ID; the customer app can update it only with that passcode.
    - On your private computer, save your Supabase URL and `service_role` key inside gitignored `owner-keys/supabase-owner.json`:
      ```bash
      python admin_keygen.py --setup-supabase https://YOUR-PROJECT.supabase.co YOUR_SERVICE_ROLE_KEY
@@ -311,7 +313,7 @@ Café Desk works **100% offline-first** and also supports shops with **2, 4, or 
 
 ### License requests and duplicate IDs
 
-For an existing Supabase database, apply `supabase/migrations/20261117_license_requests_and_duplicates.sql` in the Supabase SQL editor before releasing the new app and dashboard. Back up the database first. New installations can use `supabase_schema.sql`. The activation screen and About & contact now let a customer send their name, company, phone number and Machine ID to the owner request queue. Those details are sent to the configured Supabase project; customers should only submit them if they agree.
+For an existing Supabase database, back it up, then apply `supabase/migrations/20261117_license_requests_and_duplicates.sql`, `supabase/migrations/20261119190000_purge_machine_records.sql`, and `supabase/migrations/20261119200000_rpc_access_hardening.sql` and `supabase/migrations/20261119210000_purge_rate_limit_hashes.sql` in the Supabase SQL editor before deploying the updated dashboard/app. New installations can use `supabase_schema.sql`. The activation screen and About & contact let a customer send their name, company, phone number and Machine ID to the owner request queue; the request UUID is saved locally and is required for online key delivery after owner approval. Customers should only submit those details if they agree. The access-hardening migration makes the owner register shop sync IDs, requires the approved request UUID to fetch active signed keys, throttles repeated RPCs per Machine ID, and accepts telemetry only from currently licensed PCs. To enable **Delete PC data**, apply `supabase/migrations/20261119190000_purge_machine_records.sql`; it atomically removes the selected Machine ID from issued keys, activation requests, heartbeats, and tool-visit telemetry while keeping shop sales and shared shop records.
 
 For a single machine, the dashboard reuses its unexpired base key for the same customer. A different customer name pauses the existing key when the owner attempts approval; investigate before resuming. The database rejects new overlapping base keys even if one is paused. Existing duplicate unexpired base keys are paused on the next online check-in; the affected user sees a pause notice. Review duplicate records before resuming: all but one unexpired base record must be resolved, otherwise check-in pauses them again. Add-on keys are separate. The database rule does not cover offline keys signed and distributed without syncing to Supabase.
 
