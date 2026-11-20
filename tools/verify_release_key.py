@@ -47,6 +47,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_KEY_FALLBACK = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
 LOCAL_PUB_PATH = REPO_ROOT / 'owner-keys' / 'cafedesk_owner.public.txt'
 
+# Documentation / data members of the portable ZIP (README.md, the HTML manuals,
+# HOW-TO-RUN-FROM-USB.txt, fonts, icons, ...). The bundled README quotes the demo key
+# as an example for the owner's find/replace step, which is harmless — the key only
+# matters as the active verification constant in Python bytecode. Reporting it here
+# would make every correctly-signed release look like a demo-key build, so these
+# members are skipped. Mirrors `_DATA_FILE_EXTENSIONS` in .github/check_release_key.py
+# (the build-time gate); keep the two in sync.
+_DATA_MEMBER_SUFFIXES = frozenset({
+    '.md', '.txt', '.html', '.htm', '.rst', '.json', '.csv', '.tsv', '.xml',
+    '.pdf', '.css', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico',
+    '.webp', '.tif', '.tiff', '.ttf', '.otf', '.woff', '.woff2', '.eot',
+    '.mp3', '.wav', '.ogg', '.mp4', '.zip', '.gz', '.tar', '.7z', '.log',
+    '.yaml', '.yml', '.toml', '.ini', '.cfg', '.map', '.lock',
+})
+
 # A 32-byte Ed25519 key in unpadded base64url is 43 characters. PyInstaller stores the
 # literal with no boundary around it (it sits next to the module's identifiers), so we
 # search for runs and slide a 43-char window instead of requiring word boundaries.
@@ -129,11 +144,17 @@ def scan_file(path: Path, found: set[str], known: set[str]) -> int:
 
 
 def scan_zip(path: Path, found: set[str], known: set[str]) -> list[str]:
-    """Scan every member of a ZIP; returns a short list of members that contained keys."""
+    """Scan every code-bearing member of a ZIP; returns members that contained keys.
+
+    Documentation/data members (see `_DATA_MEMBER_SUFFIXES`) are skipped: the bundled
+    README quotes the demo key as an example, which must not read as "demo key embedded".
+    """
     hits: list[str] = []
     with zipfile.ZipFile(path) as zf:
         for info in zf.infolist():
             if info.is_dir():
+                continue
+            if Path(info.filename).suffix.lower() in _DATA_MEMBER_SUFFIXES:
                 continue
             try:
                 with zf.open(info) as member:

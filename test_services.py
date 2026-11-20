@@ -2468,6 +2468,36 @@ class ReleaseTrustTests(unittest.TestCase):
             self.assertEqual(dirty.returncode, 1, 'a demo-key folder must not become an installer')
             self.assertIn('Refusing to package', dirty.stdout + dirty.stderr)
 
+    def test_installer_allows_demo_key_quoted_in_bundled_docs(self):
+        """A demo key *mentioned* in bundled docs must not block a signed build.
+
+        The PyInstaller bundle copies README.md (which quotes the demo key verbatim for
+        the owner's find/replace step) into dist/CafeDesk. The dist-folder gate exists to
+        stop the app *verifying* against the demo key, so documentation mentions are
+        skipped while bytecode is still scanned.
+        """
+        import subprocess
+        import sys
+        import tempfile
+        repo = Path(__file__).resolve().parent
+        demo = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
+        owner = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp) / 'CafeDesk'
+            (dist / '_internal').mkdir(parents=True)
+            # Correctly signed build: owner key in the bytecode...
+            (dist / 'CafeDesk.exe').write_bytes(b'\x00' + owner.encode() + b'\x00')
+            # ...with the demo key quoted only in bundled documentation.
+            (dist / 'README.md').write_text(f'The demo key is {demo}.\n', encoding='utf-8')
+            (dist / 'HOW-TO-RUN-FROM-USB.txt').write_text(f'see {demo}\n', encoding='utf-8')
+            (dist / 'cafe-desk-manual.html').write_text(f'<p>{demo}</p>', encoding='utf-8')
+            res = subprocess.run(
+                [sys.executable, str(repo / '.github' / 'check_release_key.py'), '--dist-dir', str(dist)],
+                capture_output=True, text=True, cwd=repo,
+            )
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertIn('App folder clean', res.stdout + res.stderr)
+
     def test_installer_wizard_is_branded_and_never_blocking(self):
         """Wizard copy explains activation up front instead of dumping security jargon."""
         repo = Path(__file__).resolve().parent
