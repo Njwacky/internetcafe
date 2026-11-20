@@ -728,6 +728,13 @@ class CafeDesk(ctk.CTk):
         except Exception:
             self._log_exception('telemetry consent')
 
+    def open_online_templates(self):
+        from online_templates_ui import OnlineTemplatesDialog
+        dlg=getattr(self,'_online_templates_dlg',None)
+        if dlg is not None and dlg.winfo_exists():
+            dlg.lift(); dlg.focus_force(); return
+        self._online_templates_dlg=OnlineTemplatesDialog(self)
+
     def quick_help(self):
         messages={
             'Home':'Use the menu to choose a tool. Open Help & privacy for a step-by-step guide.',
@@ -1291,6 +1298,7 @@ class CafeDesk(ctk.CTk):
         self.lock_staff_btn.pack(side='right',padx=(0,8),pady=15)
         self.lock_staff_btn.bind('<Enter>',lambda _e:self.status.set('Click to lock staff access & clear AI key' if self.staff_unlocked else 'Staff access is locked'))
         button(bar,'? Help',self.quick_help,secondary=True,width=80,height=34).pack(side='right',padx=(0,8),pady=15)
+        button(bar,'Online Templates',self.open_online_templates,secondary=True,width=138,height=34).pack(side='right',padx=(0,8),pady=15)
         ctk.CTkLabel(bar,textvariable=self.clock,text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=12,weight='bold')).pack(side='right',padx=(0,20))
         self.container=ctk.CTkFrame(main,fg_color='transparent'); self.container.grid(row=1,column=0,sticky='nsew',padx=28,pady=(0,8))
         footer=ctk.CTkFrame(main,fg_color='transparent',height=25); footer.grid(row=2,column=0,sticky='ew',padx=30,pady=(0,10)); label(footer,'●',size=10,color='#B9FF70').pack(side='left',padx=(0,5)); ctk.CTkLabel(footer,textvariable=self.status,text_color=MUTED,font=ctk.CTkFont(family=FONT,size=11)).pack(side='left')
