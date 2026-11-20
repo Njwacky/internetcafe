@@ -21,7 +21,7 @@ from app_state import SessionState
 # report_callback_exception. install_ctk_entry_guard() is a no-op kept for compatibility.
 install_ctk_entry_guard()
 
-from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, field_labels_for, uses_company_field, make_document
+from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, CAREER_ENTRY_FIELDS, field_labels_for, uses_company_field, make_document, parse_career_entries, serialize_career_entries
 import services
 import settings_store
 import sales_store
@@ -118,7 +118,7 @@ class CafeDesk(ctk.CTk):
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
         # Central state manager owns the shared, mutable session/telemetry containers so
         # screens and workers read from one source of truth (see app_state.SessionState).
         # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
@@ -174,7 +174,7 @@ class CafeDesk(ctk.CTk):
             self.after(5000,self.check_idle)
     def has_unsaved_work(self):
         """Return True if any active tool holds unsaved customer text, files, scans, cards or forms."""
-        if self.current=='Career documents': self.sync_long_fields()
+        if self.current=='Career documents': self.sync_career_entries()
         if self.current=='Cards & invitations' and callable(getattr(self,'_sync_cards_hook',None)):
             try: self._sync_cards_hook()
             except Exception: pass
@@ -504,7 +504,7 @@ class CafeDesk(ctk.CTk):
         if self.current in ('Business settings','Price settings','AI settings','Sales reports'): self.show('Home')
         self.status.set('Staff access locked • session API key cleared')
     def _career_snapshot(self):
-        if self.current=='Career documents': self.sync_long_fields()
+        if self.current=='Career documents': self.sync_career_entries()
         return {'category':self.doc_type.get(),'template':self.template.get(),'fields':{k:v.get() for k,v in self.values.items()},'draft':self.current_text(),'photo':self.cv_photo}
     def _sheet_snapshot(self):
         return {**self.sheet,'items':[dict(item) for item in self.sheet['items']]}
@@ -1290,7 +1290,7 @@ class CafeDesk(ctk.CTk):
         if self.current=='Scan & images' and self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_text=self.ocr_editor.get('1.0','end-1c')
         self.ocr_editor=None
         if self.current=='Career documents':
-            self.sync_long_fields()
+            self.sync_career_entries()
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_text=self.doc_editor.get('1.0','end-1c')
         if self.current=='Cards & invitations' and callable(getattr(self,'_sync_cards_hook',None)):
             try: self._sync_cards_hook()
@@ -1471,6 +1471,11 @@ class CafeDesk(ctk.CTk):
         if self.busy: return messagebox.showinfo('Please wait','Please wait until the current task finishes.',parent=self)
         if not messagebox.askyesno('Next customer','Clear the current customer’s draft, project photos, picture sheet, cards, forms, OCR text/images, scanned pages, receipt, temporary merge copies, recovery copies and AI key? Staff will be locked. Saved PDFs, saved projects, Downloads and Bluetooth-received files on disk will NOT be deleted.',parent=self): return
         for var in self.values.values(): var.set('')
+        if self.current=='Career documents':
+            for controls in self.career_entry_controls.values():
+                for heading,details in controls:
+                    heading.set('')
+                    details.delete('1.0','end')
         for widget in self.long_fields.values():
             if widget.winfo_exists(): widget.delete('1.0','end')
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
@@ -1698,14 +1703,25 @@ class CafeDesk(ctk.CTk):
         self.career_hint=label(form,'',size=12,color=MUTED,wraplength=760,justify='left'); self.career_hint.pack(anchor='w',padx=20,pady=(3,5))
         self.details_grid=ctk.CTkFrame(form,fg_color='transparent'); self.details_grid.pack(fill='x',padx=20,pady=(0,9)); self.details_grid.grid_columnconfigure((0,1),weight=1)
         self.field_cells={}; self.field_labels={}
+        self.career_entry_hosts={}; self.career_entry_controls={}
         for key in LABELS:
             cell=ctk.CTkFrame(self.details_grid,fg_color='transparent')
             lbl=label(cell,LABELS[key],size=11,bold=True,color=MUTED); lbl.pack(anchor='w',pady=(0,4))
             self.field_cells[key]=cell; self.field_labels[key]=lbl
-            if key in ('skills','experience','education'):
-                text=ctk.CTkTextbox(cell,height=92,corner_radius=9,border_color=BORDER,border_width=1,fg_color='#121A29',text_color=INK,wrap='word',font=ctk.CTkFont(family=FONT,size=12)); text.pack(fill='x'); text.insert('1.0',self.values[key].get()); self.long_fields[key]=text
+            if key in CAREER_ENTRY_FIELDS:
+                host=ctk.CTkFrame(cell,fg_color='transparent')
+                host.pack(fill='x')
+                self.career_entry_hosts[key]=host
+                self.render_career_entries(key,parse_career_entries(self.values[key].get()))
             else:
-                ph={'name':'e.g. Nandi Mkhize','contact':'Phone • email • city','role':'Leave blank for a general CV, or e.g. Cashier / Admin','company':'Only for a specific employer — optional'}.get(key,'')
+                ph={
+                    'name':'e.g. Nandi Mkhize',
+                    'contact':'Phone • email • city',
+                    'gender':'Leave blank if you do not want it shown',
+                    'id_number':'Only enter if required for this application',
+                    'role':'Leave blank for a general CV, or e.g. Cashier / Admin',
+                    'company':'Only for a specific employer — optional',
+                }.get(key,'')
                 ctk.CTkEntry(cell,textvariable=self.values[key],placeholder_text=ph,height=37,corner_radius=9,border_color=BORDER,fg_color='#121A29',text_color=INK).pack(fill='x')
         self.layout_career_fields()
 
@@ -1774,17 +1790,28 @@ class CafeDesk(ctk.CTk):
         kind=self.doc_type.get()
         labels=field_labels_for(kind)
         show_company=uses_company_field(kind)
-        if kind in (CATEGORIES[0],CATEGORIES[2]):
-            self.career_hint.configure(text='Building a general CV? Leave Desired role blank — no job title or company is required. Add multiple lines for skills, experience and education.')
+        if kind==CATEGORIES[0]:
+            self.career_hint.configure(text='Building a general CV? Leave Desired role blank. Add each skill, job and qualification with its own heading and details; use + to add more. Gender and ID number are optional.')
+        elif kind==CATEGORIES[2]:
+            self.career_hint.configure(text='Building a professional summary? Leave Desired role blank. Add each skill, job and qualification with its own heading and details; use + to add more.')
         else:
-            self.career_hint.configure(text='Applying for a specific job? Add the role or company if known, or leave either blank for a general speculative application.')
+            self.career_hint.configure(text='Add each skill, job and qualification with its own heading and details; use + to add more. Role and company are optional.')
         for cell in self.field_cells.values():
             cell.grid_forget()
-        visible=[k for k in LABELS if k!='company' or show_company]
+        visible=[
+            k for k in LABELS
+            if (k!='company' or show_company)
+            and (k not in ('gender','id_number') or kind==CATEGORIES[0])
+        ]
         row_idx=0; col_idx=0
         for key in visible:
             self.field_labels[key].configure(text=labels[key])
             cell=self.field_cells[key]
+            if key in CAREER_ENTRY_FIELDS:
+                if col_idx==1: row_idx+=1; col_idx=0
+                cell.grid(row=row_idx,column=0,columnspan=2,sticky='nsew',padx=0,pady=(8,0))
+                row_idx+=1; col_idx=0
+                continue
             # If company is hidden, let role span full width neatly so long-text fields start aligned on the next row
             if key=='role' and not show_company:
                 if col_idx==1: row_idx+=1; col_idx=0
@@ -1794,6 +1821,58 @@ class CafeDesk(ctk.CTk):
                 cell.grid(row=row_idx,column=col_idx,sticky='nsew',padx=(0,10) if col_idx==0 else (0,0),pady=(8,0))
                 if col_idx==1: row_idx+=1; col_idx=0
                 else: col_idx=1
+
+    def render_career_entries(self,key,entries):
+        host=self.career_entry_hosts[key]
+        for child in host.winfo_children(): safe_destroy(child)
+        if not entries: entries=[{'heading':'','details':''}]
+        controls:list[tuple[ctk.StringVar,ctk.CTkTextbox]]=[]
+        singular={'skills':'Skill','experience':'Experience','education':'Education'}[key]
+        placeholders={
+            'skills':'Skill name, e.g. Customer service',
+            'experience':'Job title, employer and dates',
+            'education':'Qualification, school and dates',
+        }
+        for index,item in enumerate(entries):
+            block=ctk.CTkFrame(host,fg_color='#151E2E',corner_radius=9)
+            block.pack(fill='x',pady=(0,8))
+            title_row=ctk.CTkFrame(block,fg_color='transparent')
+            title_row.pack(fill='x',padx=10,pady=(8,5))
+            label(title_row,f'{singular} {index+1}',size=11,bold=True,color=MUTED).pack(side='left')
+            if len(entries)>1:
+                button(title_row,'Remove',lambda k=key,i=index:self.remove_career_entry(k,i),ghost=True).pack(side='right')
+            heading=ctk.StringVar(value=item['heading'])
+            ctk.CTkEntry(
+                block,textvariable=heading,placeholder_text=placeholders[key],height=36,
+                corner_radius=8,border_color=BORDER,fg_color='#121A29',text_color=INK,
+            ).pack(fill='x',padx=10,pady=(0,6))
+            label(block,'Details',size=10,bold=True,color=MUTED).pack(anchor='w',padx=10,pady=(0,3))
+            details=ctk.CTkTextbox(
+                block,height=96,corner_radius=8,border_color=BORDER,border_width=1,
+                fg_color='#121A29',text_color=INK,wrap='word',
+                font=ctk.CTkFont(family=FONT,size=12),
+            )
+            details.pack(fill='x',padx=10,pady=(0,10))
+            details.insert('1.0',item['details'])
+            controls.append((heading,details))
+        self.career_entry_controls[key]=controls
+        add_names={'skills':'skill','experience':'experience','education':'education'}
+        button(
+            host,f'＋ Add another {add_names[key]}',
+            lambda k=key:self.add_career_entry(k),secondary=True,
+        ).pack(anchor='w',pady=(0,4))
+
+    def add_career_entry(self,key):
+        self.sync_career_entries()
+        entries=parse_career_entries(self.values[key].get())
+        entries.append({'heading':'','details':''})
+        self.render_career_entries(key,entries)
+
+    def remove_career_entry(self,key,index):
+        self.sync_career_entries()
+        entries=parse_career_entries(self.values[key].get())
+        if 0<=index<len(entries): entries.pop(index)
+        self.render_career_entries(key,entries)
 
     def on_template_change(self,_choice=None):
         self.doc_preview_page=1
@@ -1895,11 +1974,15 @@ class CafeDesk(ctk.CTk):
     def remove_cv_photo(self):
         self.cv_photo=None; self.cv_photo_label.configure(text='CV photo: none')
         if self.current_text() and self.doc_type.get()==CATEGORIES[0]: self.refresh_doc_preview()
-    def sync_long_fields(self):
-        for key,widget in self.long_fields.items():
-            if widget.winfo_exists(): self.values[key].set(widget.get('1.0','end-1c'))
+    def sync_career_entries(self):
+        for key,controls in self.career_entry_controls.items():
+            entries=[]
+            for heading,details_widget in controls:
+                details=details_widget.get('1.0','end-1c') if details_widget.winfo_exists() else ''
+                entries.append({'heading':heading.get(),'details':details})
+            self.values[key].set(serialize_career_entries(entries))
     def generate(self):
-        self.sync_long_fields()
+        self.sync_career_entries()
         if self.doc_editor.get('1.0','end-1c').strip() and not messagebox.askyesno('Replace draft?','This will replace your current editor text. Continue?',parent=self): return
         content=make_document(self.doc_type.get(),self.selected_template_index(),{k:v.get() for k,v in self.values.items()}); self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',content); self.doc_text=content; self.doc_preview_page=1; self.status.set('Draft created  •  Review and edit before saving')
         self.refresh_doc_preview()

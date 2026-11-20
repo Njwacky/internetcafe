@@ -2,7 +2,7 @@ import tempfile, unittest
 from pathlib import Path
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-from templates import NAMES,CATEGORIES,SUMMARIES,OPENINGS,CLOSINGS,INTRODUCTIONS,make_document
+from templates import NAMES,CATEGORIES,SUMMARIES,OPENINGS,CLOSINGS,INTRODUCTIONS,make_document,parse_career_entries,serialize_career_entries,format_career_entries
 import services
 
 class Tests(unittest.TestCase):
@@ -97,6 +97,55 @@ class NewFeatureTests(unittest.TestCase):
                 out=Path(d)/f'{i}.pdf'; services.export_document_pdf(doc,out,CATEGORIES[0],i)
                 result=' '.join(page.extract_text() for page in PdfReader(out).pages)
                 for phrase in ['Nandi','Typing','Retail','Matric']: self.assertIn(phrase,result)
+
+class CareerEntryTests(unittest.TestCase):
+    def test_repeatable_entries_round_trip_and_render_in_cv_pdf(self):
+        fields={
+            'name':'Nandi Mkhize',
+            'contact':'nandi@example.com',
+            'skills':serialize_career_entries([
+                {'heading':'Customer service','details':'Resolved customer questions and handled complaints.'},
+                {'heading':'Microsoft Excel','details':'Created spreadsheets and monthly reports.'},
+            ]),
+            'experience':serialize_career_entries([
+                {'heading':'Shop assistant | Sunrise Store | 2024–2025','details':'Assisted customers and managed daily stock.'},
+            ]),
+            'education':serialize_career_entries([
+                {'heading':'National Senior Certificate | Central High | 2023','details':'Completed matric.'},
+            ]),
+        }
+        self.assertEqual(parse_career_entries(fields['skills']),[
+            {'heading':'Customer service','details':'Resolved customer questions and handled complaints.'},
+            {'heading':'Microsoft Excel','details':'Created spreadsheets and monthly reports.'},
+        ])
+        text=make_document(CATEGORIES[0],0,fields)
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)/'career-entries.pdf'
+            services.export_document_pdf(text,output,CATEGORIES[0],0)
+            rendered=' '.join(page.extract_text() for page in PdfReader(output).pages)
+        for phrase in (
+            'CUSTOMER SERVICE','Resolved customer questions','MICROSOFT EXCEL',
+            'Created spreadsheets','SHOP ASSISTANT','Assisted customers',
+            'NATIONAL SENIOR CERTIFICATE','Completed matric',
+        ):
+            self.assertIn(phrase,rendered)
+
+    def test_legacy_multiline_fields_and_empty_entries_remain_compatible(self):
+        legacy='First skill\nSecond skill'
+        self.assertEqual(parse_career_entries(legacy),[{'heading':'','details':legacy}])
+        self.assertEqual(format_career_entries(legacy),legacy)
+        self.assertEqual(serialize_career_entries([{'heading':'','details':' '}]),'')
+        self.assertIn('[Skills]',make_document(CATEGORIES[0],0,{'name':'Nandi','skills':''}))
+
+    def test_cv_includes_optional_gender_and_id_but_other_documents_do_not(self):
+        fields={'name':'Nandi','contact':'nandi@example.com','gender':'Female','id_number':'1234567890123'}
+        cv=make_document(CATEGORIES[0],0,fields)
+        self.assertIn('Gender: Female',cv)
+        self.assertIn('ID number: 1234567890123',cv)
+        self.assertNotIn('Gender:',make_document(CATEGORIES[0],0,{'name':'Nandi'}))
+        letter=make_document(CATEGORIES[1],0,fields)
+        self.assertNotIn('Female',letter)
+        self.assertNotIn('1234567890123',letter)
 
 class PhotoTests(unittest.TestCase):
     def test_cv_photo_in_ten_templates(self):

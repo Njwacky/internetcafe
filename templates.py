@@ -1,7 +1,11 @@
 """Career document templates; no network or GUI dependencies."""
+import json
+
 NAMES = ['Classic','Modern','Minimal','Executive','Fresh','Creative','Confident','Contemporary','Professional','Elegant']
 CV_NAMES = NAMES + ['Modern Sidebar', 'Fresh Sidebar', 'Compact Profile']
 COLORS = ['#23405d','#325f83','#444444','#172e49','#257868','#825185','#a34736','#886b3f','#334d68','#625275']
+CAREER_ENTRY_FIELDS = ('skills','experience','education')
+_CAREER_ENTRIES_PREFIX = '\x1eCD-CAREER-ENTRIES-V1:'
 SUMMARIES = [
  '{name} is a professional interested in {role}. Key strengths include {skills}.',
  '{role} candidate with strengths in {skills}. Background: {experience}.',
@@ -61,6 +65,8 @@ CATEGORIES=['Résumé / CV','Cover letter','Professional summary','Introduction'
 LABELS={
     'name':'Full name',
     'contact':'Contact details',
+    'gender':'Gender (optional)',
+    'id_number':'ID number (optional — include only if needed)',
     'role':'Desired role or field (optional)',
     'company':'Target company (optional)',
     'skills':'Skills',
@@ -84,6 +90,52 @@ def field_labels_for(category):
 def uses_company_field(category):
     """CVs and standalone professional summaries are general career documents and do not need a target company."""
     return category in (CATEGORIES[1], CATEGORIES[3])
+
+def parse_career_entries(value):
+    """Decode repeatable career-section entries; treat older plain text as one entry."""
+    raw = str(value or '')
+    if raw.startswith(_CAREER_ENTRIES_PREFIX):
+        try:
+            entries = json.loads(raw[len(_CAREER_ENTRIES_PREFIX):])
+        except json.JSONDecodeError:
+            entries = None
+        if isinstance(entries, list) and all(
+            isinstance(item, dict)
+            and isinstance(item.get('heading'), str)
+            and isinstance(item.get('details'), str)
+            for item in entries
+        ):
+            return entries
+    return [{'heading':'','details':raw}]
+
+def serialize_career_entries(entries):
+    """Encode repeatable career-section entries for existing project field storage."""
+    normalized = [
+        {
+            'heading': str(item.get('heading') or '').strip(),
+            'details': str(item.get('details') or '').strip(),
+        }
+        for item in entries
+    ]
+    normalized = [item for item in normalized if item['heading'] or item['details']]
+    if not normalized:
+        return ''
+    return _CAREER_ENTRIES_PREFIX + json.dumps(normalized, ensure_ascii=False, separators=(',',':'))
+
+def format_career_entries(value):
+    """Make saved entries readable in generated career documents."""
+    blocks = []
+    for item in parse_career_entries(value):
+        heading = item['heading'].strip()
+        details = item['details'].strip()
+        lines = []
+        if heading:
+            lines.append(heading.upper())
+        if details:
+            lines.append(details)
+        if lines:
+            blocks.append('\n'.join(lines))
+    return '\n\n'.join(blocks)
 
 def _general_opening(index, role, company):
     i = index % len(OPENINGS)
@@ -164,6 +216,8 @@ def make_document(category,index,values):
         'experience':'Experience',
         'education':'Education'
     }.items()}
+    for field in CAREER_ENTRY_FIELDS:
+        d[field] = format_career_entries(values.get(field,'')) or f'[{LABELS[field]}]'
     d['role'] = raw_role
     d['company'] = raw_company
     if category == CATEGORIES[0]:
@@ -174,7 +228,15 @@ def make_document(category,index,values):
             summary_data[field] = first if len(first)<=160 else first[:157]+'...'
         templates = SUMMARIES if raw_role else GENERAL_SUMMARIES
         profile = templates[index % len(templates)].format(**summary_data)
-        return f"{d['name']}\n{d['contact']}\n\nPROFESSIONAL PROFILE\n{profile}\n\nSKILLS\n{d['skills']}\n\nEXPERIENCE\n{d['experience']}\n\nEDUCATION\n{d['education']}"
+        personal_details = [d['contact']]
+        gender = str(values.get('gender') or '').strip()
+        id_number = str(values.get('id_number') or '').strip()
+        if gender:
+            personal_details.append(f'Gender: {gender}')
+        if id_number:
+            personal_details.append(f'ID number: {id_number}')
+        contact_line = ' • '.join(item for item in personal_details if item)
+        return f"{d['name']}\n{contact_line}\n\nPROFESSIONAL PROFILE\n{profile}\n\nSKILLS\n{d['skills']}\n\nEXPERIENCE\n{d['experience']}\n\nEDUCATION\n{d['education']}"
     if category == CATEGORIES[1]:
         recipient = f"Hiring Manager\n{raw_company}" if raw_company else "Hiring Manager"
         opening = _general_opening(index, raw_role, raw_company)
