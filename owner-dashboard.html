@@ -425,6 +425,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2c3.6 1.9 5.4 5.2 5.4 9l-2.6 2.6-5.4-5.4L12 3.2z"/><path d="M9.4 9.4L4.6 14.2l-1.2 4.4 4.4-1.2 4.8-4.8"/><circle cx="14.6" cy="8" r="1.1"/></svg>
       Fleet &amp; updates
     </button>
+    <button class="nav-item" data-nav="templates">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6"/><path d="M9 13h6"/><path d="M9 17h4"/></svg>
+      Templates
+    </button>
 
     <div class="side-spacer"></div>
 
@@ -831,6 +835,55 @@
           </div>
         </div>
       </section>
+
+      <section class="view hidden" id="view-templates">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h3>Publish Online Template</h3>
+              <p class="sub">Add a downloadable CV, Card, Form, or Collage template for Café Desk</p>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:10px;">
+            <select id="tplCategory" class="input">
+              <option value="cv">CV</option>
+              <option value="card">Card</option>
+              <option value="form">Form</option>
+              <option value="collage">Collage</option>
+            </select>
+            <input id="tplSlug" class="input" placeholder="Slug (e.g. modern-cv-2)" />
+            <input id="tplName" class="input" placeholder="Display Name" />
+            <input id="tplVersion" class="input" type="number" min="1" value="1" placeholder="Version" />
+          </div>
+          <input id="tplDesc" class="input" style="width:100%;margin-bottom:10px;" placeholder="Short description" />
+          <textarea id="tplDef" class="input" rows="5" style="width:100%;font-family:monospace;margin-bottom:10px;" placeholder='{"layout": "two_column", "accent": "#1d4ed8"}'></textarea>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="tplActive" checked /> Active (visible to cafés)</label>
+            <button class="btn btn-primary btn-sm" onclick="publishTemplate()">Publish Template</button>
+            <span id="tplStatus" style="font-size:13px;color:var(--muted);"></span>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <div class="card-head">
+            <div>
+              <h3>Published Templates</h3>
+              <p class="sub">Manage templates available in the desktop app</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="loadTemplates()">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Category</th><th>Name</th><th>Slug</th><th>Version</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="templatesTbody">
+                <tr><td colspan="6" style="text-align:center;color:var(--muted);">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -1079,6 +1132,7 @@ const VIEW_META = {
   keys: ["Issue & sign keys", "Sign new licenses and manage every machine"],
   requests: ["Pending requests", "Approve activation requests in one tap"],
   fleet: ["Fleet & updates", "Publish app updates and control every PC"],
+  templates: ["Online templates", "Publish and manage downloadable templates"],
 };
 
 function switchView(view) {
@@ -2370,5 +2424,85 @@ function requestedView() {
   });
 })();
 </script>
+  <script>
+    async function loadTemplates() {
+      const tbody = document.getElementById("templatesTbody");
+      if (!tbody || typeof sb === "undefined" || !sb) return;
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">Loading…</td></tr>';
+      const { data, error } = await sb.from("templates").select("*").order("category").order("name");
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="6" style="color:#f87171;">${error.message}</td></tr>`;
+        return;
+      }
+      if (!data || !data.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No templates published yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.map((t) => `
+        <tr>
+          <td><span class="badge">${t.category.toUpperCase()}</span></td>
+          <td>${t.name}</td>
+          <td><code>${t.slug}</code></td>
+          <td>v${t.version}</td>
+          <td>${t.is_active ? "Active" : "Hidden"}</td>
+          <td style="display:flex;gap:6px;">
+            <button class="btn btn-ghost btn-sm" onclick="toggleTemplateActive('${t.id}', ${!t.is_active})">${t.is_active ? "Hide" : "Show"}</button>
+            <button class="btn btn-ghost btn-sm" style="color:#f87171;" onclick="deleteTemplate('${t.id}')">Delete</button>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    async function publishTemplate() {
+      const status = document.getElementById("tplStatus");
+      if (typeof sb === "undefined" || !sb) return;
+      let defObj = {};
+      try {
+        defObj = JSON.parse(document.getElementById("tplDef").value || "{}");
+      } catch (e) {
+        status.textContent = "Invalid JSON definition: " + e.message;
+        return;
+      }
+      const payload = {
+        category: document.getElementById("tplCategory").value,
+        slug: document.getElementById("tplSlug").value.trim().toLowerCase(),
+        name: document.getElementById("tplName").value.trim(),
+        description: document.getElementById("tplDesc").value.trim(),
+        version: parseInt(document.getElementById("tplVersion").value || "1", 10),
+        definition: defObj,
+        is_active: document.getElementById("tplActive").checked,
+      };
+      if (!payload.slug || !payload.name) {
+        status.textContent = "Slug and Name are required.";
+        return;
+      }
+      status.textContent = "Publishing…";
+      const { error } = await sb.from("templates").upsert(payload, { onConflict: "slug" });
+      if (error) {
+        status.textContent = "Error: " + error.message;
+        return;
+      }
+      status.textContent = "Published!";
+      loadTemplates();
+    }
+
+    async function toggleTemplateActive(id, nextActive) {
+      if (typeof sb === "undefined" || !sb) return;
+      await sb.from("templates").update({ is_active: nextActive, updated_at: new Date().toISOString() }).eq("id", id);
+      loadTemplates();
+    }
+
+    async function deleteTemplate(id) {
+      if (typeof sb === "undefined" || !sb) return;
+      if (!confirm("Delete this template?")) return;
+      await sb.from("templates").delete().eq("id", id);
+      loadTemplates();
+    }
+
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-nav='templates']");
+      if (btn) setTimeout(loadTemplates, 50);
+    });
+  </script>
 </body>
 </html>
