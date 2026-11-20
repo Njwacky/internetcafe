@@ -7,7 +7,9 @@
     { "source": "/app", "destination": "/download.html" },
     { "source": "/dashboard", "destination": "/owner-dashboard.html" },
     { "source": "/dashboard/", "destination": "/owner-dashboard.html" },
-    { "source": "/admin", "destination": "/owner-dashboard.html" }
+    { "source": "/admin", "destination": "/owner-dashboard.html" },
+    { "source": "/templates", "destination": "/templates.html" },
+    { "source": "/templates/", "destination": "/templates.html" }
   ],
   "headers": [
     {
