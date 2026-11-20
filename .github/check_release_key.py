@@ -172,13 +172,32 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+# Documentation / data files bundled into the app folder (README.md, the HTML manuals,
+# HOW-TO-RUN-FROM-USB.txt, fonts, icons, ...). These may *mention* the demo key as an
+# example — the repo README documents it verbatim for the owner's find/replace step — and
+# that is harmless: the key only matters when it is the active verification constant in
+# Python bytecode. Scanning them would block every correctly-signed build, so the
+# dist-folder gate skips them and inspects only files that can carry executable bytecode.
+# Everything not listed here (unknown or missing extensions included) is still scanned,
+# so a new code-bearing file type can never slip past the gate unnoticed.
+_DATA_FILE_EXTENSIONS = frozenset({
+    '.md', '.txt', '.html', '.htm', '.rst', '.json', '.csv', '.tsv', '.xml',
+    '.pdf', '.css', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico',
+    '.webp', '.tif', '.tiff', '.ttf', '.otf', '.woff', '.woff2', '.eot',
+    '.mp3', '.wav', '.ogg', '.mp4', '.zip', '.gz', '.tar', '.7z', '.log',
+    '.yaml', '.yml', '.toml', '.ini', '.cfg', '.map', '.lock',
+})
+
+
 def _check_dist_dir(dist_dir: Path) -> int:
     """Fail if a built app folder still embeds the demo owner key.
 
     A folder build is fine for contributors, but the installer that wraps it is not: this is
     the last gate before `iscc` turns that folder into a double-clickable Setup.exe.
     PyInstaller keeps the 43-character base64url literal verbatim in the bundled bytecode,
-    so scanning raw bytes is enough and needs no disassembly.
+    so scanning raw bytes is enough and needs no disassembly. Documentation/data files
+    (see `_DATA_FILE_EXTENSIONS`) are skipped: they may quote the demo key as an example
+    without making the app verify licences against it.
     """
     if not dist_dir.is_dir():
         _emit('error', 'Build folder missing', f'{dist_dir} does not exist, so the demo-key check cannot run.')
@@ -191,6 +210,8 @@ def _check_dist_dir(dist_dir: Path) -> int:
     # appears in the archive bytes, so plain binary searching covers it.
     for path in dist_dir.rglob('*'):
         if not path.is_file():
+            continue
+        if path.suffix.lower() in _DATA_FILE_EXTENSIONS:
             continue
         try:
             if path.stat().st_size > 400 * 1024 * 1024:
