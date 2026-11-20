@@ -5,23 +5,27 @@ from PIL import Image, ImageTk
 import collage
 
 class CropEditor:
-    def __init__(self, parent, item, on_apply):
+    def __init__(self, parent, item, on_apply, *, title="Crop picture", heading="Crop this picture", apply_text="Apply crop", preview=None):
         self.parent=parent; self.on_apply=on_apply; self.crop=collage.validate_crop(item.get('crop',[0,0,1,1])); self.drag_state=None
-        image=collage.photo(item['path'],rotation=item.get('rotation',0))
+        image=preview if preview is not None else collage.photo(item['path'],rotation=item.get('rotation',0))
         image.thumbnail((680,440),Image.Resampling.LANCZOS)
         self.width,self.height=image.size
-        self.window=ctk.CTkToplevel(parent); self.window.title('Crop picture'); self.window.transient(parent)
+        self.window=ctk.CTkToplevel(parent); self.window.title(title); self.window.transient(parent)
         self.window.configure(fg_color='#101522'); self.window.resizable(False,False)
-        ctk.CTkLabel(self.window,text='Crop this picture',font=ctk.CTkFont(size=19,weight='bold'),text_color='white').pack(anchor='w',padx=18,pady=(16,3))
+        ctk.CTkLabel(self.window,text=heading,font=ctk.CTkFont(size=19,weight='bold'),text_color='white').pack(anchor='w',padx=18,pady=(16,3))
         ctk.CTkLabel(self.window,text='Drag the lime corners to resize the crop. Drag inside the box to move it. The original is not changed.',text_color='#b9c7dc',wraplength=650,justify='left').pack(anchor='w',padx=18,pady=(0,10))
+        self.extra_controls()
         self.canvas=tk.Canvas(self.window,width=self.width,height=self.height,bg='#111',highlightthickness=0,cursor='crosshair');self.canvas.pack(padx=18,pady=(0,10))
         self.image=ImageTk.PhotoImage(image,master=self.canvas)
         self.canvas.bind('<ButtonPress-1>',self.start);self.canvas.bind('<B1-Motion>',self.move);self.canvas.bind('<ButtonRelease-1>',self.end)
         row=ctk.CTkFrame(self.window,fg_color='transparent');row.pack(fill='x',padx=18,pady=(0,16))
         ctk.CTkButton(row,text='Reset crop',width=110,fg_color='#344663',command=self.reset).pack(side='left')
         ctk.CTkButton(row,text='Cancel',width=90,fg_color='#344663',command=self.window.destroy).pack(side='right')
-        ctk.CTkButton(row,text='Apply crop',width=120,fg_color='#b9ff70',hover_color='#a9eb65',text_color='#142018',command=self.apply).pack(side='right',padx=(0,8))
+        ctk.CTkButton(row,text=apply_text,width=120,fg_color='#b9ff70',hover_color='#a9eb65',text_color='#142018',command=self.apply).pack(side='right',padx=(0,8))
         self.draw();self.window.grab_set();self.window.focus_set()
+    def extra_controls(self):
+        pass
+
     def draw(self):
         c=self.canvas;w=self.width;h=self.height;l,t,r,b=self.crop;x1=l*w;y1=t*h;x2=r*w;y2=b*h
         c.delete('all');c.create_image(0,0,image=self.image,anchor='nw')
