@@ -6,6 +6,7 @@ from tkinter import messagebox,filedialog
 from PIL import Image,ImageOps
 import customtkinter as ctk
 import win32_scanner,services
+from scan_editor import ScanEditor
 
 def show_scanner(app,parent,card,label,button):
     box=card(parent);box.pack(fill='x',pady=(0,14))
@@ -31,6 +32,13 @@ def show_scanner(app,parent,card,label,button):
             else:app.status.set(f'{len(devices)} Windows scanner(s) found • choose one to scan')
         app.job('Finding Windows scanners…',win32_scanner.list_scanners,done)
     button(device_row,'Find / refresh scanners',refresh,secondary=True,width=165,height=34).pack(side='left',padx=(0,8))
+    def review(path):
+        if app.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=app)
+        def saved():
+            if app.current=='Scan & images':app.show('Scan & images')
+            app.status.set('Reviewed scan ready to use')
+        try:ScanEditor(app,path,saved)
+        except Exception as exc:messagebox.showerror('Scan preview unavailable',str(exc),parent=app)
     def scan():
         if app.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=app)
         if not app.scanner_device_id:return messagebox.showinfo('Select a scanner','Click Find / refresh scanners, then select your scanner from the list.',parent=app)
@@ -39,6 +47,7 @@ def show_scanner(app,parent,card,label,button):
             app.scanned_pages.append(path);app.image_files.append(path)
             if app.current=='Scan & images':app.show('Scan & images')
             app.status.set(f'Scan complete • {len(app.scanned_pages)} scanned page(s) in this session')
+            if app.current=='Scan & images':review(path)
         app.job('Scanning one page… please wait',lambda:win32_scanner.scan_page(device,out),done)
     button(device_row,'Scan one page',scan,width=140,height=34).pack(side='left')
     label(box,'One page per scan. Put the next page on the glass and scan again. Uses the scanner driver’s default settings; scanning may take a while.',size=11,color='#A2ACC5',wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,8))
@@ -73,5 +82,10 @@ def show_scanner(app,parent,card,label,button):
         out=filedialog.asksaveasfilename(parent=app,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='scanned-pages.pdf')
         if out:
             paths=list(app.scanned_pages);app.job('Saving scanned pages as PDF…',lambda:services.images_to_pdf(paths,out),lambda _:messagebox.showinfo('Scanned PDF saved',f'Saved to:\n{out}\n\nThe saved PDF is not removed by Next customer.',parent=app))
+    def review_selected():
+        sel=listing.curselection()
+        if sel:review(app.scanned_pages[sel[0]])
+        else:messagebox.showinfo('Select a scan','Select a scanned page to review.',parent=app)
+    button(row,'Review / edit scan',review_selected,secondary=True,width=155).pack(side='left',padx=(0,8))
     button(row,'Save scans as PDF',save_pdf,width=185).pack(side='left',padx=(0,8));button(row,'Delete scan',remove,secondary=True,width=135).pack(side='left')
     label(box,'Scans are temporary files on this computer until saved. Next customer or normal exit attempts to remove them; crashes may leave copies. Saved PDFs are not deleted.',size=11,color='#A2ACC5',wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,16))
