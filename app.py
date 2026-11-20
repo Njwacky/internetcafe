@@ -8,38 +8,19 @@ import time
 import customtkinter as ctk
 from PIL import Image, ImageOps
 
-# CustomTkinter 5.2.x can fire placeholder callbacks after a widget has been destroyed,
-# which raises TclError during screen changes. Guard the callbacks so the desktop app
-# remains stable while switching between views.
-_original_ctk_entry_textvariable_callback = ctk.CTkEntry._textvariable_callback
-_original_ctk_entry_activate_placeholder = ctk.CTkEntry._activate_placeholder
+from logging_utils import logger, log_exception
+from ctk_safety import install_ctk_entry_guard, safe_destroy
+from workers import BackgroundTasks
+from app_state import SessionState
 
-def _safe_ctk_entry_textvariable_callback(self, var_name, index, mode):
-    try:
-        if not self.winfo_exists() or not self._entry.winfo_exists():
-            return
-        if self._textvariable is not None and self._textvariable.get() == "":
-            self._activate_placeholder()
-    except (AttributeError, tk.TclError):
-        pass
-
-def _safe_ctk_entry_activate_placeholder(self):
-    try:
-        if not self.winfo_exists() or not self._entry.winfo_exists():
-            return
-        if self._entry.get() == "" and self._placeholder_text is not None and (self._textvariable is None or self._textvariable == ""):
-            self._placeholder_text_active = True
-            self._pre_placeholder_arguments = {"show": self._entry.cget("show")}
-            self._entry.config(fg=self._apply_appearance_mode(self._placeholder_text_color),
-                               disabledforeground=self._apply_appearance_mode(self._placeholder_text_color),
-                               show="")
-            self._entry.delete(0, tk.END)
-            self._entry.insert(0, self._placeholder_text)
-    except (AttributeError, tk.TclError):
-        pass
-
-ctk.CTkEntry._textvariable_callback = _safe_ctk_entry_textvariable_callback
-ctk.CTkEntry._activate_placeholder = _safe_ctk_entry_activate_placeholder
+# CustomTkinter 5.2.x can fire placeholder/textvariable callbacks on a CTkEntry after the
+# widget has been destroyed during a screen change, raising tk.TclError. We used to monkey-patch
+# those *private* methods inline here. The override now lives in ctk_safety and is version-aware:
+# it installs only when the expected private methods still exist, and otherwise degrades
+# gracefully. A second safety net (tk.TclError swallowing in report_callback_exception) catches
+# any stragglers, so modifying third-party library internals is no longer load-bearing for the
+# app's stability (see the architecture review note).
+install_ctk_entry_guard()
 
 from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, field_labels_for, uses_company_field, make_document
 import services
@@ -139,12 +120,17 @@ class CafeDesk(ctk.CTk):
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
         self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
+        # Central state manager owns the shared, mutable session/telemetry containers so
+        # screens and workers read from one source of truth (see app_state.SessionState).
+        # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
+        self.state=SessionState(self.events,self._telemetry_counts,self._telemetry_lock)
+        self._workers=BackgroundTasks()
         # A crash while drawing one screen must never leave a half-built, unusable window.
         # The shell, the timers and the event pump are created first, so even a missing
         # asset or a bad widget option still leaves staff a working app plus a clear status.
         try: self.create_shell()
         except Exception as exc:
-            traceback.print_exc(); self._startup_error=f'The workspace shell could not be drawn: {exc}'
+            log_exception('create_shell', exc); self._startup_error=f'The workspace shell could not be drawn: {exc}'
         try: self.title(self.business_name.get())
         except Exception: pass
         self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick)
@@ -156,7 +142,7 @@ class CafeDesk(ctk.CTk):
         if not self._startup_error:
             try: self.show('Home')
             except Exception as exc:
-                traceback.print_exc(); self._startup_error=f'The Home screen could not be drawn: {exc}'
+                log_exception('show Home', exc); self._startup_error=f'The Home screen could not be drawn: {exc}'
         if self._startup_error:
             try: self.status.set('Startup problem • '+self._startup_error+' • use the sidebar or Help & privacy')
             except Exception: pass
@@ -625,11 +611,10 @@ class CafeDesk(ctk.CTk):
             self._log_exception('remote_entitlement_tick')
             self._entitlement_sync_running=False
             return
-        def check_online():
-            try: result=cloud_sync.sync_machine_entitlements_from_cloud(cfg)
-            except Exception as exc: result={'ok':False,'error':str(exc)}
-            self.events.put(('ok',self._finish_remote_entitlement_sync,result,None))
-        threading.Thread(target=check_online,daemon=True).start()
+        self._workers.run_remote_entitlement_sync(
+            cfg,
+            lambda result: self.events.put(('ok', self._finish_remote_entitlement_sync, result, None)),
+        )
     def _finish_remote_entitlement_sync(self,result):
         self._entitlement_sync_running=False
         if not isinstance(result,dict) or not result.get('ok'): return
@@ -966,14 +951,13 @@ class CafeDesk(ctk.CTk):
         check_updates_button.pack(side='left',padx=(0,BTN_PADX))
         button(urow,'Sync Approved Keys Online',sync_keys_online_click,secondary=True).pack(side='left')
         if cloud_sync.is_supabase_configured(settings_store.load_settings()):
-            def _check_badge_in_background():
-                try:
-                    res=cloud_sync.check_for_app_update(settings_store.load_settings(),current_version=APP_BUILD)
-                    if res.get('ok'):
-                        self.after(0,lambda:update_dot_state(bool(res.get('update_available'))))
-                except Exception:
-                    pass  # Offline cafés stay quiet; the manual check explains any connection problem.
-            threading.Thread(target=_check_badge_in_background,daemon=True).start()
+            self._workers.run_app_update_badge(
+                lambda: cloud_sync.check_for_app_update(settings_store.load_settings(), current_version=APP_BUILD),
+                lambda res: (
+                    self.after(0, lambda: update_dot_state(bool(res.get('update_available'))))
+                    if res.get('ok') else None
+                ),
+            )
         lic_status=license_guard.current_license_status()
         lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12),before=contact_box)
 
@@ -1172,7 +1156,7 @@ class CafeDesk(ctk.CTk):
         except ValueError as exc:
             all_rows=[];currency='';messagebox.showerror('Price list',str(exc),parent=self)
         def render(*_):
-            for widget in rows_frame.winfo_children():widget.destroy()
+            for widget in rows_frame.winfo_children(): safe_destroy(widget)
             q=search.get().strip().casefold();rows=[r for r in all_rows if q in r['name'].casefold()]
             if not all_rows:
                 label(rows_frame,'No prices have been added yet.',size=14,bold=True).pack(anchor='w',pady=(8,3));label(rows_frame,'A staff member can add this business’s rates in Price settings.',size=12,color=MUTED).pack(anchor='w',pady=(0,8))
@@ -1322,7 +1306,7 @@ class CafeDesk(ctk.CTk):
             b.configure(fg_color='#344663' if active else 'transparent',text_color='white' if active else '#C4D0E5')
             if key=='Bluetooth files':
                 b.configure(image=self.icon_images['bluetooth_nav' if active else 'bluetooth_nav_muted'])
-        for child in self.container.winfo_children(): child.destroy()
+        for child in self.container.winfo_children(): safe_destroy(child)
         self.body=ctk.CTkScrollableFrame(self.container,fg_color='transparent',corner_radius=0); self.body.pack(fill='both',expand=True)
         {'Home':self.home,'Projects & recovery':self.projects_screen,'Help & privacy':self.help_screen,'About & contact':self.about_screen,'Price list':self.price_list_screen,'PDF tools':self.pdf_screen,'Bluetooth files':self.bluetooth_screen,'Scan & images':self.scan_screen,'A4 picture sheets':lambda:PictureSheet(self,self.body,card,label,button),'Career documents':self.career_screen,'Cards & invitations':lambda:show_cards(self,self.body,card,label,button,entry),'Forms creator':lambda:show_forms(self,self.body,card,label,button,entry),'Receipts':self.receipt_screen,'Sales reports':lambda:show_reports(self,self.body,card,label,button,entry),'Price settings':self.price_screen,'Business settings':self.business_screen,'AI settings':self.settings_screen}[name]()
         self._note_screen_visit(name)
@@ -1347,7 +1331,7 @@ class CafeDesk(ctk.CTk):
         with self._telemetry_lock:
             if self._telemetry_inflight:
                 return
-            snapshot=dict(self._telemetry_counts)
+            snapshot=self.state.snapshot()
             if not snapshot and not force:
                 return
             self._telemetry_counts.clear()
@@ -1359,9 +1343,7 @@ class CafeDesk(ctk.CTk):
                 cfg=settings_store.load_settings()
                 res=cloud_sync.send_workspace_telemetry(cfg,current_screen=cur_screen,screen_counts=snapshot,app_version=APP_BUILD)
                 if not res.get('ok') and snapshot:
-                    with self._telemetry_lock:
-                        for k,v in snapshot.items():
-                            self._telemetry_counts[k]=min(5000,self._telemetry_counts.get(k,0)+v)
+                    self._workers.merge_failed_telemetry(snapshot, self._telemetry_counts, self._telemetry_lock)
             except Exception:
                 pass
             finally:
@@ -1418,6 +1400,7 @@ class CafeDesk(ctk.CTk):
         """Record an unexpected GUI exception without letting it kill a timer or the app."""
         try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(where)
         except Exception: pass
+        logger.error('Unhandled exception in %s', where)
         try: traceback.print_exc()
         except Exception: pass
 
@@ -1429,6 +1412,17 @@ class CafeDesk(ctk.CTk):
         with no record of why. `poll_events`/timers keep their own guarantees; this is
         the last line of defence for everything else (button clicks, bindings, redraws).
         """
+        # Widget-lifecycle noise (a callback firing on an already-destroyed widget) is
+        # expected during screen changes. Swallow it so it never reaches the user as a
+        # spurious error and never blocks. This is the fallback safety net if the
+        # ctk_safety entry guard is skipped on a future CustomTkinter build, so modifying
+        # library internals is no longer load-bearing for stability.
+        if isinstance(val, tk.TclError) or isinstance(exc, tk.TclError):
+            logger.debug('Suppressed widget-lifecycle error in callback: %s', val)
+            try: self.busy=False
+            except Exception: pass
+            return
+        logger.error('Unhandled exception in widget callback: %s', val)
         try: traceback.print_exception(exc, val, tb)
         except Exception: pass
         try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(val)
