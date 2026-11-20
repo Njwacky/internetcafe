@@ -7,89 +7,56 @@ CustomTkinter (observed on 5.2.x) can fire placeholder / textvariable callbacks 
 ``tk.TclError``. The app previously monkey-patched those *private* ``CTkEntry`` methods
 inline at the top of ``app.py``.
 
-Why this module exists
-----------------------
+Why this module no longer patches the library
+---------------------------------------------
 Overriding third-party library internals couples us to names that can change between
-CustomTkinter releases (see the review note: "avoid modifying third-party library internals
-where possible"). Two changes reduce that maintenance risk:
+CustomTkinter releases (see the review note: "avoid modifying third-party library
+internals where possible"). The patch has therefore been **removed**:
 
-1. The override is **isolated** here instead of buried in ``app.py``, and
-2. it is **version-aware**: it only installs when the expected private methods still exist on
-   the installed CustomTkinter. If a future build renames/removes them, we log a warning and
-   skip the patch instead of crashing at import — and ``CafeDesk.report_callback_exception``
-   already swallows stray ``tk.TclError``s as a second safety net.
+* ``install_ctk_entry_guard()`` is now a no-op kept only for backward compatibility with
+  existing call sites. It logs once and returns ``False`` (guard not installed).
+* Widget-lifecycle safety now comes from two supported mechanisms instead:
 
-This keeps the original stability benefit (global coverage of every ``CTkEntry``, including
-those built directly via ``ctk.CTkEntry(...)``) while degrading gracefully.
+  1. :func:`safe_destroy` — screen teardown destroys children defensively and never
+     raises on an already-destroyed widget, and
+  2. ``CafeDesk.report_callback_exception`` — the Tk callback watchdog that swallows
+     stray ``tk.TclError``s from callbacks firing on destroyed widgets.
+
+Removing the patch eliminates the maintenance risk entirely: a future CustomTkinter
+release that renames its private methods can no longer break startup, and the app's
+stability no longer depends on library internals.
+
+This module is import-safe without tkinter/customtkinter (e.g. in CI) so the pure
+helpers can be unit-tested headlessly.
 """
 
-import tkinter as tk
+try:
+    import tkinter as tk
+except ImportError:  # pragma: no cover - headless CI without Tk
+    tk = None  # type: ignore[assignment]
 
-import customtkinter as ctk
+try:
+    import customtkinter as ctk  # noqa: F401  (kept for callers that probe versions)
+except ImportError:  # pragma: no cover - headless CI without CustomTkinter
+    ctk = None  # type: ignore[assignment]
 
 from logging_utils import logger
 
 
-def _safe_textvariable_callback(self, var_name, index, mode):
-    try:
-        if not self.winfo_exists() or not self._entry.winfo_exists():
-            return
-        if self._textvariable is not None and self._textvariable.get() == "":
-            self._activate_placeholder()
-    except (AttributeError, tk.TclError):
-        # Widget was torn down mid-callback; nothing to do.
-        pass
-
-
-def _safe_activate_placeholder(self):
-    try:
-        if not self.winfo_exists() or not self._entry.winfo_exists():
-            return
-        if (
-            self._entry.get() == ""
-            and self._placeholder_text is not None
-            and (self._textvariable is None or self._textvariable == "")
-        ):
-            self._placeholder_text_active = True
-            self._pre_placeholder_arguments = {"show": self._entry.cget("show")}
-            self._entry.config(
-                fg=self._apply_appearance_mode(self._placeholder_text_color),
-                disabledforeground=self._apply_appearance_mode(self._placeholder_text_color),
-                show="",
-            )
-            self._entry.delete(0, tk.END)
-            self._entry.insert(0, self._placeholder_text)
-    except (AttributeError, tk.TclError):
-        pass
-
-
-_installed = False
-
-
 def install_ctk_entry_guard() -> bool:
-    """Install the CTkEntry lifecycle guard.
+    """Backward-compatible no-op.
 
-    Returns ``True`` if the guard was applied, ``False`` if it was skipped (private methods
-    absent on this CustomTkinter build). Idempotent.
+    Previously installed a version-aware monkey-patch over ``CTkEntry`` private
+    methods. The patch was removed to avoid modifying third-party library internals;
+    lifecycle safety is now provided by :func:`safe_destroy` plus
+    ``report_callback_exception``. Returns ``False`` (no guard installed) and logs at
+    debug level so existing call sites keep working unchanged.
     """
-    global _installed
-    if _installed:
-        return True
-    _installed = True
-
-    has_textvariable = getattr(ctk.CTkEntry, "_textvariable_callback", None) is not None
-    has_placeholder = getattr(ctk.CTkEntry, "_activate_placeholder", None) is not None
-    if not (has_textvariable and has_placeholder):
-        logger.warning(
-            "CustomTkinter CTkEntry internals changed; skipping entry lifecycle guard. "
-            "Relying on report_callback_exception TclError handling instead."
-        )
-        return False
-
-    ctk.CTkEntry._textvariable_callback = _safe_textvariable_callback
-    ctk.CTkEntry._activate_placeholder = _safe_activate_placeholder
-    logger.debug("Installed CTkEntry lifecycle guard.")
-    return True
+    logger.debug(
+        "CTkEntry lifecycle guard not installed (library internals left untouched); "
+        "relying on safe_destroy + report_callback_exception."
+    )
+    return False
 
 
 def safe_destroy(widget) -> None:
@@ -101,5 +68,7 @@ def safe_destroy(widget) -> None:
     try:
         if widget is not None and getattr(widget, "winfo_exists", lambda: False)():
             widget.destroy()
-    except (tk.TclError, AttributeError):
+    except Exception:
+        # tk.TclError when tkinter is present; AttributeError / anything else on a
+        # half-torn-down widget. Teardown must never raise.
         pass

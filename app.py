@@ -1,5 +1,5 @@
 """Café Desk — CustomTkinter desktop application."""
-import os, sys, subprocess, queue, threading, webbrowser, tempfile, uuid, traceback
+import os, sys, subprocess, queue, threading, webbrowser, tempfile, uuid
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
@@ -15,11 +15,10 @@ from app_state import SessionState
 
 # CustomTkinter 5.2.x can fire placeholder/textvariable callbacks on a CTkEntry after the
 # widget has been destroyed during a screen change, raising tk.TclError. We used to monkey-patch
-# those *private* methods inline here. The override now lives in ctk_safety and is version-aware:
-# it installs only when the expected private methods still exist, and otherwise degrades
-# gracefully. A second safety net (tk.TclError swallowing in report_callback_exception) catches
-# any stragglers, so modifying third-party library internals is no longer load-bearing for the
-# app's stability (see the architecture review note).
+# those *private* methods inline here. The patch has been removed entirely: third-party
+# library internals are no longer modified (see the architecture review note). Lifecycle
+# safety now comes from safe_destroy() during teardown plus tk.TclError swallowing in
+# report_callback_exception. install_ctk_entry_guard() is a no-op kept for compatibility.
 install_ctk_entry_guard()
 
 from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, field_labels_for, uses_company_field, make_document
@@ -1318,9 +1317,7 @@ class CafeDesk(ctk.CTk):
             return
         if screen_name not in cloud_sync.ALLOWED_TELEMETRY_SCREENS:
             return
-        with self._telemetry_lock:
-            self._telemetry_counts[screen_name]=self._telemetry_counts.get(screen_name,0)+1
-            total_queued=sum(self._telemetry_counts.values())
+        total_queued=self.state.increment(screen_name)
         now_m=time.monotonic()
         if self._last_telemetry_flush==0.0 or total_queued>=5 or (now_m-self._last_telemetry_flush)>=60.0:
             self._flush_telemetry_async()
@@ -1338,18 +1335,10 @@ class CafeDesk(ctk.CTk):
             self._telemetry_inflight=True
             self._last_telemetry_flush=time.monotonic()
         cur_screen=self.current or 'Home'
-        def _bg():
-            try:
-                cfg=settings_store.load_settings()
-                res=cloud_sync.send_workspace_telemetry(cfg,current_screen=cur_screen,screen_counts=snapshot,app_version=APP_BUILD)
-                if not res.get('ok') and snapshot:
-                    self._workers.merge_failed_telemetry(snapshot, self._telemetry_counts, self._telemetry_lock)
-            except Exception:
-                pass
-            finally:
-                with self._telemetry_lock:
-                    self._telemetry_inflight=False
-        threading.Thread(target=_bg,daemon=True).start()
+        def _done():
+            with self._telemetry_lock:
+                self._telemetry_inflight=False
+        self._workers.run_telemetry_flush(snapshot,cur_screen,APP_BUILD,self._telemetry_counts,self._telemetry_lock,_done)
 
     def _telemetry_tick(self):
         try: self._flush_telemetry_async(force=True)
@@ -1400,9 +1389,7 @@ class CafeDesk(ctk.CTk):
         """Record an unexpected GUI exception without letting it kill a timer or the app."""
         try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(where)
         except Exception: pass
-        logger.error('Unhandled exception in %s', where)
-        try: traceback.print_exc()
-        except Exception: pass
+        logger.exception('Unhandled exception in %s', where)
 
     def report_callback_exception(self, exc, val, tb):
         """Tkinter callback watchdog.
@@ -1414,17 +1401,14 @@ class CafeDesk(ctk.CTk):
         """
         # Widget-lifecycle noise (a callback firing on an already-destroyed widget) is
         # expected during screen changes. Swallow it so it never reaches the user as a
-        # spurious error and never blocks. This is the fallback safety net if the
-        # ctk_safety entry guard is skipped on a future CustomTkinter build, so modifying
-        # library internals is no longer load-bearing for stability.
+        # spurious error and never blocks. This is the primary lifecycle safety net now
+        # that ctk_safety no longer patches library internals.
         if isinstance(val, tk.TclError) or isinstance(exc, tk.TclError):
             logger.debug('Suppressed widget-lifecycle error in callback: %s', val)
             try: self.busy=False
             except Exception: pass
             return
-        logger.error('Unhandled exception in widget callback: %s', val)
-        try: traceback.print_exception(exc, val, tb)
-        except Exception: pass
+        logger.error('Unhandled exception in widget callback: %s', val, exc_info=(exc, val, tb))
         try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(val)
         except Exception: pass
         # Never let a broken background result wedge the whole desk: clear the busy flag.

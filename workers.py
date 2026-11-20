@@ -11,11 +11,14 @@ Why two layers
   result to a callback. New background features should use it instead of spinning up a raw
   ``threading.Thread`` at a call site.
 * ``BackgroundTasks`` binds that policy to the app's specific background jobs (cloud
-  entitlement sync, the app-update badge check, and the telemetry retry/back-off merge).
+  entitlement sync, the app-update badge check, the telemetry flush, and the telemetry
+  retry/back-off merge).
 
 Note on the core job pump: ``CafeDesk.job`` / ``CafeDesk.poll_events`` remain on ``CafeDesk``
-because the test suite pins their exact bodies. They share the same event-queue contract this
-module is built around.
+because they implement the queue + watchdog contract the whole app depends on (results are
+posted to ``self.events`` and drained on the Tk main thread; a watchdog abandons wedged
+workers). They already run on daemon threads — they are the dedicated-worker pump, just
+kept with the queue they own. All other background work goes through this module.
 """
 
 import threading
@@ -65,6 +68,35 @@ class BackgroundTasks:
     def run_app_update_badge(self, check_fn, on_result):
         """Check for an available app update off-thread; call ``on_result(res)`` with the result."""
         self._pool.run(check_fn, on_result=on_result)
+
+    def run_telemetry_flush(self, snapshot, cur_screen, app_version, counts, lock, on_done):
+        """Send a telemetry snapshot off-thread; call ``on_done()`` when finished.
+
+        ``on_done`` always runs on the worker thread (even on failure) so the caller can
+        clear its in-flight flag under ``lock``. A failed send re-merges ``snapshot``
+        back into the live ``counts`` via :meth:`merge_failed_telemetry` so no counts
+        are lost. ``cloud_sync`` / ``settings_store`` are imported lazily to keep this
+        module importable without the network stack.
+        """
+        import cloud_sync
+        import settings_store
+
+        def _do():
+            try:
+                cfg = settings_store.load_settings()
+                res = cloud_sync.send_workspace_telemetry(
+                    cfg,
+                    current_screen=cur_screen,
+                    screen_counts=snapshot,
+                    app_version=app_version,
+                )
+                if not res.get("ok") and snapshot:
+                    self.merge_failed_telemetry(snapshot, counts, lock)
+                return res
+            finally:
+                on_done()
+
+        self._pool.run(_do)
 
     def merge_failed_telemetry(self, snapshot: dict, counts: dict, lock: threading.Lock):
         """Re-merge a failed telemetry snapshot back into the live counters (capped at 5000).
