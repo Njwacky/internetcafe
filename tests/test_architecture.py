@@ -75,6 +75,23 @@ class WorkerPoolTests(unittest.TestCase):
 
 
 class SessionStateTests(unittest.TestCase):
+    def test_cafe_desk_does_not_shadow_tk_window_state_method(self):
+        import ast
+
+        app_src = (REPO / "app.py").read_text(encoding="utf-8")
+        tree = ast.parse(app_src)
+        cafe_desk = next(node for node in tree.body
+                         if isinstance(node, ast.ClassDef) and node.name == "CafeDesk")
+        state_writes = [
+            node for node in ast.walk(cafe_desk)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+            and node.attr == "state"
+            and isinstance(node.ctx, ast.Store)
+        ]
+        self.assertEqual(state_writes, [], "CafeDesk must not shadow tkinter's state() method")
+
     def test_increment_snapshot_and_total(self):
         from app_state import SessionState
 

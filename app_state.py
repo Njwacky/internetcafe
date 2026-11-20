@@ -12,9 +12,8 @@ Design notes
   ``_last_telemetry_flush``) on ``self`` for compatibility with the rest of the code and the
   test suite. ``SessionState`` is given the *same* dict/lock objects, so writes through either
   path stay in sync.
-* The test suite pins the exact bodies of ``_note_screen_visit`` / ``_flush_telemetry_async``,
-  so those methods keep touching ``self._telemetry_counts`` directly; ``SessionState.snapshot``
-  is the clean read API used by the flush path.
+* ``SessionState.snapshot`` is a thread-safe read API. The flush path copies counters
+  directly while holding the shared lock so taking and clearing a snapshot is atomic.
 """
 
 import threading

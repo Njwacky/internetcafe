@@ -2229,6 +2229,7 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
         ns = {'queue': __import__('queue'), 'threading': __import__('threading'),
               'uuid': __import__('uuid'), 'time': __import__('time'),
               'traceback': __import__('traceback'), 'datetime': __import__('datetime').datetime,
+              'APP_BUILD': 'test',
               'logger': _logger, 'tk': _fake_tk,
               'messagebox': __import__('types').SimpleNamespace(showerror=lambda *a, **k: None,
                                                                  showinfo=lambda *a, **k: None),
@@ -2260,7 +2261,7 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
         s.events = queue.Queue(); s.busy = False; s._active_job_id = None
         s.pending = []; s.statuses = []
         s._telemetry_lock = threading.Lock(); s._telemetry_counts = {}
-        s.state = SessionState(s.events, s._telemetry_counts, s._telemetry_lock)
+        s.session_state = SessionState(s.events, s._telemetry_counts, s._telemetry_lock)
         s._workers = types.SimpleNamespace(run_telemetry_flush=lambda *a, **k: None)
         s._telemetry_inflight = False; s._telemetry_enabled = False
         s._last_telemetry_flush = 0.0; s.current = 'Home'
@@ -2356,6 +2357,32 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
         self.assertEqual(s._telemetry_counts, {}, 'no counters may be collected before opt-in')
         m['_flush_telemetry_async'](s, force=True)
         self.assertEqual(s._telemetry_counts, {})
+
+    def test_telemetry_flush_does_not_deadlock_on_shared_lock(self):
+        import threading
+        m = self._methods(); s = self._stub(m)
+        s._telemetry_enabled = True
+        s._telemetry_counts['Home'] = 1
+        calls = []
+        s._workers.run_telemetry_flush = lambda *args: calls.append(args)
+        finished = threading.Event()
+        errors = []
+
+        def flush():
+            try:
+                m['_flush_telemetry_async'](s)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        threading.Thread(target=flush, daemon=True).start()
+        self.assertTrue(finished.wait(1), 'telemetry flush deadlocked while snapshotting')
+        if errors:
+            raise errors[0]
+        self.assertEqual(calls[0][0], {'Home': 1})
+        self.assertEqual(s._telemetry_counts, {})
+        self.assertTrue(s._telemetry_inflight)
 
     def test_telemetry_preference_defaults_to_off(self):
         import settings_store

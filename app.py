@@ -122,7 +122,7 @@ class CafeDesk(ctk.CTk):
         # Central state manager owns the shared, mutable session/telemetry containers so
         # screens and workers read from one source of truth (see app_state.SessionState).
         # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
-        self.state=SessionState(self.events,self._telemetry_counts,self._telemetry_lock)
+        self.session_state=SessionState(self.events,self._telemetry_counts,self._telemetry_lock)
         self._workers=BackgroundTasks()
         # A crash while drawing one screen must never leave a half-built, unusable window.
         # The shell, the timers and the event pump are created first, so even a missing
@@ -1317,7 +1317,7 @@ class CafeDesk(ctk.CTk):
             return
         if screen_name not in cloud_sync.ALLOWED_TELEMETRY_SCREENS:
             return
-        total_queued=self.state.increment(screen_name)
+        total_queued=self.session_state.increment(screen_name)
         now_m=time.monotonic()
         if self._last_telemetry_flush==0.0 or total_queued>=5 or (now_m-self._last_telemetry_flush)>=60.0:
             self._flush_telemetry_async()
@@ -1328,7 +1328,9 @@ class CafeDesk(ctk.CTk):
         with self._telemetry_lock:
             if self._telemetry_inflight:
                 return
-            snapshot=self.state.snapshot()
+            # Keep snapshot + clear atomic under the shared lock. SessionState.snapshot()
+            # acquires that same non-reentrant lock and would deadlock here.
+            snapshot=dict(self._telemetry_counts)
             if not snapshot and not force:
                 return
             self._telemetry_counts.clear()
