@@ -1720,9 +1720,12 @@ class WorkspaceTelemetryTests(unittest.TestCase):
 
     def test_app_records_screen_visits_without_blocking_the_ui(self):
         app_src=(Path(__file__).resolve().parent/'app.py').read_text(encoding='utf-8')
-        for fragment in ('_note_screen_visit','_flush_telemetry_async','threading.Thread(target=_bg,daemon=True)',
-                         'cloud_sync.send_workspace_telemetry','city_in.get()'):
+        for fragment in ('_note_screen_visit','_flush_telemetry_async','run_telemetry_flush',
+                         'city_in.get()'):
             self.assertIn(fragment,app_src)
+        # The send itself lives in the dedicated worker (workers.py), off the UI thread.
+        workers_src=(Path(__file__).resolve().parent/'workers.py').read_text(encoding='utf-8')
+        self.assertIn('cloud_sync.send_workspace_telemetry',workers_src)
 
     def test_windows_workflow_publishes_direct_download_release(self):
         wf=(Path(__file__).resolve().parent/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
@@ -2220,9 +2223,13 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
                   '_log_exception', '_quiet_job_error', 'job', '_note_screen_visit',
                   '_flush_telemetry_async'}
         module_src = src
+        import types as _types
+        from logging_utils import logger as _logger
+        _fake_tk = _types.SimpleNamespace(TclError=type('TclError', (Exception,), {}))
         ns = {'queue': __import__('queue'), 'threading': __import__('threading'),
               'uuid': __import__('uuid'), 'time': __import__('time'),
               'traceback': __import__('traceback'), 'datetime': __import__('datetime').datetime,
+              'logger': _logger, 'tk': _fake_tk,
               'messagebox': __import__('types').SimpleNamespace(showerror=lambda *a, **k: None,
                                                                  showinfo=lambda *a, **k: None),
               '_QUIET_JOB_ERROR_TAGS': ('Auto-recovery', 'recovery copy', 'Temporary files')}
@@ -2246,12 +2253,15 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
 
     def _stub(self, m):
         import queue, threading, types, functools
+        from app_state import SessionState
         class Stub:
             pass
         s = Stub()
         s.events = queue.Queue(); s.busy = False; s._active_job_id = None
         s.pending = []; s.statuses = []
         s._telemetry_lock = threading.Lock(); s._telemetry_counts = {}
+        s.state = SessionState(s.events, s._telemetry_counts, s._telemetry_lock)
+        s._workers = types.SimpleNamespace(run_telemetry_flush=lambda *a, **k: None)
         s._telemetry_inflight = False; s._telemetry_enabled = False
         s._last_telemetry_flush = 0.0; s.current = 'Home'
         s.after = lambda ms, fn=None: s.pending.append(fn)

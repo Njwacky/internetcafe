@@ -37,6 +37,16 @@ class SessionState:
         with self._lock:
             return dict(self._counts)
 
+    def increment(self, screen_name: str) -> int:
+        """Record one visit to ``screen_name``; return the total queued count.
+
+        Thread-safe. This is the write path paired with :meth:`snapshot` (read path)
+        so all telemetry mutations go through the state manager.
+        """
+        with self._lock:
+            self._counts[screen_name] = self._counts.get(screen_name, 0) + 1
+            return sum(self._counts.values())
+
     def total_queued(self) -> int:
         with self._lock:
             return sum(self._counts.values())

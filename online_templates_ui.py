@@ -1,7 +1,6 @@
 """CustomTkinter dialog for browsing and downloading online Café Desk templates."""
 from __future__ import annotations
 
-import threading
 import customtkinter as ctk
 
 from online_templates import (
@@ -11,6 +10,7 @@ from online_templates import (
     list_downloaded_templates,
     save_downloaded_template,
 )
+from workers import WorkerPool
 
 
 class OnlineTemplatesDialog(ctk.CTkToplevel):
@@ -74,9 +74,13 @@ class OnlineTemplatesDialog(ctk.CTkToplevel):
             except Exception as exc:
                 rows = []
                 err = str(exc)
+            return rows, err
+
+        def _deliver(result):
+            rows, err = result
             self.after(0, lambda: self._on_loaded(rows, err))
 
-        threading.Thread(target=worker, daemon=True).start()
+        WorkerPool().run(worker, on_result=_deliver)
 
     def _on_loaded(self, rows: list[dict], err: str | None):
         self.refresh_btn.configure(state="normal")
