@@ -24,6 +24,7 @@ install_ctk_entry_guard()
 from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, CAREER_ENTRY_FIELDS, field_labels_for, uses_company_field, make_document, parse_career_entries, serialize_career_entries
 import services
 import ai_safety
+import ai_key_store
 import settings_store
 import sales_store
 import saved_services
@@ -472,7 +473,9 @@ class CafeDesk(ctk.CTk):
                     rem_after=settings_store.lockout_remaining()
                     if rem_after>0: self.lockout_until=time.monotonic()+rem_after
                     messagebox.showerror('Staff access','Incorrect PIN. After 5 failed attempts, staff access locks for 60 seconds.',parent=self); return False
-            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer'); return True
+            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer')
+            self._load_saved_ai_key(pin)
+            return True
         except settings_store.CorruptedSettingsError as exc:
             bak=settings_store.settings_path().with_name('settings.json.bak')
             if bak.is_file() and messagebox.askyesno('Settings damaged (fail-closed)',f'{exc}\n\nA verified backup (settings.json.bak) exists. Restore settings.json.bak now so you can enter your staff PIN?',parent=self):
@@ -486,6 +489,26 @@ class CafeDesk(ctk.CTk):
                 messagebox.showerror('Settings damaged (fail-closed)',f'{exc}\n\nFolder:\n{settings_store.settings_path().parent}',parent=self)
             return False
         except (ValueError,OSError) as exc: messagebox.showerror('Staff access',str(exc),parent=self); return False
+    def _load_saved_ai_key(self,pin):
+        """After a correct PIN, unlock a key saved with “Remember on this computer”."""
+        try:
+            info=ai_key_store.saved_key_info()
+            if not info or self.key.get().strip(): return
+            if info.get('damaged'): self.status.set('Staff unlocked • saved AI key file is damaged (AI settings → Forget saved key)'); return
+            data=ai_key_store.load_key(pin)
+            if not data: return
+            self.key.set(data['api_key'])
+            if data.get('provider') in services.AI_PROVIDERS: self.ai_provider.set(data['provider'])
+            if data.get('model'): self.model.set(data['model'])
+            if data.get('custom_url'):
+                services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])  # https/localhost only
+                self.ai_custom_url.set(data['custom_url'])
+            self.status.set(f"Staff unlocked • saved AI key loaded ({info.get('hint','')})")
+        except (ai_key_store.SavedKeyError,ValueError) as exc:
+            self.key.set('')
+            self.status.set(f'Staff unlocked • saved AI key not loaded: {exc}')
+        except Exception:
+            self._log_exception('load_saved_ai_key')
     def change_pin(self):
         try:
             rem=settings_store.lockout_remaining()
@@ -503,7 +526,14 @@ class CafeDesk(ctk.CTk):
             confirm=simpledialog.askstring('Confirm staff PIN','Enter the new PIN again:',show='*',parent=self)
             if confirm is None: return
             if new!=confirm: raise ValueError('PINs do not match.')
-            settings_store.set_pin(new); messagebox.showinfo('PIN updated','Staff PIN changed.',parent=self)
+            had_saved_key=bool(ai_key_store.saved_key_info())
+            settings_store.set_pin(new)
+            note=''
+            if had_saved_key:
+                try: rewrapped=ai_key_store.rewrap_for_new_pin(old,new)
+                except (OSError,ValueError): rewrapped=False
+                note='\n\nThe saved AI key now unlocks with the new PIN.' if rewrapped else '\n\nThe saved AI key could not be moved to the new PIN. Open AI settings and save the key again.'
+            messagebox.showinfo('PIN updated','Staff PIN changed.'+note,parent=self)
         except (ValueError,OSError) as exc: messagebox.showerror('Could not update PIN',str(exc),parent=self)
     def update_lock_button(self):
         btn=getattr(self,'lock_staff_btn',None)
@@ -743,7 +773,7 @@ class CafeDesk(ctk.CTk):
             'Sales reports':'Choose a date range to view locally recorded totals, export a CSV or save a selected sale record. Simple internal service log — payment status, cash/card drawer reconciliation and tax/VAT are NOT calculated.',
             'Price settings':'Enter each business service and price on its own line as service | price. Include units in the service name.',
             'Business settings':'Change the business name, icon, logo or staff PIN. Settings are local to this computer user.',
-            'AI settings':'Enter your session API key — Google Gemini (AIza... from aistudio.google.com/api-keys), OpenRouter, OpenAI, Groq, DeepSeek or custom URL. Confirm before sending any draft.\n\nShortcuts: F1 = Quick help  •  Ctrl+L = Lock staff  •  Ctrl+Shift+N = Next customer'}
+            'AI settings':'Enter your API key (optionally save it encrypted with the staff PIN) — Google Gemini (AIza... from aistudio.google.com/api-keys), OpenRouter, OpenAI, Groq, DeepSeek or custom URL. Confirm before sending any draft.\n\nShortcuts: F1 = Quick help  •  Ctrl+L = Lock staff  •  Ctrl+Shift+N = Next customer'}
         messagebox.showinfo('Quick help • '+self.current,messages.get(self.current,'Open Help & privacy for the full guide.'),parent=self)
     def open_user_manual(self):
         root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)); path=root/'cafe-desk-manual.html'
@@ -2200,7 +2230,7 @@ class CafeDesk(ctk.CTk):
         ctk.CTkEntry(custom_wrap,textvariable=self.ai_custom_url,placeholder_text='https://openrouter.ai/api/v1/chat/completions',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x')
         on_provider_change()
 
-        label(box,'API key • kept in memory only for this session (cleared when staff locks)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        label(box,'API key • hidden from screen; cleared from memory when staff lock (reloaded at unlock if saved below)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
 
         label(box,'Model (e.g. gemini-2.5-flash, openai/gpt-oss-120b for Groq, gpt-4o-mini, openrouter/auto, deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
@@ -2218,12 +2248,56 @@ class CafeDesk(ctk.CTk):
             self.job('Testing AI connection…',run_check,done)
 
         def clear_key():
-            self.key.set(''); self.ai_generation+=1; self.status.set('Session AI key cleared')
+            self.key.set(''); self.ai_generation+=1
+            self.status.set('Session AI key cleared' + (' • the saved copy stays on this computer (use “Forget saved key” to delete it)' if ai_key_store.saved_key_info() else ''))
         btn_row=ctk.CTkFrame(box,fg_color='transparent'); btn_row.pack(fill='x',padx=20,pady=(0,15))
         button(btn_row,'Test AI connection',test_ai,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=195).pack(side='left',padx=(0,10))
         button(btn_row,'Clear key now',clear_key,secondary=True,width=130).pack(side='left')
 
-        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy & data minimization',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'Before sending, Café Desk keeps the name/contact lines on this computer and replaces names, e-mails, phone numbers, ID numbers, links and account numbers with placeholders; the real values are put back locally. The rest of the wording is sent to your AI provider, so get the customer’s consent first. Formatting symbols (*, #) in the reply are removed automatically. The API key stays in memory only — clear it before leaving the desk.',size=12,color='#F1D1A5',justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,12))
+        # Remember the key on this computer (encrypted; unlocks only with the staff PIN).
+        saved_box=ctk.CTkFrame(box,fg_color='#1A2536',corner_radius=10); saved_box.pack(fill='x',padx=20,pady=(0,15))
+        label(saved_box,'Remember key on this computer',size=13,bold=True).pack(anchor='w',padx=14,pady=(11,2))
+        protect_text='encrypted with your staff PIN and locked to this Windows account' if ai_key_store.os_protection_available() else 'encrypted with your staff PIN'
+        label(saved_box,f'Saves the key {protect_text}. It loads automatically when staff unlock with the PIN, so you do not need to paste it after restarting. A copied file is useless on another computer or without the PIN. Tip: use a free-tier key (e.g. Groq) or set a spending limit with your provider.',size=11,color=MUTED,justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,6))
+        saved_status=ctk.StringVar()
+        def refresh_saved():
+            info=ai_key_store.saved_key_info()
+            if not info: saved_status.set('No key saved on this computer.')
+            elif info.get('damaged'): saved_status.set('⚠ Saved key file is damaged — use “Forget saved key”.')
+            else:
+                prov_name=(info.get('provider') or 'Auto-detect').split(' (')[0]
+                saved_status.set(f"🔒 Saved: {info.get('hint','')}  •  {prov_name}  •  {info.get('model') or 'default model'}  •  {info.get('saved_at','')}")
+        label(saved_box,'',size=12,color='#CFE8D4',textvariable=saved_status,justify='left').pack(anchor='w',padx=14,pady=(0,6))
+        def save_key_now():
+            key=self.key.get().strip()
+            if not key: return messagebox.showinfo('Paste API key','Paste your API key above first (and test the connection).',parent=self)
+            try:
+                rem=settings_store.lockout_remaining()
+                if rem>0: return messagebox.showwarning('Try again later',f'Too many incorrect PIN attempts. Wait {int(rem)+1} seconds.',parent=self)
+                pin=simpledialog.askstring('Confirm staff PIN','Enter your staff PIN to encrypt and save the key on this computer:',show='*',parent=self)
+                if pin is None: return
+                if not settings_store.verify_pin(pin):
+                    rem_after=settings_store.lockout_remaining()
+                    if rem_after>0: self.lockout_until=time.monotonic()+rem_after
+                    return messagebox.showerror('Staff access','Incorrect PIN. The key was not saved.',parent=self)
+                if len(pin)<8 and not messagebox.askyesno('Short PIN',f'Your staff PIN has only {len(pin)} digits. The saved key is only as strong as this PIN: a short PIN can be guessed by someone who copies files from this computer.\n\nRecommended: change to a 10–12 digit PIN first (Business settings → Change staff PIN).\n\nSave the key anyway?',parent=self): return
+                ai_key_store.save_key(key,pin,provider=self.ai_provider.get(),model=self.model.get().strip(),custom_url=self.ai_custom_url.get().strip())
+            except (ValueError,OSError,settings_store.CorruptedSettingsError) as exc:
+                return messagebox.showerror('Could not save key',str(exc),parent=self)
+            refresh_saved(); self.status.set('AI key saved (encrypted) on this computer')
+            messagebox.showinfo('Key saved','The API key is saved, encrypted, on this computer.\n\nNext time, just unlock staff access with your PIN and AI is ready.',parent=self)
+        def forget_key_now():
+            if not ai_key_store.saved_key_info(): return messagebox.showinfo('Nothing saved','No AI key is saved on this computer.',parent=self)
+            if not messagebox.askyesno('Forget saved key','Delete the saved AI key from this computer?\n\nThe key typed above for this session is also cleared.',parent=self): return
+            try: ai_key_store.forget_key()
+            except OSError as exc: return messagebox.showerror('Could not delete',str(exc),parent=self)
+            self.key.set(''); self.ai_generation+=1; refresh_saved(); self.status.set('Saved AI key deleted from this computer')
+        saved_btns=ctk.CTkFrame(saved_box,fg_color='transparent'); saved_btns.pack(fill='x',padx=14,pady=(0,12))
+        button(saved_btns,'💾 Save key on this computer',save_key_now,width=230).pack(side='left',padx=(0,10))
+        button(saved_btns,'Forget saved key',forget_key_now,secondary=True,width=150).pack(side='left')
+        refresh_saved()
+
+        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy & data minimization',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'Before sending, Café Desk keeps the name/contact lines on this computer and replaces names, e-mails, phone numbers, ID numbers, links and account numbers with placeholders; the real values are put back locally. The rest of the wording is sent to your AI provider, so get the customer’s consent first. Formatting symbols (*, #) in the reply are removed automatically. The API key is cleared from memory when staff lock; if you saved it, it is stored encrypted and only reloads with the staff PIN.',size=12,color='#F1D1A5',justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,12))
     def improve(self):
         if not self.require_staff(): return
         text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()

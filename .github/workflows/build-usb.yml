@@ -77,6 +77,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
 
+      # The saved-AI-key feature uses Windows DPAPI through ctypes. Linux CI can only
+      # simulate it, so prove the real Windows code path here before building.
+      - name: Windows DPAPI self-test (saved AI key)
+        run: python .github/dpapi_selftest.py
+
       # Pull requests build throw-away artifacts that are never handed to a customer, so a
       # missing secret must not break contributor CI — warn, and keep the demo key.
       # Release builds (push to main / v* tags / manual dispatch) fail closed instead:
