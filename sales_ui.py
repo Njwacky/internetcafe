@@ -116,9 +116,9 @@ def show_reports(app,parent,card,label,button,entry):
             return sales_store.merge_from_file(src)
         def _done(res):
             load()
-            messagebox.showinfo(
-                'Multi-PC Sales Merged',
-                f"Imported {res['inserted']} new sale(s) from the other computer ({res['updated_voids']} void update(s), {res['skipped']} duplicate(s) safely skipped).",
+            (messagebox.showinfo if not res['rejected'] else messagebox.showwarning)(
+                'Multi-PC Sales Merged' if not res['rejected'] else 'Partial import — rejected sales need attention',
+                f"Imported {res['inserted']} new sale(s) from the other computer ({res['updated_voids']} void update(s), {res['skipped']} duplicate(s) safely skipped).\nRejected rows: {res['rejected']}\n"+'\n'.join(res['errors'][:5]),
                 parent=app,
             )
         app.job('Merging sales from other PC…',_do,_done)
@@ -140,10 +140,10 @@ def show_reports(app,parent,card,label,button,entry):
             return sales_store.sync_lan_folder(folder,station_name=cfg.get('station_name',''))
         def _done(res):
             load()
-            messagebox.showinfo(
-                'LAN / Folder Sync Complete',
+            (messagebox.showinfo if res['complete'] else messagebox.showwarning)(
+                'LAN / Folder Sync Complete' if res['complete'] else 'Partial LAN sync — totals may be incomplete',
                 f"Synced with {res['peer_files']} other PC file(s) in:\n{folder}\n\n"
-                f"New sales merged: {res['inserted']}  •  Void updates: {res['updated_voids']}",
+                f"New sales merged: {res['inserted']}  •  Void updates: {res['updated_voids']}\n"+'\n'.join(res['errors'][:5]),
                 parent=app,
             )
         app.job('Syncing Multi-PC LAN folder…',_do,_done)
@@ -164,15 +164,15 @@ def show_reports(app,parent,card,label,button,entry):
         )
         if not secret:return
         def _do():
-            local_rows=sales_store.export_sales_records(limit=1500)
+            local_rows=sales_store.export_sales_records()
             cloud_res=cloud_sync.sync_multi_pc_sales(cfg,secret,local_rows)
             merged=sales_store.merge_external_sales(cloud_res.get('sales',[]))
             return {'pushed':cloud_res.get('pushed_count',0),**merged}
         def _done(res):
             load()
-            messagebox.showinfo(
-                'Supabase Multi-PC Sync Complete',
-                f"Uploaded {res['pushed']} sale(s) from this PC and merged {res['inserted']} new sale(s) from your other shop PCs.",
+            (messagebox.showinfo if not res['rejected'] else messagebox.showwarning)(
+                'Supabase Multi-PC Sync Complete' if not res['rejected'] else 'Partial cloud merge — rejected rows need attention',
+                f"Uploaded {res['pushed']} sale(s) from this PC and merged {res['inserted']} new sale(s) from your other shop PCs.\nVoid updates: {res['updated_voids']} • Rejected rows: {res['rejected']}\n"+'\n'.join(res['errors'][:5]),
                 parent=app,
             )
         app.job('Syncing Multi-PC sales with Supabase…',_do,_done)

@@ -485,6 +485,7 @@
     </header>
 
     <div class="content">
+      <div id="dataWarning" class="card hidden" role="status" style="padding:14px;color:#fbbf24;margin-bottom:16px"></div>
       <section class="view" id="view-overview">
         <div class="grid g-kpi" id="kpiGrid"></div>
 
@@ -1005,7 +1006,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const state = {
   keys: [], reqs: [], releases: [], announcements: [], visits: [], stations: [], sales: [], onlineDaily: [],
   gh: null, sums: null, days: 14, view: "overview", email: "",
-  lastSync: null, telemetryError: false, loading: false,
+  lastSync: null, telemetryError: false, loading: false, dataErrors: [], salesReady: false,
 };
 
 const TOOL_GROUPS = {
@@ -1039,6 +1040,23 @@ function num(v) { return nf.format(Math.round(Number(v) || 0)); }
 function money(cents, cur = "R") {
   const val = (Number(cents) || 0) / 100;
   return cur + val.toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function currencyTotals(rows) {
+  const totals = new Map();
+  for (const sale of rows) {
+    const currency = String(sale.currency || "R");
+    const row = totals.get(currency) || { cents: 0, count: 0 };
+    row.cents += Number(sale.total_cents) || 0;
+    row.count += 1;
+    totals.set(currency, row);
+  }
+  return totals;
+}
+function currencyTotalsHTML(totals, average = false) {
+  if (!totals.size) return "No sales";
+  return [...totals.entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, row]) => esc(money(average ? row.cents / row.count : row.cents, currency)))
+    .join(" · ");
 }
 function isoDay(d) {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
@@ -1203,6 +1221,11 @@ function toggleSidebar(open) {
 $$("[data-nav]").forEach((btn) => btn.addEventListener("click", () => switchView(btn.dataset.nav)));
 
 function renderCurrentView() {
+  const warning = $("#dataWarning");
+  warning.textContent = state.dataErrors.length
+    ? "Incomplete refresh: " + state.dataErrors.join(", ") + ". Last successful data is retained where available; totals may be stale or unavailable."
+    : "";
+  warning.classList.toggle("hidden", !state.dataErrors.length);
   if (state.view === "overview") renderOverview();
   else if (state.view === "analytics") renderAnalytics();
   else if (state.view === "keys") renderKeysTable();
@@ -1287,6 +1310,9 @@ async function fetchPaged(build, maxPages = 12) {
     out.push(...data);
     if (data.length < size) break;
   }
+  const { data, error } = await build().range(maxPages * size, maxPages * size);
+  if (error) throw error;
+  if (data && data.length) throw new Error("Dataset exceeds dashboard page limit; refusing a partial total.");
   return out;
 }
 
@@ -1319,37 +1345,45 @@ async function refreshAll(manual = false) {
   const sinceIso = since.toISOString();
 
   const [keysRes, reqRes, relRes, annRes, visitsRes, stationsRes, salesRes, onlineRes] = await Promise.all([
-    sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).limit(1000),
+    fetchPaged(() => sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).order("license_id")).catch(() => null),
     sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
     sb.from("app_releases").select("*").order("published_at", { ascending: false }).limit(30),
     sb.from("app_announcements").select("*").order("published_at", { ascending: false }).limit(50),
     fetchPaged(() => sb.from("workspace_tool_visits")
       .select("visit_date,machine_id,shop_id,shop_name,city_label,screen_name,visit_count,last_visited_at")
-      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true })).catch(() => null),
-    fetchPaged(() => sb.from("station_heartbeats").select("*").order("last_seen_at", { ascending: false }), 3).catch(() => null),
+      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true }).order("machine_id").order("screen_name")).catch(() => null),
+    fetchPaged(() => sb.from("station_heartbeats").select("*").order("last_seen_at", { ascending: false }).order("machine_id"), 3).catch(() => null),
     fetchPaged(() => sb.from("shop_sync_sales")
-      .select("shop_id,created_at,station,total_cents,currency,voided_at")
-      .gte("created_at", sinceIso).order("created_at", { ascending: false })).catch(() => null),
+      .select("shop_id,sale_id,created_at,station,total_cents,currency,voided_at")
+      .gte("created_at", sinceIso).order("created_at", { ascending: false }).order("shop_id").order("sale_id")).catch(() => null),
     // Online-duration table (v0.8.3+); older projects without the migration just get [].
     fetchPaged(() => sb.from("station_online_daily")
       .select("visit_date,machine_id,shop_id,shop_name,city_label,station_name,online_seconds,last_online_at")
-      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true })).catch(() => null),
-  ]);
+      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true }).order("machine_id")).catch(() => null),
+  ].map(query => Promise.resolve(query).catch(() => null)));
 
-  if (keysRes.error) toast(keysRes.error.message, "err");
-  state.keys = keysRes.data || [];
-  state.reqs = reqRes.data || [];
-  state.releases = relRes.data || [];
-  state.announcements = annRes.error ? [] : (annRes.data || []);
+  state.dataErrors = [];
+  if (keysRes === null) state.dataErrors.push("license records");
+  else state.keys = keysRes;
+  for (const [key, result, label] of [
+    ["reqs", reqRes, "activation requests"], ["releases", relRes, "releases"],
+    ["announcements", annRes, "announcements"],
+  ]) {
+    if (!result || result.error) state.dataErrors.push(label);
+    else state[key] = result.data || [];
+  }
 
   state.telemetryError = visitsRes === null;
-  state.visits = visitsRes || [];
-  state.stations = stationsRes || [];
-  state.sales = salesRes || [];
-  state.onlineDaily = onlineRes || [];
-
+  for (const [key, result, label] of [
+    ["visits", visitsRes, "tool usage"], ["stations", stationsRes, "station status"],
+    ["sales", salesRes, "sales"], ["onlineDaily", onlineRes, "period online time"],
+  ]) {
+    if (result === null) state.dataErrors.push(label);
+    else state[key] = result;
+  }
+  if (salesRes !== null) state.salesReady = true;
   await loadGithubRelease();
-  state.lastSync = new Date();
+  if (!state.dataErrors.length) state.lastSync = new Date();
 
   $("#navReqCount").textContent = state.reqs.length;
   $("#navReqCount").classList.toggle("hidden", !state.reqs.length);
@@ -1357,7 +1391,7 @@ async function refreshAll(manual = false) {
   state.loading = false;
   if (btn) btn.style.opacity = "1";
   renderCurrentView();
-  if (manual) toast("Dashboard refreshed.", "info");
+  if (manual) toast(state.dataErrors.length ? "Refresh incomplete — see warning. Last successful data retained." : "Dashboard refreshed.", state.dataErrors.length ? "err" : "info");
 }
 
 function setRange(days) {
@@ -1378,8 +1412,8 @@ function daysAgoKey(n) {
 function buildAnalytics() {
   const days = state.days;
   const fromKey = daysAgoKey(days);
-  const inRange = state.visits.filter((v) => String(v.visit_date) >= fromKey);
   const todayKey = isoDay(new Date());
+  const inRange = state.visits.filter((v) => String(v.visit_date) >= fromKey && String(v.visit_date) <= todayKey);
 
   const byTool = new Map();
   const byCity = new Map();
@@ -1437,16 +1471,17 @@ function buildAnalytics() {
 
   // sales
   const fromIso = fromKey;
-  const salesInRange = state.sales.filter((s) => String(s.created_at || "").slice(0, 10) >= fromIso && !s.voided_at);
+  const salesInRange = state.sales.filter((s) => String(s.created_at || "").slice(0, 10) >= fromIso && String(s.created_at || "").slice(0, 10) <= todayKey && !s.voided_at);
   const todaySales = salesInRange.filter((s) => String(s.created_at || "").slice(0, 10) === todayKey);
-  const revenueToday = todaySales.reduce((a, s) => a + (Number(s.total_cents) || 0), 0);
-  const revenueRange = salesInRange.reduce((a, s) => a + (Number(s.total_cents) || 0), 0);
+  const revenueToday = currencyTotals(todaySales);
+  const revenueRange = currencyTotals(salesInRange);
   const salesByShop = new Map();
   for (const s of salesInRange) {
-    const row = salesByShop.get(s.shop_id) || { cents: 0, count: 0, currency: s.currency || "R" };
+    const key = JSON.stringify([s.shop_id, s.currency || "R"]);
+    const row = salesByShop.get(key) || { shopId: s.shop_id, cents: 0, count: 0, currency: s.currency || "R" };
     row.cents += Number(s.total_cents) || 0;
     row.count += 1;
-    salesByShop.set(s.shop_id, row);
+    salesByShop.set(key, row);
   }
 
   const online = state.stations.filter((s) => Date.now() - new Date(s.last_seen_at).getTime() < 5 * 60000);
@@ -1457,7 +1492,7 @@ function buildAnalytics() {
   // Online duration per PC in range (station_online_daily, v0.8.3+).
   const byOnline = new Map();
   for (const row of state.onlineDaily) {
-    if (String(row.visit_date) < fromKey) continue;
+    if (String(row.visit_date) < fromKey || String(row.visit_date) > todayKey) continue;
     const mid = row.machine_id;
     const cur = byOnline.get(mid) || {
       seconds: 0, shopName: (row.shop_name || "").trim(), city: (row.city_label || "").trim(),
@@ -1470,19 +1505,8 @@ function buildAnalytics() {
     cur.days.add(String(row.visit_date));
     byOnline.set(mid, cur);
   }
-  // Lifetime online from heartbeats (covers PCs that predate daily rows).
-  for (const st of state.stations) {
-    const secs = Number(st.online_seconds) || 0;
-    if (secs <= 0) continue;
-    const cur = byOnline.get(st.machine_id) || {
-      seconds: 0, shopName: (st.shop_name || "").trim(), city: (st.city_label || "").trim(),
-      station: (st.station_name || "").trim(), days: new Set(),
-    };
-    // Only fold lifetime total in when the daily table has no range data for this PC.
-    if (!cur.days.size) cur.seconds = Math.max(cur.seconds, secs);
-    if (!cur.station && st.station_name) cur.station = st.station_name;
-    byOnline.set(st.machine_id, cur);
-  }
+  // Lifetime heartbeat counters are deliberately NOT substituted for period data.
+  // Missing daily rows mean unknown/no period observation, not lifetime usage.
 
   const topToolEntry = [...byTool.entries()].sort((x, y) => y[1] - x[1])[0] || null;
   const mostUsedPage = topToolEntry ? topToolEntry[0] : null;
@@ -1712,7 +1736,7 @@ function renderOverview() {
     { cls: "lime", ico: "monitor", label: "Active computers", value: num(a.activeComputers.size), sub: `<b>${num(onlineNow)}</b> online right now` },
     { cls: "blue", ico: "shop", label: "Active shops", value: num(a.activeShops.size), sub: `${num(a.cities)} cities / areas` },
     { cls: "violet", ico: "pulse", label: "Tool opens today", value: num(a.today), sub: `${num(a.total)} in last ${a.days} days` },
-    { cls: "teal", ico: "cash", label: "Sales today", value: money(a.revenueToday), sub: `${num(a.todaySalesCount)} recorded sales` },
+    { cls: "teal", ico: "cash", label: "Sales today", value: state.salesReady ? currencyTotalsHTML(a.revenueToday) : "Unavailable", sub: `${num(a.todaySalesCount)} recorded sales · separate currencies` },
     { cls: "amber", ico: "inbox", label: "Pending requests", value: num(pending), sub: pending ? "Needs your approval" : "All clear" },
     { cls: "red", ico: "clock", label: "Expiring soon", value: num(a.expiring), sub: "Within 30 days" },
   ];
@@ -1838,22 +1862,23 @@ function renderAnalytics() {
       }).join("")
     : `<tr><td colspan="7" class="empty">No machines reporting yet.</td></tr>`;
 
-  const shops = [...a.salesByShop.entries()].sort((x, y) => y[1].cents - x[1].cents).slice(0, 8);
-  const maxSales = shops.length ? shops[0][1].cents : 1;
+  const shops = [...a.salesByShop.entries()].sort((x, y) => x[1].currency.localeCompare(y[1].currency) || y[1].cents - x[1].cents);
+  const currencyMax = new Map();
+  for (const [, row] of shops) currencyMax.set(row.currency, Math.max(currencyMax.get(row.currency) || 1, row.cents));
   $("#salesOverview").innerHTML = (shops.length
     ? `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">
-         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Range revenue</div><div style="font-size:21px;font-weight:800">${money(a.revenueRange)}</div></div>
+         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Range revenue</div><div style="font-size:21px;font-weight:800">${currencyTotalsHTML(a.revenueRange)}</div></div>
          <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Sales</div><div style="font-size:21px;font-weight:800">${num(a.salesInRange.length)}</div></div>
-         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Avg ticket</div><div style="font-size:21px;font-weight:800">${money(a.salesInRange.length ? a.revenueRange / a.salesInRange.length : 0)}</div></div>
+         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Avg ticket</div><div style="font-size:21px;font-weight:800">${currencyTotalsHTML(a.revenueRange, true)}</div></div>
        </div>` : "") +
     (shops.length
       ? shops.map(([sid, row]) => `
           <div class="rank-row">
-            <div class="rank-main"><div class="t">${esc(sid)}</div><div class="s">${num(row.count)} sales</div></div>
-            <div style="width:34%;min-width:70px"><div class="bar-track"><div class="bar-fill" style="width:${Math.max(3, (row.cents / maxSales) * 100).toFixed(1)}%"></div></div></div>
-            <div class="rank-val"><div class="n">${money(row.cents, row.currency || "R")}</div></div>
+            <div class="rank-main"><div class="t">${esc(row.shopId)}</div><div class="s">${num(row.count)} sales · ${esc(row.currency)}</div></div>
+            <div style="width:34%;min-width:70px"><div class="bar-track"><div class="bar-fill" style="width:${Math.max(3, (row.cents / currencyMax.get(row.currency)) * 100).toFixed(1)}%"></div></div></div>
+            <div class="rank-val"><div class="n">${esc(money(row.cents, row.currency || "R"))}</div></div>
           </div>`).join("")
-      : `<div class="empty">No shop sales synced yet.<br><span style="font-size:11.5px">Shops appear here once a station uses “Sync sales” in the desktop app.</span></div>`);
+      : `<div class="empty">${state.salesReady ? "No shop sales synced yet." : "Sales data unavailable."}<br><span style="font-size:11.5px">Shops appear here once a station uses “Sync sales” in the desktop app.</span></div>`);
 }
 
 /* ---------------- render: keys ---------------- */
@@ -2582,32 +2607,50 @@ function requestedView() {
 })();
 </script>
   <script>
+    function templateMessage(tbody, text) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 6;
+      cell.textContent = String(text);
+      row.append(cell);
+      tbody.replaceChildren(row);
+    }
+
     async function loadTemplates() {
       const tbody = document.getElementById("templatesTbody");
       if (!tbody || typeof sb === "undefined" || !sb) return;
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">Loading…</td></tr>';
-      const { data, error } = await sb.from("templates").select("*").order("category").order("name");
-      if (error) {
-        tbody.innerHTML = `<tr><td colspan="6" style="color:#f87171;">${error.message}</td></tr>`;
-        return;
+      templateMessage(tbody, "Loading…");
+      try {
+        const { data, error } = await sb.from("templates").select("*").order("category").order("name");
+        if (error) throw error;
+        if (!data || !data.length) return templateMessage(tbody, "No templates published yet.");
+        tbody.replaceChildren();
+        for (const t of data) {
+          const row = document.createElement("tr");
+          for (const value of [String(t.category || "").toUpperCase(), t.name, t.slug, "v" + t.version, t.is_active ? "Active" : "Hidden"]) {
+            const cell = document.createElement("td");
+            cell.textContent = String(value ?? "");
+            row.append(cell);
+          }
+          const actions = document.createElement("td");
+          // IDs are captured as values by listeners, never parsed as HTML/JavaScript.
+          for (const [text, handler] of [
+            [t.is_active ? "Hide" : "Show", () => toggleTemplateActive(t.id, !t.is_active)],
+            ["Delete", () => deleteTemplate(t.id)],
+          ]) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-ghost btn-sm";
+            button.textContent = text;
+            button.addEventListener("click", handler);
+            actions.append(button);
+          }
+          row.append(actions);
+          tbody.append(row);
+        }
+      } catch (error) {
+        templateMessage(tbody, error.message || "Could not load templates.");
       }
-      if (!data || !data.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No templates published yet.</td></tr>';
-        return;
-      }
-      tbody.innerHTML = data.map((t) => `
-        <tr>
-          <td><span class="badge">${t.category.toUpperCase()}</span></td>
-          <td>${t.name}</td>
-          <td><code>${t.slug}</code></td>
-          <td>v${t.version}</td>
-          <td>${t.is_active ? "Active" : "Hidden"}</td>
-          <td style="display:flex;gap:6px;">
-            <button class="btn btn-ghost btn-sm" onclick="toggleTemplateActive('${t.id}', ${!t.is_active})">${t.is_active ? "Hide" : "Show"}</button>
-            <button class="btn btn-ghost btn-sm" style="color:#f87171;" onclick="deleteTemplate('${t.id}')">Delete</button>
-          </td>
-        </tr>
-      `).join("");
     }
 
     async function publishTemplate() {
@@ -2645,14 +2688,16 @@ function requestedView() {
 
     async function toggleTemplateActive(id, nextActive) {
       if (typeof sb === "undefined" || !sb) return;
-      await sb.from("templates").update({ is_active: nextActive, updated_at: new Date().toISOString() }).eq("id", id);
+      const { error } = await sb.from("templates").update({ is_active: nextActive, updated_at: new Date().toISOString() }).eq("id", id);
+      if (error) return toast(error.message, "err");
       loadTemplates();
     }
 
     async function deleteTemplate(id) {
       if (typeof sb === "undefined" || !sb) return;
       if (!confirm("Delete this template?")) return;
-      await sb.from("templates").delete().eq("id", id);
+      const { error } = await sb.from("templates").delete().eq("id", id);
+      if (error) return toast(error.message, "err");
       loadTemplates();
     }
 

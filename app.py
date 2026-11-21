@@ -29,6 +29,7 @@ import saved_services
 import sales_outbox
 import price_list
 import projects
+from recovery_store import RecoveryStore
 import privacy
 import bluetooth_access
 from sales_ui import show_reports
@@ -126,6 +127,7 @@ class CafeDesk(ctk.CTk):
         # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
         self.session_state=SessionState(self.events,self._telemetry_counts,self._telemetry_lock)
         self._workers=BackgroundTasks()
+        self._recovery_store=RecoveryStore(self.recovery_dir())
         # A crash while drawing one screen must never leave a half-built, unusable window.
         # The shell, the timers and the event pump are created first, so even a missing
         # asset or a bad widget option still leaves staff a working app plus a clear status.
@@ -228,6 +230,7 @@ class CafeDesk(ctk.CTk):
                 self._close_confirmed_busy=False; return
         if saved_services.unprotected_sales(self.receipt_items) and not messagebox.askyesno('Saved sales are not protected','Some saved work has neither a sales record nor a durable retry copy. Closing now can lose those earnings. Retry Record sale from Receipts first. Close anyway?',parent=self):return
         if self.has_unsaved_work() and not messagebox.askyesno('Close Café Desk?','Current workspace data (drafts, scans, OCR text/images, PDF queues, cards, forms or sheets) will be closed. Save any work you need first. If recovery is enabled, the latest copy may not include recent changes. Close anyway?',parent=self): return
+        self._recovery_store.invalidate()
         self.remove_session_files(); self.destroy()
     def remove_session_files(self):
         try: self.session_temp.cleanup()
@@ -545,11 +548,7 @@ class CafeDesk(ctk.CTk):
     def recovery_dir(self):return settings_store.settings_path().parent/'recovery'
     def recovery_exists(self):return any((self.recovery_dir()/(name+ext)).exists() for name in ('career','sheet') for ext in ('.cafeproject','.prev.cafeproject'))
     def delete_recovery_copies(self,notify=True):
-        failed=[]
-        for name in ('career','sheet'):
-            for ext in ('.cafeproject','.prev.cafeproject'):
-                try:(self.recovery_dir()/(name+ext)).unlink(missing_ok=True)
-                except OSError:failed.append(name+ext)
+        failed=self._recovery_store.clear()
         if failed:messagebox.showwarning('Recovery files remain','Some recovery files could not be removed. Check the recovery folder manually.',parent=self)
         elif notify:messagebox.showinfo('Recovery cleared','Recovery copies were deleted. Saved projects and original files were not deleted.',parent=self)
     def recover_project(self,kind):
@@ -586,21 +585,13 @@ class CafeDesk(ctk.CTk):
         if career['draft'].strip() or any(v.strip() for v in career['fields'].values()) or career['photo']:jobs.append(('career',career))
         if sheet['items']:jobs.append(('sheet',sheet))
         if not jobs:return
-        directory=self.recovery_dir()
+        generation=self._recovery_store.generation()
         def work():
-            import shutil
-            directory.mkdir(parents=True,exist_ok=True,mode=0o700)
-            for kind,data in jobs:
-                cur_file=directory/(kind+'.cafeproject')
-                prev_file=directory/(kind+'.prev.cafeproject')
-                if cur_file.exists():
-                    try: shutil.copy2(cur_file,prev_file)
-                    except OSError: pass
-                projects.save(kind,data,str(cur_file),allow_internal=True)
+            return self._recovery_store.save(generation,jobs)
         def on_fail(err_msg):
             self.status.set(f'Auto-recovery failed ({err_msg}) • save your work manually!')
             self._last_recovery_error=str(err_msg)
-        self.job('Saving recovery copy…',work,lambda _:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted'),error_cb=on_fail)
+        self.job('Saving recovery copy…',work,lambda saved:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted') if saved else None,error_cb=on_fail)
     def recovery_tick(self):
         try: self.perform_recovery()
         except Exception: self._log_exception('recovery_tick')
@@ -648,7 +639,9 @@ class CafeDesk(ctk.CTk):
             if toggle.get():
                 if not messagebox.askyesno('Enable recovery?', 'Recovery saves customer text and photos to this computer about every 60 seconds, including after a crash or normal exit. The copies are not encrypted. Get customer permission and use Next customer when finished. Enable?',parent=self):toggle.set(False);return
                 self.recovery_enabled=True;self.after(1200,self.perform_recovery)
-            else:self.recovery_enabled=False
+            else:
+                self.recovery_enabled=False
+                self._recovery_store.invalidate()
         ctk.CTkSwitch(box,text='Save recovery copies during this session',variable=toggle,command=change).pack(anchor='w',padx=20,pady=(0,14))
         recovery_row=action_row(box,
                    secondary=(('Recover career',lambda:self.recover_project('career')),
@@ -1536,6 +1529,7 @@ class CafeDesk(ctk.CTk):
         def _watchdog():
             if self.busy and self._active_job_id==job_id:
                 self.busy=False; self._active_job_id=None
+                self._recovery_store.invalidate()
                 self.status.set(f'“{description}” took too long and was abandoned • the tool is free again')
         try: self.after(int(max(30,timeout))*1000,_watchdog)
         except tk.TclError: pass

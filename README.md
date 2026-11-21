@@ -1,4 +1,6 @@
-# Café Desk — Local-First Desktop Document Studio (`v0.8.3`)
+# Café Desk — Local-First Desktop Document Studio (`v0.8.4`)
+
+**0.8.4 sync/privacy patch:** see [fixes and coordinated cloud migration instructions](docs/deep-app-audit-fixes.md). Cloud sales sync now requires protocol 2 on the database and an upgrade of every shop PC; local sales stay available during migration.
 
 A local-first desktop application for internet cafés, copy shops, and walk-in service desks, written in Python with CustomTkinter. Staff and customers use the same workspace; administrative settings, sales reports, recovery copies, and optional AI polishing require a staff PIN. For shared walk-in computers, always run Café Desk inside a standard (non-Administrator) operating-system user account.
 
@@ -92,7 +94,7 @@ Python 3.11+ and internet access are needed only on the build computer:
 
 Unsigned Windows/macOS builds can show SmartScreen/Gatekeeper prompts (`More info` → `Run anyway` on Windows); wider distribution may use code signing.
 
-## Commercial Per-Computer Locking & 1-Year Licensing (`v0.8.3`)
+## Commercial Per-Computer Locking & 1-Year Licensing (`v0.8.4`)
 
 Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 1 — Offline Hardware Machine-ID + 1-Year Ed25519 Signed Activation**:
 
@@ -180,7 +182,7 @@ the rules so a future change cannot quietly reintroduce an alarming screen.
 
 ## Tests and limitations
 
-Run `python -m unittest -v test_services` after installing dependencies. Automated tests cover templates, PDF operations and layout text, image conversion, custom photo size and rotation, portable projects, archive validation, inactivity timing, logo normalization, prices, sales records and CSV export, local PIN verifier, and a **mocked** OCR invocation. The GUI, actual Tesseract recognition, Windows WIA/pywin32 integration, Epson scanner hardware, real AI calls and target-platform installers have not been tested in this environment. Scanner automated tests use mock devices. Built-in PDF fonts may not render some non-Latin characters. Keep originals, check exported files, and test thoroughly before using with real customers.
+Run `python .github/run_tests.py` after installing the locked Python dependencies. Run `npm ci --ignore-scripts && npm test` for the signer, dashboard and isolated PostgreSQL sales-sync regressions. Automated tests cover templates, PDF operations and layout text, image conversion, custom photo size and rotation, portable projects, archive validation, inactivity timing, logo normalization, prices, sales records and CSV export, local PIN verifier, and a **mocked** OCR invocation. The GUI, actual Tesseract recognition, Windows WIA/pywin32 integration, Epson scanner hardware, real AI calls and target-platform installers have not been tested in this environment. Scanner automated tests use mock devices. Built-in PDF fonts may not render some non-Latin characters. Keep originals, check exported files, and test thoroughly before using with real customers.
 
 ## Optional CV profile photo
 

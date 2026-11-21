@@ -679,29 +679,54 @@ def pull_shop_price_profile(settings: dict, sync_secret: str) -> dict:
 
 
 def sync_multi_pc_sales(settings: dict, sync_secret: str, local_sales: list[dict], *, since_iso: str = '') -> dict:
-    """Upload this PC's recorded sales and return all PCs' sales for the shop."""
+    """Reconcile ALL history in bounded RPC pages, including old voids.
+
+    No creation-time cursor: a void today can affect a sale from years ago. A full
+    keyset scan is intentionally preferred to an unsafe incremental watermark.
+    Every run rechecks old rows. Interrupted uploads are safe to retry by sale ID.
+    """
     url, key = resolve_client_supabase(settings)
     if not url or not key:
         raise ValueError('Configure your Supabase Project URL and Anon Key first.')
+    if since_iso:
+        raise ValueError('Creation-date filtered sync is unsafe for old voids; synchronize full history.')
     shop_id = str(settings.get('shop_id') or '').strip().upper()
     key_hash = hash_shop_sync_secret(shop_id, sync_secret)
-    res = _supabase_request(
-        url,
-        key,
-        'POST',
-        '/rest/v1/rpc/sync_shop_sales',
-        payload={
-            'p_shop_id': shop_id,
-            'p_sync_key_sha256': key_hash,
-            'p_sales': local_sales,
-            'p_since': since_iso,
-        },
-        timeout=18.0,
-    )
-    if not isinstance(res, dict) or not res.get('ok'):
-        err = res.get('error') if isinstance(res, dict) else 'Could not sync shop sales.'
-        raise RuntimeError(str(err))
-    return res
+    def request(rows, after='', read=False):
+        try:
+            res = _supabase_request(url,key,'POST','/rest/v1/rpc/sync_shop_sales_v2',payload={
+                'p_shop_id':shop_id,'p_sync_key_sha256':key_hash,'p_sales':rows,
+                'p_after':after,'p_read':read},timeout=18.0)
+        except RuntimeError as exc:
+            if 'PGRST202' in str(exc) or ('404' in str(exc) and 'sync_shop_sales_v2' in str(exc)):
+                raise RuntimeError('Complete sales sync requires the protocol 2 database migration. Contact the owner; totals were not reconciled.') from exc
+            raise
+        if not isinstance(res,dict) or not res.get('ok'):
+            raise RuntimeError(str(res.get('error') if isinstance(res,dict) else 'Could not sync shop sales.'))
+        if res.get('protocol')!=2:
+            raise RuntimeError('Complete sales sync requires the protocol 2 database migration. Contact the owner; totals were not reconciled.')
+        return res
+    # Authenticate/check protocol before uploading any customer ledger rows.
+    request([])
+    pushed=0
+    for start in range(0,len(local_sales),250):
+        res=request(local_sales[start:start+250])
+        count=res.get('pushed_count')
+        if type(count) is not int or count!=len(local_sales[start:start+250]):
+            raise RuntimeError('Cloud did not acknowledge every uploaded sale. Retry; synchronization is incomplete.')
+        pushed+=count
+    sales=[];after=''
+    while True:
+        res=request([],after,True)
+        rows=res.get('sales')
+        if not isinstance(rows,list) or len(rows)>250:
+            raise RuntimeError('Invalid cloud sales page. Synchronization is incomplete.')
+        if not rows:break
+        ids=[r.get('sale_id') if isinstance(r,dict) else None for r in rows]
+        if any(not isinstance(sid,str) or not sid for sid in ids) or ids!=sorted(set(ids)) or ids[0]<=after or res.get('next_after')!=ids[-1]:
+            raise RuntimeError('Invalid cloud sales cursor. Synchronization is incomplete.')
+        sales.extend(rows);after=ids[-1]
+    return {'ok':True,'protocol':2,'pushed_count':pushed,'sales':sales}
 
 
 ALLOWED_TELEMETRY_SCREENS = frozenset({

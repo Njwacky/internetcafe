@@ -1,6 +1,6 @@
 [project]
 name = "cafe-desk"
-version = "0.8.3"
+version = "0.8.4"
 description = "Local-first document studio for internet cafés, copy shops, and service desks"
 readme = "README.md"
 requires-python = ">=3.11"
