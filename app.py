@@ -25,6 +25,8 @@ from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, CAREER_ENTRY_FIELDS, 
 import services
 import settings_store
 import sales_store
+import saved_services
+import sales_outbox
 import price_list
 import projects
 import privacy
@@ -147,6 +149,7 @@ class CafeDesk(ctk.CTk):
         if self._startup_error:
             try: self.status.set('Startup problem • '+self._startup_error+' • use the sidebar or Help & privacy')
             except Exception: pass
+        self.after(1800,self._notify_pending_sales)
         if settings_corrupted:
             self.status.set('Settings file damaged • staff access locked fail-closed until restored')
         if not settings_corrupted and not self._startup_error:
@@ -223,6 +226,7 @@ class CafeDesk(ctk.CTk):
             self._close_confirmed_busy=True
             if not messagebox.askyesno('Task still running','A document is still being processed. Closing now abandons that task.\n\nClose Café Desk anyway?',parent=self):
                 self._close_confirmed_busy=False; return
+        if saved_services.unprotected_sales(self.receipt_items) and not messagebox.askyesno('Saved sales are not protected','Some saved work has neither a sales record nor a durable retry copy. Closing now can lose those earnings. Retry Record sale from Receipts first. Close anyway?',parent=self):return
         if self.has_unsaved_work() and not messagebox.askyesno('Close Café Desk?','Current workspace data (drafts, scans, OCR text/images, PDF queues, cards, forms or sheets) will be closed. Save any work you need first. If recovery is enabled, the latest copy may not include recent changes. Close anyway?',parent=self): return
         self.remove_session_files(); self.destroy()
     def remove_session_files(self):
@@ -519,7 +523,7 @@ class CafeDesk(ctk.CTk):
         if not messagebox.askyesno('Save private project','The project will include document details and copies of any photos. It is not encrypted. Save only where appropriate for the customer. Continue?',parent=self): return
         filename='career-project.cafeproject' if kind=='career' else 'picture-sheet.cafeproject'
         path=filedialog.asksaveasfilename(parent=self,defaultextension='.cafeproject',filetypes=[('Café Desk project','*.cafeproject')],initialfile=filename)
-        if path:self.job('Saving project…',lambda:projects.save(kind,snapshot,path),lambda _:messagebox.showinfo('Project saved',f'Project saved to:\n{path}\n\nKeep it private; it includes photos.',parent=self))
+        if path:self.saved_job('Saving project…',lambda:projects.save(kind,snapshot,path),lambda _:messagebox.showinfo('Project saved',f'Project saved to:\n{path}\n\nKeep it private; it includes photos.',parent=self),'project')
     def open_project(self,path=None,allow_recovery=False):
         if self.busy: return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
         path=path or filedialog.askopenfilename(parent=self,filetypes=[('Café Desk project','*.cafeproject')])
@@ -741,7 +745,7 @@ class CafeDesk(ctk.CTk):
             'Career documents':'Add your details, create and edit a draft, then choose the Document type and Template right beside the live A4 preview (click the enlarge icon to inspect full size).',
             'Cards & invitations':'Design Business cards or Invitation cards across all 13 templates, preview a single card or A4 sheet live, and save printable A4 PDFs with optional trim marks.',
             'Forms creator':'Build printable or digitally fillable AcroForm A4 PDFs — general applications, affidavits, consent forms, customer intake sheets, or custom fields.',
-            'Receipts':'Choose services and quantity. Save a receipt PDF; staff must separately confirm Record sale to add it to history.',
+            'Receipts':'Saved customer exports automatically add priced services to receipts and sales history. Saving a receipt also records any manual lines, without duplicating saved work.',
             'Sales reports':'Choose a date range to view locally recorded totals, export a CSV or save a selected sale record. Simple internal service log — payment status, cash/card drawer reconciliation and tax/VAT are NOT calculated.',
             'Price settings':'Enter each business service and price on its own line as service | price. Include units in the service name.',
             'Business settings':'Change the business name, icon, logo or staff PIN. Settings are local to this computer user.',
@@ -776,7 +780,7 @@ class CafeDesk(ctk.CTk):
         label(manual_banner,'Open the complete formatted HTML handbook (all 17 sidebar tools, 5-minute shop setup, 30-second pitch & printable A4 handout) locally in your browser.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,10))
         button(manual_banner,'Open Full Manual & Sales Guide (HTML)  ↗',self.open_user_manual,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(anchor='w',padx=18,pady=(0,15))
         self._build_notice_card()
-        sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Add services in Receipts. Saving a receipt PDF does not record a sale. Staff choose Record sale; staff-only Sales reports show recorded totals. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
+        sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Successfully saved customer exports automatically appear in Receipts and sales totals. Saving a receipt records manual lines too. Unsaved drafts and temporary files never count. Sales reports offer Today and This month. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
         for title,description in sections:
             box=card(self.body);box.pack(fill='x',pady=(0,8));label(box,title,size=14,bold=True).pack(anchor='w',padx=18,pady=(14,4));label(box,description,size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,14))
         ocr_box=card(self.body);ocr_box.pack(fill='x',pady=(0,10))
@@ -1199,73 +1203,144 @@ class CafeDesk(ctk.CTk):
         def save():
             try:
                 if self.busy: return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
+                if not self.can_clear_receipt():return
                 if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Discard unrecorded receipt?','Saving new prices clears the current unrecorded receipt. Continue?',parent=self): return
                 settings_store.save_prices(currency.get(),rates.get('1.0','end-1c')); self.reset_receipt()
-                messagebox.showinfo('Price list saved','Your rates were saved. The current unsaved receipt has been cleared.',parent=self)
+                messagebox.showinfo('Price list saved','Your rates were saved. The current receipt view has been cleared; recorded sales remain in history.',parent=self)
+                self.show('Price settings')
             except (ValueError,OSError) as exc: messagebox.showerror('Could not save rates',str(exc),parent=self)
         action_row(box,primary=(('Save price list',save),),pady=(0,20))
+        links_box=card(self.body);links_box.pack(fill='x',pady=(12,0))
+        label(links_box,'Automatic receipt rates',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,5))
+        label(links_box,'Each successful customer export adds one job to Receipts and sales totals.\nChoose per-job rates, not per-page rates. Drafts, previews, temporary merge files and recovery copies never count.\nUnlinked tools ask staff to choose a rate before saving. Save your price list before linking rates.',size=12,color=MUTED,justify='left').pack(anchor='w',padx=20,pady=(0,12))
+        link_vars={};names=[p['name'] for p in data['prices']];unset='— Choose on first save —'
+        saved_links=data.get('receipt_service_links',{})
+        if not isinstance(saved_links,dict):saved_links={}
+        for key,title in saved_services.SERVICES.items():
+            row=ctk.CTkFrame(links_box,fg_color='transparent');row.pack(fill='x',padx=20,pady=4)
+            label(row,title,size=12).pack(side='left')
+            value=saved_links.get(key,unset)
+            var=ctk.StringVar(value=value if value in names else unset);link_vars[key]=var
+            ctk.CTkOptionMenu(row,values=[unset]+names,variable=var,width=260).pack(side='right')
+        def save_links():
+            try:
+                settings_store.save_receipt_service_links({k:v.get() for k,v in link_vars.items() if v.get()!=unset})
+                messagebox.showinfo('Automatic rates saved','Future saved jobs will use these price-list rates. Existing sales stay unchanged.',parent=self)
+            except (ValueError,OSError) as exc:messagebox.showerror('Could not save automatic rates',str(exc),parent=self)
+        action_row(links_box,primary=(('Save automatic rates',save_links),),pady=(12,20))
+    def _notify_pending_sales(self):
+        try:
+            count=sales_outbox.pending_count()
+            if count:
+                self.status.set(f'{count} saved sale(s) await recording • open Sales reports → Retry pending saved sales')
+                messagebox.showwarning('Saved sales need attention',f'{count} saved-sale retry file(s) need checking. Sales totals may be incomplete. Open Sales reports → Retry pending saved sales. These may be from an earlier session; any unreadable files will be reported for staff attention.',parent=self)
+        except (ValueError,OSError) as exc:
+            self.status.set('Could not inspect pending saved sales: '+str(exc))
+    def can_clear_receipt(self):
+        if saved_services.unprotected_sales(getattr(self,'receipt_items',[])):
+            messagebox.showerror('Record saved work first','Some saved work has neither a confirmed sales record nor a durable retry copy. Use Record sale in Receipts before clearing it. Check available disk space and permissions.',parent=self)
+            return False
+        return True
     def reset_receipt(self):
+        if not self.can_clear_receipt():return False
         self.receipt_items=[];self.receipt_currency=None;self.receipt_token=uuid.uuid4().hex;self.receipt_timestamp=None;self.receipt_business=None;self.receipt_recorded=False
+        return True
     def receipt_screen(self):
-        self.heading(self.body,'Receipts','Create a simple receipt from your business’s own price list.')
+        self.heading(self.body,'Receipts','Saved customer work appears here automatically. Unsaved drafts never count toward sales.')
         data=settings_store.load_settings();prices=data['prices'];currency=data.get('currency','R');box=card(self.body);box.pack(fill='x')
         label(box,'Add a service',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
         if not prices:
             label(box,'No prices have been set. A staff member can add services under Price settings.',size=12,color=MUTED).pack(anchor='w',padx=20,pady=(0,16))
-            button(box,'Open price settings',lambda:self.show('Price settings'),secondary=True,width=150).pack(anchor='w',padx=20,pady=(0,20));return
+            button(box,'Open price settings',lambda:self.show('Price settings'),secondary=True,width=150).pack(anchor='w',padx=20,pady=(0,20))
         lookup={x['name']:x['price'] for x in prices};row=ctk.CTkFrame(box,fg_color='transparent');row.pack(fill='x',padx=20,pady=(4,12))
-        choice=ctk.StringVar(value=prices[0]['name']);ctk.CTkOptionMenu(row,values=list(lookup),variable=choice,fg_color=GREEN,button_color=GREEN_HOVER,width=220).pack(side='left',padx=(0,8))
+        choice=ctk.StringVar(value=prices[0]['name'] if prices else 'No services');ctk.CTkOptionMenu(row,values=list(lookup) or ['No services'],variable=choice,fg_color=GREEN,button_color=GREEN_HOVER,width=220).pack(side='left',padx=(0,8))
         qty=entry(row,'Qty');qty.insert(0,'1');qty.configure(width=75);qty.pack(side='left',padx=(0,8))
         receipt=ctk.CTkTextbox(box,height=225,fg_color='#121A29',border_color=BORDER,border_width=1,text_color=INK);receipt.pack(fill='x',padx=20,pady=(0,10))
         status=label(box,'',size=11,bold=True,color='#B9FF70');status.pack(anchor='w',padx=20,pady=(0,8))
         def draft_text():
-            return services.receipt_text(self.receipt_business,self.receipt_currency,self.receipt_items,timestamp=self.receipt_timestamp,reference=self.receipt_token)
+            return saved_services.receipt_text(self.receipt_business,self.receipt_currency,self.receipt_items,timestamp=self.receipt_timestamp,reference=self.receipt_token)
         def refresh():
+            try:
+                saved_services.reconcile_receipt(self.receipt_items)
+                self.receipt_recorded=bool(self.receipt_items) and all(x.get('_recorded') for x in self.receipt_items)
+                note='Recorded in sales history' if self.receipt_recorded else 'Unrecorded lines remain • save receipt or record sale to retry'
+            except Exception as exc:
+                note='Sales status could not be verified: '+str(exc)
             if not receipt.winfo_exists():return
             receipt.configure(state='normal');receipt.delete('1.0','end')
             if self.receipt_items:receipt.insert('1.0',draft_text())
-            receipt.configure(state='disabled');status.configure(text='Recorded in sales history' if self.receipt_recorded else 'Not yet recorded in sales history')
+            receipt.configure(state='disabled');status.configure(text=note)
         def add():
+            if choice.get() not in lookup:return
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
-            if self.receipt_recorded:return messagebox.showinfo('Recorded sale','Start a new receipt before adding services.',parent=self)
+            if self.receipt_currency and (self.receipt_currency!=currency or self.receipt_business!=self.business_name.get()):
+                return messagebox.showinfo('New receipt needed','Start a new receipt before changing business or currency.',parent=self)
             try:
                 n=int(qty.get());assert 1<=n<=999
             except (ValueError,AssertionError):return messagebox.showerror('Quantity','Enter a quantity from 1 to 999.',parent=self)
             if not self.receipt_items:
                 self.receipt_timestamp=datetime.now().astimezone().isoformat(timespec='seconds');self.receipt_business=self.business_name.get();self.receipt_currency=currency
+            if self.receipt_recorded or any(x.get('_reference')==self.receipt_token for x in self.receipt_items):self.receipt_token=uuid.uuid4().hex
+            self.receipt_recorded=False
             self.receipt_items.append({'name':choice.get(),'price':lookup[choice.get()],'qty':n});refresh()
         button(row,'Add service',add).pack(side='left')
         buttons=button_row(box,pady=(0,10))
+        def sync_recorded(items):
+            for current,snapshot in zip(self.receipt_items,items):
+                current.update(snapshot)
+            self.receipt_recorded=all(x.get('_recorded') for x in self.receipt_items)
+            refresh()
         def save_receipt():
+            if self.busy:return
             if not self.receipt_items:return messagebox.showinfo('Receipt','Add a service first.',parent=self)
+            try:saved_services.reconcile_receipt(self.receipt_items)
+            except Exception as exc:return messagebox.showerror('Could not verify sales status',str(exc),parent=self)
+            if not any(not x.get('_voided') for x in self.receipt_items):return messagebox.showinfo('Receipt','All services on this receipt have been voided. There is nothing to bill.',parent=self)
+            if any(not x.get('_recorded') and not x.get('_saved_work') for x in self.receipt_items) and not self.require_staff():return
             out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF','*.pdf')],initialfile='receipt.pdf')
-            if out:
-                text=draft_text();recorded=self.receipt_recorded;self.job('Saving receipt…',lambda:services.export_document_pdf(text,out,'Receipt',0),lambda _:messagebox.showinfo('Receipt saved',f'Saved to:\n{out}\n\n'+('This sale is already recorded.' if recorded else 'Saving a PDF does not record a sale. Use Record sale for that.'),parent=self))
+            if not out:return
+            text=draft_text();items=[dict(x) for x in self.receipt_items]
+            business=self.receipt_business;curr=self.receipt_currency;token=self.receipt_token;station=data.get('station_name','')
+            def work():
+                services.export_document_pdf(text,out,'Receipt',0)
+                when=datetime.now().astimezone().isoformat(timespec='seconds')
+                for item in items:
+                    if not item.get('_recorded'):
+                        item['_saved_work']=True;item.setdefault('_created_at',when);item.setdefault('_station',station)
+                try:saved_services.record_pending(items,business,curr,token)
+                except Exception as exc:
+                    raise ValueError('Receipt PDF saved, but sales recording failed. Retry saving the receipt or use Record sale. '+str(exc)) from exc
+            def done(_):
+                sync_recorded(items)
+                messagebox.showinfo('Receipt saved',f'Saved to:\n{out}\n\nAll services are in sales history. Previously recorded lines were not counted twice.',parent=self)
+            self.job('Saving receipt and sales…',work,done,error_cb=lambda _:sync_recorded(items))
         def record():
-            if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
+            if self.busy:return
             if not self.receipt_items:return messagebox.showinfo('Receipt','Add a service first.',parent=self)
-            if self.receipt_recorded:return messagebox.showinfo('Already recorded','This receipt has already been recorded. Start a new receipt for another sale.',parent=self)
+            if self.receipt_recorded:return messagebox.showinfo('Already recorded','All these services are already in sales history.',parent=self)
             if not self.require_staff():return
-            if not messagebox.askyesno('Record sale','Record this sale in local sales history? Payment status is not tracked. Once recorded, start a new receipt to make changes.',parent=self):return
-            token=self.receipt_token;business=self.receipt_business;curr=self.receipt_currency;items=[dict(x) for x in self.receipt_items];when=datetime.now().astimezone().isoformat(timespec='seconds')
-            def complete(created):
-                if self.receipt_token==token:self.receipt_recorded=True;refresh()
-                messagebox.showinfo('Sale recorded' if created else 'Already recorded','The sale is in local sales history. This does not confirm payment.',parent=self)
-            self.job('Recording sale…',lambda:sales_store.record_sale(token,business,curr,items,when),complete)
+            items=[dict(x) for x in self.receipt_items];business=self.receipt_business;curr=self.receipt_currency;token=self.receipt_token
+            def complete(_):
+                sync_recorded(items)
+                messagebox.showinfo('Sale recorded','Only unrecorded services were added. This does not confirm payment.',parent=self)
+            self.job('Recording sale…',lambda:saved_services.record_pending(items,business,curr,token),complete,error_cb=lambda _:sync_recorded(items))
         def remove_line():
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
-            if self.receipt_recorded:return messagebox.showinfo('Recorded sale','Start a new receipt before making changes.',parent=self)
-            if self.receipt_items:
-                self.receipt_items.pop();refresh()
+            removable=[i for i,item in enumerate(self.receipt_items) if not item.get('_recorded') and not item.get('_saved_work')]
+            if not removable:
+                return messagebox.showinfo('Saved services','Only unsaved manual lines can be undone. Staff can void mistaken saved services in Sales reports.',parent=self)
+            self.receipt_items.pop(removable[-1])
+            self.receipt_recorded=bool(self.receipt_items) and all(x.get('_recorded') for x in self.receipt_items)
+            refresh()
         def new_receipt():
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
-            if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Start a new receipt?','The current receipt has not been recorded. Discard it?',parent=self):return
-            self.reset_receipt();refresh()
+            if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Start a new receipt?','Clear this receipt view? Unsaved manual lines will be discarded. Saved work and queued sales remain in sales history or the retry queue.',parent=self):return
+            if self.reset_receipt():refresh()
         button(buttons,'Record sale',record).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'Save receipt PDF',save_receipt,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'Undo last item',remove_line,ghost=True).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'New receipt',new_receipt,ghost=True).pack(side='left')
-        label(box,'Record sale is staff-only. No payment status, payment method or tax is tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
+        label(box,'Saved work is already recorded. Saving this receipt records only new manual lines.\nSaved work cannot be undone here; staff can void mistakes in Sales reports. Payment and tax are not tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
     def ocr_screen_part(self):
         show_ocr(self,self.body,card,label,button)
     def create_shell(self):
@@ -1386,6 +1461,62 @@ class CafeDesk(ctk.CTk):
             if icon is None: ctk.CTkLabel(box,text='',image=self.icon_images['bluetooth_card']).pack(anchor='w',padx=18,pady=(14,4))
             else: label(box,icon,size=24,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(14,2))
             label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),ghost=True).pack(anchor='w',padx=18,pady=(0,14))
+    def saved_job(self,description,fn,success,service):
+        """Customer-visible saves only. Temporary and recovery writes use job()."""
+        if self.busy:return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
+        try:
+            data=settings_store.load_settings(strict=True)
+            currency,item=saved_services.linked_price(data,service)
+            if item is None:
+                messagebox.showinfo('Choose a saved-work rate',
+                    'Before saving, staff must link this tool to a price-list service. '
+                    'Rates are per completed save/job. Use an explicit zero-price service for free work.',parent=self)
+                if not self.require_staff():return
+                _,prices=price_list.read_prices(data)
+                if not prices:
+                    messagebox.showinfo('Set prices first','Add your services in Price settings, then retry the save.',parent=self)
+                    return
+                choices='\n'.join(f"{i+1}. {p['name']} — {currency} {p['price']}" for i,p in enumerate(prices))
+                selected=simpledialog.askinteger('Saved-work rate',
+                    f"Choose the rate for {saved_services.SERVICES[service]} (per save/job):\n\n{choices}\n\nEnter the service number:",
+                    minvalue=1,maxvalue=len(prices),parent=self)
+                if selected is None:return
+                links=data.get('receipt_service_links',{})
+                links=dict(links) if isinstance(links,dict) else {}
+                # Drop stale links to deleted/renamed prices.
+                names={p['name'] for p in prices}
+                links={k:v for k,v in links.items() if k in saved_services.SERVICES and v in names}
+                links[service]=prices[selected-1]['name']
+                settings_store.save_receipt_service_links(links)
+                item=dict(prices[selected-1],qty=1)
+            business=self.business_name.get()
+            if self.receipt_items and (self.receipt_currency!=currency or self.receipt_business!=business):
+                if not self.receipt_recorded:
+                    messagebox.showinfo('Finish current receipt','Save or clear the current receipt before using a different business or currency.',parent=self)
+                    return
+                if not self.reset_receipt():return
+            reference=uuid.uuid4().hex
+            def work():
+                return saved_services.save_and_record(fn,reference,business,currency,item,
+                                                     station=data.get('station_name',''))
+            def done(payload):
+                result,when,error=payload
+                if not self.receipt_items:
+                    self.receipt_business=business;self.receipt_currency=currency;self.receipt_timestamp=when
+                if self.receipt_recorded:self.receipt_token=uuid.uuid4().hex
+                self.receipt_items.append(dict(item,_reference=reference,_recorded=not error,_saved_work=True,_created_at=when,_station=data.get('station_name','')))
+                self.receipt_recorded=all(x.get('_recorded') for x in self.receipt_items)
+                if getattr(self,'current',None)=='Receipts':self.show('Receipts')
+                if error:
+                    messagebox.showerror('File saved — sales recording needs attention',
+                        'Your file was saved, but its service could not be added to sales totals. '
+                        'The line is kept in Receipts. Completed sales are queued locally when storage permits; use Record sale here or Retry pending saved sales in Sales reports.\n\n'+error,parent=self)
+                success(result)
+                self.status.set('File saved • added to Receipts' + (' • sales recording needs retry' if error else ' and sales totals'))
+            self.job(description,work,done)
+        except (ValueError,OSError) as exc:
+            messagebox.showerror('Could not prepare saved-work receipt',str(exc),parent=self)
+
     def job(self,description,fn,success,error_cb=None,timeout=180):
         """Run `fn` on a worker thread and deliver the result on the Tk main thread.
 
@@ -1490,6 +1621,7 @@ class CafeDesk(ctk.CTk):
         return any(tag in str(message) for tag in _QUIET_JOB_ERROR_TAGS)
     def clear_customer(self):
         if self.busy: return messagebox.showinfo('Please wait','Please wait until the current task finishes.',parent=self)
+        if not self.can_clear_receipt():return
         if not messagebox.askyesno('Next customer','Clear the current customer’s draft, project photos, picture sheet, cards, forms, OCR text/images, scanned pages, receipt, temporary merge copies, recovery copies and AI key? Staff will be locked. Saved PDFs, saved projects, Downloads and Bluetooth-received files on disk will NOT be deleted.',parent=self): return
         for var in self.values.values(): var.set('')
         if self.current=='Career documents':
@@ -1600,7 +1732,7 @@ class CafeDesk(ctk.CTk):
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='merged.pdf' if kind=='pdf' else 'images.pdf')
         if not out: return
         task=services.merge_pdf if kind=='pdf' else services.images_to_pdf
-        self.job('Working on your PDF…',lambda:task(paths,out),lambda _:messagebox.showinfo('All done',f'Your PDF was saved:\n{out}',parent=self))
+        self.saved_job('Working on your PDF…',lambda:task(paths,out),lambda _:messagebox.showinfo('All done',f'Your PDF was saved:\n{out}',parent=self),'merge' if kind=='pdf' else 'images')
     def pdf_screen(self):
         self.heading(self.body,'PDF tools','Simple, reliable tools for the documents you use every day.')
         self.filebox(self.body,'pdf')
@@ -1674,7 +1806,8 @@ class CafeDesk(ctk.CTk):
                     else:
                         note='Password removed!' if was_enc else 'Note: this PDF had no password encryption; saved a clean copy.'
                         messagebox.showinfo('PDF unlocked',f'{note}\n{pages_n} page(s) saved to:\n{dest}',parent=self)
-                self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
+                if add_merge:self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
+                else:self.saved_job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done,'unlock')
 
             button(urow2,'Unlock & save PDF',lambda:run_unlock(False),fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
             button(urow2,'＋ Unlock to merge',lambda:run_unlock(True),secondary=True).pack(side='left')
@@ -1700,12 +1833,12 @@ class CafeDesk(ctk.CTk):
                 if pdf_preview.fingerprint(src)!=self.split_preview_fingerprint: return messagebox.showerror('PDF changed','The PDF changed since it was previewed. Choose it again and reselect the pages.',parent=self)
             except (OSError,ValueError) as exc:return messagebox.showerror('Cannot read PDF',str(exc),parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='extracted-pages.pdf')
-        if out: self.job('Extracting pages…',lambda:services.extract_pdf(src,spec,out),lambda count:messagebox.showinfo('All done',f'{count} page(s) saved to:\n{out}',parent=self))
+        if out: self.saved_job('Extracting pages…',lambda:services.extract_pdf(src,spec,out),lambda count:messagebox.showinfo('All done',f'{count} page(s) saved to:\n{out}',parent=self),'extract')
     def split_all(self):
         src=self.split_source
         if not src: return messagebox.showinfo('Select a PDF','Choose a PDF first.',parent=self)
         folder=filedialog.askdirectory(parent=self,title='Choose output folder (existing files will not be overwritten)')
-        if folder: self.job('Splitting pages…',lambda:services.split_each_page(src,folder),lambda count:messagebox.showinfo('All done',f'{count} PDF file(s) saved in:\n{folder}',parent=self))
+        if folder: self.saved_job('Splitting pages…',lambda:services.split_each_page(src,folder),lambda count:messagebox.showinfo('All done',f'{count} PDF file(s) saved in:\n{folder}',parent=self),'split')
     def scan_screen(self):
         self.heading(self.body,'Scan & convert','Bring paper documents and images into your digital workspace.')
         show_scanner(self,self.body,card,label,button)
@@ -2013,7 +2146,7 @@ class CafeDesk(ctk.CTk):
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='career-document.pdf')
         if out:
-            category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None; self.job('Saving document…',lambda:services.export_document_pdf(text,out,category,index,photo),lambda _:messagebox.showinfo('All done',f'PDF saved:\n{out}',parent=self))
+            category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None; self.saved_job('Saving document…',lambda:services.export_document_pdf(text,out,category,index,photo),lambda _:messagebox.showinfo('All done',f'PDF saved:\n{out}',parent=self),'career')
     def add_document_to_merge(self):
         text=self.current_text()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
@@ -2027,7 +2160,7 @@ class CafeDesk(ctk.CTk):
         text=self.current_text()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.txt',filetypes=[('Text file','*.txt')],initialfile='career-document.txt')
-        if out: self.job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self))
+        if out: self.saved_job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self),'career')
     def settings_screen(self):
         self.heading(self.body,'AI settings','Optional writing help — supports Google Gemini (AI Studio), OpenRouter, OpenAI, Groq, DeepSeek & compatible APIs.')
         box=card(self.body); box.pack(fill='x')

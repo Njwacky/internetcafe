@@ -9,7 +9,7 @@ import services
 
 
 class SalesStoreError(ValueError):
-    """Raised when the local sales SQLite file is damaged or unreadable."""
+    """Raised when the local sales SQLite file cannot complete an operation."""
 
 
 def db_path():
@@ -29,14 +29,30 @@ def _quarantine_corrupt_db(target):
     return corrupt_copy
 
 
-def connect(path=None):
+def _database_error(exc,target):
+    """Do not misdiagnose a busy/read-only/full disk as database corruption."""
+    code=(getattr(exc,'sqlite_errorcode',0) or 0) & 0xff
+    if code in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED):
+        return SalesStoreError('Sales database is busy or locked. Close other app instances and retry. Completed saved sales remain in the local retry queue when available.')
+    if code==sqlite3.SQLITE_FULL:
+        return SalesStoreError('Sales database could not be written because the disk is full. Free space and retry the pending saved sales.')
+    if code==sqlite3.SQLITE_READONLY:
+        return SalesStoreError('Sales database is read-only. Check folder permissions and retry the pending saved sales.')
+    if code in (sqlite3.SQLITE_CORRUPT,sqlite3.SQLITE_NOTADB):
+        _quarantine_corrupt_db(target)
+        name=Path(target).name
+        return SalesStoreError(f'Local sales database ({name}) is damaged or unreadable. A quarantine copy ({name}.corrupt) was saved when possible; restore a backup or archive the damaged file, then retry pending saved sales.')
+    return SalesStoreError('Could not access the local sales database: '+str(exc)+'. Check storage and permissions, then retry pending saved sales.')
+
+
+def connect(path=None,timeout=10):
     target=Path(path or db_path()); target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     try:
-        conn=sqlite3.connect(target,timeout=10)
+        conn=sqlite3.connect(target,timeout=timeout)
         try: settings_store._harden(target)
         except Exception: pass
         conn.execute('PRAGMA foreign_keys=ON')
-        conn.execute('PRAGMA busy_timeout=10000')
+        conn.execute(f'PRAGMA busy_timeout={int(max(0,timeout)*1000)}')
         conn.execute('''CREATE TABLE IF NOT EXISTS sales (
             sale_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, station TEXT NOT NULL DEFAULT '',
             business TEXT NOT NULL, currency TEXT NOT NULL, total_cents INTEGER NOT NULL,
@@ -54,11 +70,7 @@ def connect(path=None):
     except sqlite3.DatabaseError as exc:
         try: conn.close()
         except Exception: pass
-        _quarantine_corrupt_db(target)
-        raise SalesStoreError(
-            f'Local sales database ({target.name}) is damaged or unreadable. '
-            f'A quarantine copy ({target.name}.corrupt) was saved; restore a backup or archive the damaged file.'
-        ) from exc
+        raise _database_error(exc,target) from exc
 
 
 def validate_items(items):
@@ -94,8 +106,7 @@ def record_sale(sale_id,business,currency,items,created_at=None,path=None,statio
             conn.execute('INSERT INTO sales(sale_id,created_at,station,business,currency,total_cents,items_json) VALUES(?,?,?,?,?,?,?)',(sale_id,when,clean_station,business,currency,total,payload));conn.commit()
         except sqlite3.DatabaseError as exc:
             conn.rollback()
-            _quarantine_corrupt_db(path or db_path())
-            raise SalesStoreError('Could not record sale because the local sales database is damaged.') from exc
+            raise _database_error(exc,path or db_path()) from exc
         except Exception:
             conn.rollback();raise
     return True
@@ -125,7 +136,7 @@ def void_sale(sale_id,reason='Mistaken entry',voided_at=None,path=None):
             conn.commit()
         except sqlite3.DatabaseError as exc:
             conn.rollback()
-            raise SalesStoreError('Could not void sale because the local sales database is damaged.') from exc
+            raise _database_error(exc,path or db_path()) from exc
         except Exception:
             conn.rollback();raise
     return True
@@ -158,8 +169,7 @@ def report(start,end,path=None,limit=500):
             by_station=conn.execute("SELECT CASE WHEN TRIM(COALESCE(station,''))='' THEN 'Unlabeled PC' ELSE station END AS station_label, currency, COUNT(*) AS count, COALESCE(SUM(total_cents),0) AS cents FROM sales WHERE voided_at IS NULL AND substr(created_at,1,10) BETWEEN ? AND ? GROUP BY station_label, currency ORDER BY station_label, currency",(start,end)).fetchall()
             void_count=conn.execute("SELECT COUNT(*) FROM sales WHERE voided_at IS NOT NULL AND substr(created_at,1,10) BETWEEN ? AND ?",(start,end)).fetchone()[0]
     except sqlite3.DatabaseError as exc:
-        _quarantine_corrupt_db(path or db_path())
-        raise SalesStoreError('Sales database is damaged or unreadable. Restore a backup or archive sales.sqlite3.') from exc
+        raise _database_error(exc,path or db_path()) from exc
     return {
         'rows':[dict(r) for r in rows],
         'totals':[dict(r) for r in totals],

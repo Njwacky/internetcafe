@@ -15,7 +15,10 @@ if str(REPO_ROOT) not in sys.path:
 
 def main() -> int:
     loader = unittest.TestLoader()
-    suite = loader.loadTestsFromName("test_services")
+    suite = unittest.TestSuite([
+        loader.loadTestsFromName("test_services"),
+        loader.discover(str(REPO_ROOT / "tests"), pattern="test_*.py"),
+    ])
     stream = sys.stdout
     runner = unittest.TextTestRunner(stream=stream, verbosity=2, buffer=True)
     result = runner.run(suite)

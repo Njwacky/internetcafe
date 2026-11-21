@@ -401,7 +401,7 @@ def show_ocr(app, parent, card, label, button):
             initialfile='recognised-text.txt',
         )
         if path:
-            app.job('Saving text…', lambda: services.export_text(text, path), lambda _: messagebox.showinfo('Saved', f'Text saved to:\n{path}', parent=app))
+            app.saved_job('Saving text…', lambda: services.export_text(text, path), lambda _: messagebox.showinfo('Saved', f'Text saved to:\n{path}', parent=app),'ocr')
 
     button(action_row, 'Recognise image', recognize_selected, width=165).pack(side='left', padx=(0, 8))
     button(action_row, 'Recognise all', recognize_all, secondary=True, width=145).pack(side='left', padx=(0, 8))

@@ -81,7 +81,7 @@ def show_scanner(app,parent,card,label,button):
         if app.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=app)
         out=filedialog.asksaveasfilename(parent=app,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='scanned-pages.pdf')
         if out:
-            paths=list(app.scanned_pages);app.job('Saving scanned pages as PDF…',lambda:services.images_to_pdf(paths,out),lambda _:messagebox.showinfo('Scanned PDF saved',f'Saved to:\n{out}\n\nThe saved PDF is not removed by Next customer.',parent=app))
+            paths=list(app.scanned_pages);app.saved_job('Saving scanned pages as PDF…',lambda:services.images_to_pdf(paths,out),lambda _:messagebox.showinfo('Scanned PDF saved',f'Saved to:\n{out}\n\nThe saved PDF is not removed by Next customer.',parent=app),'scan')
     def review_selected():
         sel=listing.curselection()
         if sel:review(app.scanned_pages[sel[0]])
