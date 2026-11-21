@@ -500,9 +500,12 @@ class CafeDesk(ctk.CTk):
             self.key.set(data['api_key'])
             if data.get('provider') in services.AI_PROVIDERS: self.ai_provider.set(data['provider'])
             if data.get('model'): self.model.set(data['model'])
-            if data.get('custom_url'): self.ai_custom_url.set(data['custom_url'])
+            if data.get('custom_url'):
+                services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])  # https/localhost only
+                self.ai_custom_url.set(data['custom_url'])
             self.status.set(f"Staff unlocked • saved AI key loaded ({info.get('hint','')})")
-        except ai_key_store.SavedKeyError as exc:
+        except (ai_key_store.SavedKeyError,ValueError) as exc:
+            self.key.set('')
             self.status.set(f'Staff unlocked • saved AI key not loaded: {exc}')
         except Exception:
             self._log_exception('load_saved_ai_key')
@@ -2273,7 +2276,11 @@ class CafeDesk(ctk.CTk):
                 if rem>0: return messagebox.showwarning('Try again later',f'Too many incorrect PIN attempts. Wait {int(rem)+1} seconds.',parent=self)
                 pin=simpledialog.askstring('Confirm staff PIN','Enter your staff PIN to encrypt and save the key on this computer:',show='*',parent=self)
                 if pin is None: return
-                if not settings_store.verify_pin(pin): return messagebox.showerror('Staff access','Incorrect PIN. The key was not saved.',parent=self)
+                if not settings_store.verify_pin(pin):
+                    rem_after=settings_store.lockout_remaining()
+                    if rem_after>0: self.lockout_until=time.monotonic()+rem_after
+                    return messagebox.showerror('Staff access','Incorrect PIN. The key was not saved.',parent=self)
+                if len(pin)<8 and not messagebox.askyesno('Short PIN',f'Your staff PIN has only {len(pin)} digits. The saved key is only as strong as this PIN: a short PIN can be guessed by someone who copies files from this computer.\n\nRecommended: change to a 10–12 digit PIN first (Business settings → Change staff PIN).\n\nSave the key anyway?',parent=self): return
                 ai_key_store.save_key(key,pin,provider=self.ai_provider.get(),model=self.model.get().strip(),custom_url=self.ai_custom_url.get().strip())
             except (ValueError,OSError,settings_store.CorruptedSettingsError) as exc:
                 return messagebox.showerror('Could not save key',str(exc),parent=self)

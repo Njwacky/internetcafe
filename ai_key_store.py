@@ -12,8 +12,11 @@ Security design (shared internet-café PC):
 * **Own file.** Stored in ``ai-key.json`` next to ``settings.json`` (owner-only file
   permissions) but never inside ``settings.json``, so it is not included in shop-profile
   exports or the settings backup.
-* **Nothing secret in clear text.** Only a short hint (e.g. ``gsk_…a1b2``), the provider
-  and model names are readable without the PIN.
+* **Nothing secret in clear text, nothing editable.** The key *and* the provider, model
+  and custom URL are all inside the encrypted, tamper-proof payload. A short hint (e.g.
+  ``gsk_…a1b2``) and copies of the provider/model are readable for display only; if anyone
+  edits them the file is rejected, so the key can never be silently redirected to another
+  server.
 
 This is protection against customers and casual snooping. Someone with administrator
 access to the same Windows account who also knows (or brute-forces) the PIN could still
@@ -31,9 +34,10 @@ import tempfile
 import time
 from pathlib import Path
 
-FORMAT = "cafedesk-ai-key-v1"
+FORMAT = "cafedesk-ai-key-v2"
 FILE_NAME = "ai-key.json"
 MAX_KEY_LENGTH = 512
+MAX_FILE_BYTES = 64 * 1024  # a real record is ~1 KB; refuse oversized/hostile files
 
 # scrypt cost: ~64 MiB and roughly 0.1-0.4 s per attempt, so guessing a 6-12 digit
 # PIN offline is slow. Stored in the file so it can be raised later.
@@ -95,6 +99,8 @@ def _read(target: Path) -> dict | None:
     if not target.is_file():
         return None
     try:
+        if target.stat().st_size > MAX_FILE_BYTES:
+            raise ValueError("file too large")
         obj = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise SavedKeyError("The saved AI key file is damaged. Use “Forget saved key” and save it again.") from exc
@@ -222,8 +228,15 @@ def save_key(api_key: str, pin: str, *, provider: str = "", model: str = "", cus
     protection = "dpapi+pin" if os_protection_available() else "pin"
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+    provider, model, custom_url = (provider or "")[:80], (model or "")[:120], (custom_url or "")[:300]
+    # Everything that decides *where* the key is sent lives inside the authenticated payload.
+    payload = json.dumps({"api_key": key, "provider": provider, "model": model, "custom_url": custom_url}).encode("utf-8")
     salt, nonce = os.urandom(16), os.urandom(12)
-    ciphertext = AESGCM(_derive(pin, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P)).encrypt(nonce, key.encode("utf-8"), _aad(protection))
+    try:
+        derived = _derive(pin, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P)
+    except (MemoryError, ValueError) as exc:
+        raise ValueError("Not enough memory to encrypt the key safely on this computer.") from exc
+    ciphertext = AESGCM(derived).encrypt(nonce, payload, _aad(protection))
     if protection == "dpapi+pin":
         ciphertext = _os_protect(ciphertext)
     record = {
@@ -233,9 +246,10 @@ def save_key(api_key: str, pin: str, *, provider: str = "", model: str = "", cus
         "nonce": nonce.hex(),
         "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
         "hint": key_hint(key),
-        "provider": (provider or "")[:80],
-        "model": (model or "")[:120],
-        "custom_url": (custom_url or "")[:300],
+        # Display copies only - verified against the encrypted payload on every load.
+        "provider": provider,
+        "model": model,
+        "custom_url": custom_url,
         "saved_at": time.strftime("%Y-%m-%d %H:%M"),
     }
     _write_atomic(record, _target(path))
@@ -273,16 +287,26 @@ def load_key(pin: str, path=None) -> dict | None:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     try:
-        plain = AESGCM(_derive(pin or "", salt, n, r, p)).decrypt(nonce, ciphertext, _aad(protection))
+        derived = _derive(pin or "", salt, n, r, p)
+    except (MemoryError, ValueError) as exc:
+        raise SavedKeyError("Not enough memory to unlock the saved AI key on this computer.") from exc
+    try:
+        plain = AESGCM(derived).decrypt(nonce, ciphertext, _aad(protection))
     except InvalidTag as exc:
         raise SavedKeyError("The saved AI key could not be unlocked with this PIN (was the PIN changed?). Paste the key again.") from exc
-    info = saved_key_info(path) or {}
-    return {
-        "api_key": plain.decode("utf-8"),
-        "provider": info.get("provider", ""),
-        "model": info.get("model", ""),
-        "custom_url": info.get("custom_url", ""),
-    }
+    try:
+        secret = json.loads(plain.decode("utf-8"))
+        result = {k: str(secret[k]) for k in ("api_key", "provider", "model", "custom_url")}
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SavedKeyError("The saved AI key file is damaged. Use “Forget saved key” and save it again.") from exc
+    # The readable copies must match the encrypted originals - otherwise someone edited
+    # the file (for example to point the key at their own server).
+    for field in ("provider", "model", "custom_url"):
+        if str(obj.get(field, "")) != result[field]:
+            raise SavedKeyError("The saved AI key file was changed outside Café Desk and was blocked. Use “Forget saved key” and save it again.")
+    if str(obj.get("hint", "")) != key_hint(result["api_key"]):
+        raise SavedKeyError("The saved AI key file was changed outside Café Desk and was blocked. Use “Forget saved key” and save it again.")
+    return result
 
 
 def rewrap_for_new_pin(old_pin: str, new_pin: str, path=None) -> bool:

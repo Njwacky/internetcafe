@@ -172,8 +172,80 @@ class IntegrationTests(unittest.TestCase):
         lock_body = src[start:src.index("\n    def ", start + 10)]
         self.assertIn("self.key.set('')", lock_body)
         # Saving asks for and verifies the PIN first; PIN change re-encrypts.
-        self.assertIn("settings_store.verify_pin(pin): return messagebox.showerror('Staff access','Incorrect PIN. The key was not saved.'", src)
+        save_fn = src[src.index("        def save_key_now():"):src.index("        def forget_key_now():")]
+        self.assertLess(save_fn.index("settings_store.verify_pin(pin)"), save_fn.index("ai_key_store.save_key("))
+        self.assertIn("Incorrect PIN. The key was not saved.", save_fn)
         self.assertIn("ai_key_store.rewrap_for_new_pin(old,new)", src)
+
+
+class FiveWhysRegressionTests(unittest.TestCase):
+    """Gaps found when re-checking the first version with a 5 Whys review."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / store.FILE_NAME
+        patcher = mock.patch.object(store, "os_protection_available", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        store.save_key(KEY, PIN, provider="Groq (api.groq.com)", model="openai/gpt-oss-120b", path=self.path)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _edit(self, **changes):
+        obj = json.loads(self.path.read_text())
+        obj.update(changes)
+        self.path.write_text(json.dumps(obj))
+
+    def test_redirecting_the_key_to_another_server_is_blocked(self):
+        self._edit(provider="Custom OpenAI-compatible URL", custom_url="https://evil.example.com/v1")
+        with self.assertRaisesRegex(store.SavedKeyError, "changed outside"):
+            store.load_key(PIN, path=self.path)
+
+    def test_editing_model_or_hint_is_blocked(self):
+        for field, value in (("model", "attacker-model"), ("hint", "gsk_…ZZZZ")):
+            store.save_key(KEY, PIN, provider="Groq (api.groq.com)", model="openai/gpt-oss-120b", path=self.path)
+            self._edit(**{field: value})
+            with self.assertRaises(store.SavedKeyError, msg=field):
+                store.load_key(PIN, path=self.path)
+
+    def test_settings_come_from_the_encrypted_payload(self):
+        data = store.load_key(PIN, path=self.path)
+        self.assertEqual((data["provider"], data["model"], data["custom_url"]),
+                         ("Groq (api.groq.com)", "openai/gpt-oss-120b", ""))
+
+    def test_oversized_file_is_refused(self):
+        self.path.write_text('{"format":"%s","pad":"%s"}' % (store.FORMAT, "A" * (store.MAX_FILE_BYTES + 1)))
+        self.assertTrue(store.saved_key_info(self.path)["damaged"])
+        with self.assertRaises(store.SavedKeyError):
+            store.load_key(PIN, path=self.path)
+
+    def test_low_memory_is_reported_cleanly(self):
+        with mock.patch.object(store, "_derive", side_effect=MemoryError):
+            with self.assertRaises(store.SavedKeyError):
+                store.load_key(PIN, path=self.path)
+            with self.assertRaises(ValueError):
+                store.save_key(KEY, PIN, path=self.path)
+
+    def test_app_rejects_unsafe_saved_url_and_warns_on_short_pin(self):
+        src = (REPO / "app.py").read_text(encoding="utf-8")
+        self.assertIn("services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])", src)
+        self.assertIn("if len(pin)<8 and not messagebox.askyesno('Short PIN'", src)
+
+    def test_windows_ci_runs_the_real_dpapi_self_test(self):
+        workflow = (REPO / ".github" / "workflows" / "build-usb.yml").read_text(encoding="utf-8")
+        self.assertIn("python .github/dpapi_selftest.py", workflow)
+        self.assertTrue((REPO / ".github" / "dpapi_selftest.py").is_file())
+
+
+@unittest.skipUnless(sys.platform == "win32", "real DPAPI only on Windows")
+class RealWindowsDpapiTests(unittest.TestCase):
+    def test_real_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / store.FILE_NAME
+            store.save_key(KEY, PIN, path=path)
+            self.assertEqual(store.saved_key_info(path)["protection"], "dpapi+pin")
+            self.assertEqual(store.load_key(PIN, path=path)["api_key"], KEY)
 
 
 if __name__ == "__main__":
