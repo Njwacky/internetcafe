@@ -641,18 +641,43 @@ create table if not exists public.station_heartbeats (
     os_platform     text not null default '',
     current_screen  text not null default 'Home',
     total_visits    bigint not null default 0,
+    online_seconds  bigint not null default 0,
     first_seen_at   timestamptz not null default now(),
     last_seen_at    timestamptz not null default now()
 );
 
 create index if not exists idx_station_heartbeats_seen on public.station_heartbeats (last_seen_at desc);
 create index if not exists idx_station_heartbeats_city on public.station_heartbeats (city_label);
+create index if not exists idx_station_heartbeats_online on public.station_heartbeats (online_seconds desc);
 
 alter table public.station_heartbeats enable row level security;
 
 drop policy if exists "Owner full access to station_heartbeats" on public.station_heartbeats;
 create policy "Owner full access to station_heartbeats"
     on public.station_heartbeats for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+-- Per-day online duration per PC (answers "which PC stays online too much?").
+create table if not exists public.station_online_daily (
+    visit_date      date not null default current_date,
+    machine_id      text not null,
+    shop_id         text not null default '',
+    shop_name       text not null default '',
+    city_label      text not null default '',
+    station_name    text not null default '',
+    online_seconds  bigint not null default 0 check (online_seconds >= 0),
+    last_online_at  timestamptz not null default now(),
+    primary key (visit_date, machine_id)
+);
+
+create index if not exists idx_station_online_daily_date on public.station_online_daily (visit_date desc);
+create index if not exists idx_station_online_daily_seconds on public.station_online_daily (online_seconds desc);
+
+alter table public.station_online_daily enable row level security;
+
+drop policy if exists "Owner full access to station_online_daily" on public.station_online_daily;
+create policy "Owner full access to station_online_daily"
+    on public.station_online_daily for all to authenticated
     using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
 
 create table if not exists public.workspace_tool_visits (
@@ -696,7 +721,8 @@ create or replace function public.record_workspace_telemetry(
     p_app_version text default '',
     p_os_platform text default '',
     p_current_screen text default 'Home',
-    p_screen_counts jsonb default '{}'::jsonb
+    p_screen_counts jsonb default '{}'::jsonb,
+    p_online_seconds integer default 0
 )
 returns jsonb
 language plpgsql
@@ -712,6 +738,7 @@ declare
     v_ver text := left(trim(coalesce(p_app_version, '')), 24);
     v_os text := left(trim(coalesce(p_os_platform, '')), 32);
     v_cur text := left(trim(coalesce(p_current_screen, 'Home')), 48);
+    v_online integer := least(greatest(coalesce(p_online_seconds, 0), 0), 86400);
     v_key text;
     v_val integer;
     v_added bigint := 0;
@@ -754,10 +781,11 @@ begin
 
     insert into public.station_heartbeats (
         machine_id, shop_id, shop_name, station_name, city_label,
-        app_version, os_platform, current_screen, total_visits, first_seen_at, last_seen_at
+        app_version, os_platform, current_screen, total_visits,
+        online_seconds, first_seen_at, last_seen_at
     ) values (
         v_mid, v_shop, v_bname, v_stat, v_city,
-        v_ver, v_os, v_cur, greatest(v_added, 1), now(), now()
+        v_ver, v_os, v_cur, greatest(v_added, 1), v_online, now(), now()
     )
     on conflict (machine_id) do update set
         shop_id = case when excluded.shop_id <> '' then excluded.shop_id else public.station_heartbeats.shop_id end,
@@ -768,13 +796,29 @@ begin
         os_platform = excluded.os_platform,
         current_screen = excluded.current_screen,
         total_visits = public.station_heartbeats.total_visits + greatest(v_added, 0),
+        online_seconds = public.station_heartbeats.online_seconds + excluded.online_seconds,
         last_seen_at = now();
 
-    return jsonb_build_object('ok', true, 'recorded_visits', v_added);
+    if v_online > 0 then
+        insert into public.station_online_daily (
+            visit_date, machine_id, shop_id, shop_name, city_label, station_name, online_seconds, last_online_at
+        ) values (
+            current_date, v_mid, v_shop, v_bname, v_city, v_stat, v_online, now()
+        )
+        on conflict (visit_date, machine_id) do update set
+            online_seconds = public.station_online_daily.online_seconds + excluded.online_seconds,
+            shop_id = case when excluded.shop_id <> '' then excluded.shop_id else public.station_online_daily.shop_id end,
+            shop_name = case when excluded.shop_name <> '' then excluded.shop_name else public.station_online_daily.shop_name end,
+            city_label = case when excluded.city_label <> '' then excluded.city_label else public.station_online_daily.city_label end,
+            station_name = case when excluded.station_name <> '' then excluded.station_name else public.station_online_daily.station_name end,
+            last_online_at = now();
+    end if;
+
+    return jsonb_build_object('ok', true, 'recorded_visits', v_added, 'online_seconds', v_online);
 end;
 $$;
 
-grant execute on function public.record_workspace_telemetry(text, text, text, text, text, text, text, text, jsonb) to anon, authenticated;
+grant execute on function public.record_workspace_telemetry(text, text, text, text, text, text, text, text, jsonb, integer) to anon, authenticated;
 -- Owner-only, atomic deletion of every Café Desk cloud record keyed directly to
 -- one Machine ID. Shop-level sales and other shared shop records are intentionally
 -- preserved because they are not reliably attributable to one PC.
@@ -790,6 +834,7 @@ declare
     v_requests integer := 0;
     v_heartbeats integer := 0;
     v_visits integer := 0;
+    v_online_rows integer := 0;
 begin
     if not public.is_cafedesk_owner() then
         raise exception 'Only the Café Desk owner may delete machine records.' using errcode = '42501';
@@ -811,6 +856,9 @@ begin
     delete from public.station_heartbeats where upper(trim(machine_id)) = v_mid;
     get diagnostics v_heartbeats = row_count;
 
+    delete from public.station_online_daily where upper(trim(machine_id)) = v_mid;
+    get diagnostics v_online_rows = row_count;
+
     return jsonb_build_object(
         'ok', true,
         'machine_id', v_mid,
@@ -818,7 +866,8 @@ begin
             'issued_machine_keys', v_keys,
             'activation_requests', v_requests,
             'workspace_tool_visits', v_visits,
-            'station_heartbeats', v_heartbeats
+            'station_heartbeats', v_heartbeats,
+            'station_online_daily', v_online_rows
         )
     );
 end;
@@ -1100,7 +1149,8 @@ create or replace function public.record_workspace_telemetry(
     p_app_version text default '',
     p_os_platform text default '',
     p_current_screen text default 'Home',
-    p_screen_counts jsonb default '{}'::jsonb
+    p_screen_counts jsonb default '{}'::jsonb,
+    p_online_seconds integer default 0
 ) returns jsonb
 language plpgsql
 security definer
@@ -1115,6 +1165,7 @@ declare
     v_ver text := left(trim(coalesce(p_app_version, '')), 24);
     v_os text := left(trim(coalesce(p_os_platform, '')), 32);
     v_cur text := left(trim(coalesce(p_current_screen, 'Home')), 48);
+    v_online integer := least(greatest(coalesce(p_online_seconds, 0), 0), 86400);
     v_key text;
     v_val integer;
     v_added bigint := 0;
@@ -1152,16 +1203,29 @@ begin
             end if;
         end loop;
     end if;
-    insert into public.station_heartbeats(machine_id,shop_id,shop_name,station_name,city_label,app_version,os_platform,current_screen,total_visits,first_seen_at,last_seen_at)
-    values(v_mid,v_shop,v_bname,v_stat,v_city,v_ver,v_os,v_cur,greatest(v_added,1),now(),now())
+    insert into public.station_heartbeats(machine_id,shop_id,shop_name,station_name,city_label,app_version,os_platform,current_screen,total_visits,online_seconds,first_seen_at,last_seen_at)
+    values(v_mid,v_shop,v_bname,v_stat,v_city,v_ver,v_os,v_cur,greatest(v_added,1),v_online,now(),now())
     on conflict (machine_id) do update set
         shop_id=case when excluded.shop_id<>'' then excluded.shop_id else public.station_heartbeats.shop_id end,
         shop_name=case when excluded.shop_name<>'' then excluded.shop_name else public.station_heartbeats.shop_name end,
         station_name=case when excluded.station_name<>'' then excluded.station_name else public.station_heartbeats.station_name end,
         city_label=case when excluded.city_label<>'' then excluded.city_label else public.station_heartbeats.city_label end,
         app_version=excluded.app_version, os_platform=excluded.os_platform, current_screen=excluded.current_screen,
-        total_visits=public.station_heartbeats.total_visits+greatest(v_added,0), last_seen_at=now();
-    return jsonb_build_object('ok', true, 'recorded_visits', v_added);
+        total_visits=public.station_heartbeats.total_visits+greatest(v_added,0),
+        online_seconds=public.station_heartbeats.online_seconds+excluded.online_seconds,
+        last_seen_at=now();
+    if v_online > 0 then
+        insert into public.station_online_daily(visit_date,machine_id,shop_id,shop_name,city_label,station_name,online_seconds,last_online_at)
+        values(current_date,v_mid,v_shop,v_bname,v_city,v_stat,v_online,now())
+        on conflict (visit_date,machine_id) do update set
+            online_seconds=public.station_online_daily.online_seconds+excluded.online_seconds,
+            shop_id=case when excluded.shop_id<>'' then excluded.shop_id else public.station_online_daily.shop_id end,
+            shop_name=case when excluded.shop_name<>'' then excluded.shop_name else public.station_online_daily.shop_name end,
+            city_label=case when excluded.city_label<>'' then excluded.city_label else public.station_online_daily.city_label end,
+            station_name=case when excluded.station_name<>'' then excluded.station_name else public.station_online_daily.station_name end,
+            last_online_at=now();
+    end if;
+    return jsonb_build_object('ok', true, 'recorded_visits', v_added, 'online_seconds', v_online);
 end;
 $$;
 
@@ -1180,6 +1244,7 @@ declare
     v_requests integer := 0;
     v_heartbeats integer := 0;
     v_visits integer := 0;
+    v_online_rows integer := 0;
     v_rate_hashes integer := 0;
 begin
     if not public.is_cafedesk_owner() then
@@ -1197,6 +1262,8 @@ begin
     get diagnostics v_visits = row_count;
     delete from public.station_heartbeats where upper(trim(machine_id)) = v_mid;
     get diagnostics v_heartbeats = row_count;
+    delete from public.station_online_daily where upper(trim(machine_id)) = v_mid;
+    get diagnostics v_online_rows = row_count;
     delete from public.machine_rpc_rate_limits
     where machine_hash = encode(digest(v_mid, 'sha256'), 'hex');
     get diagnostics v_rate_hashes = row_count;
@@ -1209,6 +1276,7 @@ begin
             'activation_requests', v_requests,
             'workspace_tool_visits', v_visits,
             'station_heartbeats', v_heartbeats,
+            'station_online_daily', v_online_rows,
             'machine_rpc_rate_limits', v_rate_hashes
         )
     );

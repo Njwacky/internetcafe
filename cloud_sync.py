@@ -733,14 +733,16 @@ def send_workspace_telemetry(
     machine_id: str | None = None,
     app_version: str = APP_VERSION,
     os_platform: str | None = None,
+    online_seconds: int = 0,
     timeout: float = 5.0,
 ) -> dict:
     """Send strictly anonymized screen-visit counts & heartbeat to Supabase.
 
     Privacy guarantee: Only whitelisted screen names (`ALLOWED_TELEMETRY_SCREENS`),
-    integer counts, Machine ID, Shop/Station/City labels, and app version are sent.
-    Never sends document contents, filenames, or customer personal data.
-    Silently returns `{'ok': False}` when offline so shop work is never interrupted.
+    integer counts, Machine ID, Shop/Station/City labels, app version, and whole-second
+    online duration are sent. Never sends document contents, filenames, or customer
+    personal data. Silently returns `{'ok': False}` when offline so shop work is never
+    interrupted.
     """
     cfg = settings or {}
     url, key = resolve_client_supabase(cfg)
@@ -763,6 +765,10 @@ def send_workspace_telemetry(
                     continue
                 if iv > 0:
                     clean_counts[k] = min(iv, 5000)
+        try:
+            online_secs = max(0, min(int(online_seconds or 0), 86400))
+        except (TypeError, ValueError):
+            online_secs = 0
         import sys as _sys
         plat = str(os_platform or _sys.platform)[:32]
         res = _supabase_request(
@@ -780,6 +786,7 @@ def send_workspace_telemetry(
                 'p_os_platform': plat,
                 'p_current_screen': cur_scr,
                 'p_screen_counts': clean_counts,
+                'p_online_seconds': online_secs,
             },
             timeout=timeout,
         )
