@@ -2,25 +2,27 @@
 
 This is the implementation follow-up to [the baseline audit](deep-app-audit.md), not a claim that every audit recommendation has been completed.
 
+> [Five-whys recheck](deep-app-five-whys.md): four further gaps were reproduced and corrected after the initial PR patch. The validation totals below include those fixes.
+
 ## Included fixes
 
 | Audit finding | Change |
 |---|---|
-| 1 — recovery resurrection | `RecoveryStore` serializes projects in memory, then checks a generation under the same lock used by clear. Rotation/publication and deletion cannot race. Disable, timeout and close invalidate pending snapshots. Clear also removes abandoned atomic-write recovery staging archives. |
+| 1 — recovery resurrection | `RecoveryStore` serializes projects in memory, then checks a generation under the same lock used by clear. Rotation/publication and deletion cannot race. Disable, timeout and close invalidate pending snapshots. Unrelated widget errors no longer release an active worker. Clear also removes abandoned atomic-write recovery staging archives. |
 | 2 — station collision | Sync filenames use a persistent ledger UUID bound to the machine identity, not an editable/sanitized station name. Renaming a station does not change its filename; a backup copied to another machine gets a different identity. |
 | 3 — history/old void omissions | LAN snapshots and SQLite imports no longer cap history. Cloud protocol 2 uploads batches of 250 and downloads full history with a sale-ID keyset cursor, including old voids. Each run scans again rather than retaining an unsafe creation-date watermark. |
 | 4 — silent failed peers | LAN returns per-file errors and explicit partial status. Healthy files still merge. Rejected rows and conflicts are displayed in LAN/cloud/manual import results. |
 | 5 — mixed currencies | Owner totals, averages and shop rows are grouped by currency. Ranking bars compare within each currency, never across currencies. Custom currency text is HTML-escaped. |
 | 6 — unsafe template HTML | Template rows/errors use DOM nodes and `textContent`; buttons use event listeners with captured IDs. Template values are never interpolated into executable HTML/inline handlers. |
 | 9 — import validation | Reject fractional/boolean quantities, invalid void dates, mismatched declared totals and immutable-ID conflicts. Valid rows commit with explicit rejection details; local database failures remain fatal. An incoming void cannot attach to a different transaction merely by reusing its ID. |
-| 12 — misleading analytics | No lifetime-as-period online fallback; upper date bounds exclude future rows. Bounded dashboard pagination checks for overflow and reports an incomplete refresh instead of using a truncated total. Failed feeds retain last-good data with a visible warning; initially unavailable sales are labeled unavailable. License records also use checked pagination. |
+| 12 — misleading analytics | Pagination also handles a server row cap smaller than the requested page size. No lifetime-as-period online fallback; upper date bounds exclude future rows. Bounded dashboard pagination checks for overflow and reports an incomplete refresh instead of using a truncated total. Failed feeds retain last-good data with a visible warning; initially unavailable sales are labeled unavailable. License records also use checked pagination. |
 
 Existing successful-save receipt/earnings automation, void-aware totals, original retry dates/stations/prices and durable accounting retries are preserved. Recovery copies are still not revenue.
 
 ## Validation
 
-- **234 Python tests pass** using the locked Python dependencies.
-- **20 JavaScript tests pass**, including **7 real PostgreSQL/PGlite integration tests** for the migration and **9 dashboard regressions**, plus the existing 4 signer tests.
+- **236 Python tests pass** using the locked Python dependencies.
+- **26 JavaScript tests pass**, including **12 real PostgreSQL/PGlite integration tests** for the migration and **10 dashboard regressions**, plus the existing 4 signer tests.
 - Version synchronization (`0.8.4`), owner-digest synchronization and `git diff --check` pass.
 - Python regressions execute actual recovery/watchdog/controller methods with fake UI objects and actual project serialization. They exercise clear during publication, old-generation completion, rotation and crash staging-file cleanup.
 - Actual SQLite fixtures cover 5,002-row LAN snapshots/old voids and a 50,002-row backup import, same-name PCs, station rename, copied-backup machine binding, partial/corrupt peers and conflicting imports.
@@ -48,7 +50,7 @@ JavaScript dependencies are development/test-only. PGlite is not bundled in the 
 1. Back up each PC's ledger and the cloud sales table. Retry pending accounting sales before relying on database-only backups; the outbox is a separate local resource.
 2. Test the migration and the new client against a non-production project first. Include representative old sales, a recent void of an old sale, and any known legacy conflicts.
 3. Arrange a maintenance window to upgrade **every shop PC** to 0.8.4 and apply `supabase/migrations/20261121150000_complete_sales_sync.sql` using the normal owner-controlled migration process. It is also appended to `supabase_schema.sql` for fresh setups.
-4. The migration installs `sync_shop_sales_v2`, retaining the existing shop passcode verification and owner-table access controls. It does not delete or rewrite existing sales. The old RPC returns an explicit upgrade-required error instead of silently truncating history. **Older clients cannot use cloud sales sync after this migration.** Local saving and reporting are unaffected.
+4. The migration installs `sync_shop_sales_v2`, retaining the existing shop passcode verification and owner-table access controls. It does not delete sales or change original sale values. It widens `total_cents` to `bigint`; stage and plan for the table lock/storage rewrite on large databases. The old RPC returns an explicit upgrade-required error instead of silently truncating history. **Older clients cannot use cloud sales sync after this migration.** Local saving and reporting are unaffected.
 5. A new client against an unmigrated project fails visibly; it does not silently fall back to truncated protocol 1. No passcode rotation is required for this protocol change.
 6. Synchronize each PC, then repeat the LAN round if using shared files so snapshots include newly learned peer records. Compare sale-ID sets, voids, and daily/monthly per-currency totals. Investigate every rejected row or partial-sync warning before trusting aggregated revenue.
 7. Keep legacy station-named LAN snapshots until reconciliation is complete. The new code reads but does not automatically erase them, and cannot reconstruct records that an old colliding snapshot already overwrote unless another ledger/backup still contains them.

@@ -154,3 +154,16 @@ test('template errors are rendered as text without HTML parsing', async () => {
   assert.equal(table.textContent, attack);
   assert.equal(table.children[0].children[0].children.length, 0);
 });
+
+test('server-side row caps cannot masquerade as complete dashboard totals', async () => {
+  const c = run(['fetchPaged']);
+  const calls = [];
+  const builder = () => ({range:async (a,b) => {
+    calls.push([a,b]);
+    return {data:Array.from({length:Math.max(0,Math.min(b+1,a+100,350)-a)},(_,i) => a+i),error:null};
+  }});
+  const rows = await c.fetchPaged(builder,12);
+  assert.equal(rows.length, 350);
+  assert.equal(new Set(rows).size, 350);
+  await assert.rejects(c.fetchPaged(builder,2), /partial total/);
+});

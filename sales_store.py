@@ -81,7 +81,8 @@ def validate_items(items):
     for item in items:
         if not isinstance(item,dict) or not all(k in item for k in ('name','qty','price')):
             raise ValueError('Invalid service line.')
-        name=str(item['name']).strip()
+        if not isinstance(item['name'],str):raise ValueError('Invalid service name.')
+        name=item['name'].strip()
         if not name or len(name)>80:raise ValueError('Invalid service name.')
         try:
             raw_qty=item['qty']
@@ -90,6 +91,7 @@ def validate_items(items):
             qty=int(raw_qty);value=Decimal(str(item['price']))
             if not 1<=qty<=999 or not value.is_finite() or value<0 or value>10000000 or value.as_tuple().exponent < -2:raise ValueError()
         except (ValueError,TypeError,InvalidOperation):raise ValueError('Invalid quantity or price.')
+        if value==0:value=Decimal('0.00')  # -0.00 and 0.00 are the same free service.
         cents=int(value*100);total+=cents*qty;out.append({'name':name,'qty':qty,'price':format(value,'.2f')})
     return out,total
 
@@ -108,7 +110,9 @@ def record_sale(sale_id,business,currency,items,created_at=None,path=None,statio
             conn.execute('BEGIN IMMEDIATE')
             old=conn.execute('SELECT business,currency,total_cents,items_json FROM sales WHERE sale_id=?',(sale_id,)).fetchone()
             if old:
-                if old!=(business,currency,total,payload):raise ValueError('This sale reference already exists with different details.')
+                old_items,_=validate_items(json.loads(old[3]))
+                old_payload=json.dumps(old_items,ensure_ascii=False,separators=(',',':'))
+                if (*old[:3],old_payload)!=(business,currency,total,payload):raise ValueError('This sale reference already exists with different details.')
                 conn.rollback();return False
             conn.execute('INSERT INTO sales(sale_id,created_at,station,business,currency,total_cents,items_json) VALUES(?,?,?,?,?,?,?)',(sale_id,when,clean_station,business,currency,total,payload));conn.commit()
         except sqlite3.DatabaseError as exc:

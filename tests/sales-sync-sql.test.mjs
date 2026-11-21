@@ -98,3 +98,44 @@ test('legacy RPC reports upgrade required rather than pretending a truncated syn
   assert.equal(rows[0].result.ok, false);
   assert.match(rows[0].result.error, /Upgrade/);
 });
+
+test('currency validation permits literal letters r/n but rejects line breaks and bars', async () => {
+  for (const currency of ['Kr', 'yen', 'INR']) {
+    assert.equal((await rpc([sale(currency,{currency})])).ok, true);
+  }
+  for (const currency of ['R\n','R\r','R|']) {
+    await assert.rejects(rpc([sale('bad',{currency})]));
+  }
+});
+
+test('equivalent item serialization does not conflict on retry or prevent a void', async () => {
+  await rpc([sale('one',{items:[{name:'\t Service \n',qty:'1',price:1}]})]);
+  const result = await rpc([sale('one',{voided_at:stamp})]);
+  assert.equal(result.sales[0].voided_at, stamp);
+});
+
+test('cloud stores a locally valid large sale without 32-bit cent overflow', async () => {
+  const row = sale('large',{total_cents:999000000000,items:[{name:'Large service',qty:999,price:'10000000.00'}]});
+  const result = await rpc([row]);
+  assert.equal(result.sales[0].total_cents, 999000000000);
+});
+
+
+test('equivalent legacy item JSON can be voided without rewriting its original content', async () => {
+  await db.query(`insert into public.shop_sync_sales(shop_id,sale_id,created_at,station,business,currency,total_cents,items_json)
+    values('SHOP','one',$1,'Counter','Shop','R',100,$2::jsonb)`, [stamp,JSON.stringify([{name:'Service',qty:'1',price:1}])]);
+  const result = await rpc([sale('one',{voided_at:stamp})]);
+  assert.equal(result.sales[0].voided_at, stamp);
+  const stored = await db.query("select items_json from public.shop_sync_sales where sale_id='one'");
+  assert.equal(stored.rows[0].items_json[0].qty, '1');
+});
+
+
+test('signed zero is the same free service, but negative prices stay invalid', async () => {
+  const free = sale('free',{total_cents:0,items:[{name:'Service',qty:1,price:'-0.00'}]});
+  await rpc([free]);
+  const result = await rpc([{...free,items:[{name:'Service',qty:1,price:'0.00'}],voided_at:stamp}]);
+  assert.equal(result.sales[0].voided_at,stamp);
+  assert.equal(result.sales[0].items[0].price,'0.00');
+  await assert.rejects(rpc([sale('negative',{total_cents:-100,items:[{name:'Service',qty:1,price:'-1.00'}]})]));
+});

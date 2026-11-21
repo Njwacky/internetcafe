@@ -1553,15 +1553,15 @@ class CafeDesk(ctk.CTk):
         # that ctk_safety no longer patches library internals.
         if isinstance(val, tk.TclError) or isinstance(exc, tk.TclError):
             logger.debug('Suppressed widget-lifecycle error in callback: %s', val)
-            try: self.busy=False
-            except Exception: pass
             return
         logger.error('Unhandled exception in widget callback: %s', val, exc_info=(exc, val, tb))
         try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(val)
         except Exception: pass
-        # Never let a broken background result wedge the whole desk: clear the busy flag.
-        try: self.busy=False
-        except Exception: pass
+        # An unrelated widget failure is not evidence that a tracked worker stopped.
+        # Only its result/watchdog may release it, otherwise another task could
+        # overlap its side effects (including recovery publication).
+        if getattr(self,'_active_job_id',None) is None:
+            self.busy=False
 
     def poll_events(self):
         """Pump worker-thread results on the Tk main thread.

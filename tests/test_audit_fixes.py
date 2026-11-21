@@ -1,5 +1,6 @@
 """Regressions for the deep audit: real files/SQLite and real controller methods."""
 import ast
+from datetime import datetime
 import json
 import queue
 import shutil
@@ -97,6 +98,19 @@ class RecoveryBarrierTests(FileFixture):
         _, data = projects.load(path, self.root / 'session', allow_internal=True)
         self.assertEqual(data['draft'], 'NEW CUSTOMER')
         self.assertFalse((store.directory / 'career.prev.cafeproject').exists())
+
+    def test_unrelated_ui_errors_do_not_release_an_active_worker(self):
+        ns = desktop_methods('report_callback_exception')
+        ns.update(logger=Mock(),datetime=datetime)
+        app = SimpleNamespace(busy=True,_active_job_id='still-running')
+        for error in (RuntimeError('UI callback failed'), ns['tk'].TclError('destroyed widget')):
+            ns['report_callback_exception'](app,type(error),error,None)
+            self.assertTrue(app.busy)
+            self.assertEqual(app._active_job_id,'still-running')
+        # Without a tracked worker, an orphan busy flag may still be recovered.
+        app._active_job_id = None
+        ns['report_callback_exception'](app,RuntimeError,RuntimeError('UI error'),None)
+        self.assertFalse(app.busy)
 
     def test_rotation_clear_and_disable_are_generation_checked(self):
         store = RecoveryStore(self.root / 'recovery')
@@ -223,6 +237,24 @@ class SalesSyncIntegrityTests(FileFixture):
         result = sales_store.merge_external_sales([sale(voided_at=STAMP)], path=self.one)
         self.assertEqual(result['updated_voids'], 1)
         self.assertEqual(sales_store.merge_external_sales([sale()], path=self.one)['updated_voids'], 0)
+        self.assertTrue(sales_store.export_sales_records(path=self.one)[0]['voided_at'])
+
+    def test_free_service_signed_zero_has_one_canonical_identity(self):
+        items, total = sales_store.validate_items([dict(ITEM,price='-0.00')])
+        self.assertEqual(total,0)
+        self.assertEqual(items[0]['price'],'0.00')
+        sales_store.merge_external_sales([sale('free',total_cents=0,items=[dict(ITEM,price='-0.00')])],path=self.one)
+        result = sales_store.merge_external_sales([sale('free',total_cents=0,items=[dict(ITEM,price='0.00')],voided_at=STAMP)],path=self.one)
+        self.assertEqual(result['updated_voids'],1)
+        self.assertEqual(result['conflicts'],0)
+        # A pre-upgrade ledger may still contain the old signed-zero text.
+        conn = sales_store.connect(self.one)
+        try:
+            conn.execute('UPDATE sales SET items_json=? WHERE sale_id=?',
+                         (json.dumps([dict(ITEM,price='-0.00')]),'free'))
+            conn.commit()
+        finally: conn.close()
+        self.assertFalse(sales_store.record_sale('free','Shop','R',[dict(ITEM,price='0.00')],path=self.one))
         self.assertTrue(sales_store.export_sales_records(path=self.one)[0]['voided_at'])
 
     def test_quantity_is_an_integer_not_a_coercion(self):

@@ -1303,16 +1303,21 @@ async function callOwnerResign(payload) {
 async function fetchPaged(build, maxPages = 12) {
   const size = 1000;
   const out = [];
+  let offset = 0;
   for (let p = 0; p < maxPages; p++) {
-    const { data, error } = await build().range(p * size, p * size + size - 1);
+    const { data, error } = await build().range(offset, offset + size - 1);
     if (error) throw error;
-    if (!data || !data.length) break;
+    if (!Array.isArray(data)) throw new Error("Invalid dashboard page.");
+    if (!data.length) return out;
     out.push(...data);
-    if (data.length < size) break;
+    // PostgREST may enforce a smaller server-side cap than our requested size.
+    // A short page is NOT proof of end-of-data. Advance by rows actually read.
+    offset += data.length;
   }
-  const { data, error } = await build().range(maxPages * size, maxPages * size);
+  const { data, error } = await build().range(offset, offset);
   if (error) throw error;
-  if (data && data.length) throw new Error("Dataset exceeds dashboard page limit; refusing a partial total.");
+  if (!Array.isArray(data)) throw new Error("Invalid dashboard page.");
+  if (data.length) throw new Error("Dataset exceeds dashboard page limit; refusing a partial total.");
   return out;
 }
 

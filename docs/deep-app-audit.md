@@ -1,6 +1,6 @@
 # Café Desk — deep application audit
 
-> This report describes the reviewed baseline. See [the 0.8.4 implementation follow-up](deep-app-audit-fixes.md) for fixes in this branch, validation and deployment requirements; not all recommendations are implemented.
+> This report describes the reviewed baseline. See [the 0.8.4 implementation follow-up](deep-app-audit-fixes.md) and [five-whys recheck](deep-app-five-whys.md) for fixes in this branch, validation and deployment requirements; not all recommendations are implemented.
 
 **Date:** 21 November 2026  
 **Reviewed baseline:** `ee51f1a7cf17113df29eb52812d20eb7b7a9867b` (includes saved-work accounting PR #45)  
