@@ -2202,7 +2202,7 @@ class CafeDesk(ctk.CTk):
         label(box,'API key • kept in memory only for this session (cleared when staff locks)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
 
-        label(box,'Model (e.g. gemini-2.5-flash, gemini-2.5-pro, gpt-4o-mini, openrouter/auto, deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        label(box,'Model (e.g. gemini-2.5-flash, openai/gpt-oss-120b for Groq, gpt-4o-mini, openrouter/auto, deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         ctk.CTkEntry(box,textvariable=self.model,height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
 
         def test_ai():

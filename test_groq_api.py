@@ -5,7 +5,7 @@ import requests
 
 
 def main():
-    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip()
     api_key = os.getenv("GROQ_API_KEY") or getpass.getpass(
         "Enter your Groq API key (input hidden): "
     )
@@ -26,7 +26,8 @@ def main():
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": message}],
-                "max_completion_tokens": 128,
+                "max_completion_tokens": 512,
+                **({"reasoning_effort": "low"} if model.startswith("openai/gpt-oss") else {}),
             },
             timeout=20,
         )
