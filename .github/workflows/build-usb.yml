@@ -46,8 +46,11 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Test license signature repair
-        run: node --test tests/owner-resign.test.mjs
+      - name: Install locked JavaScript test dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Test signer, dashboard and sales sync SQL
+        run: npm test
 
       - name: Warn if the demo signing key would ship (pull requests only)
         if: github.event_name == 'pull_request'

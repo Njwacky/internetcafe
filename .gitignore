@@ -23,3 +23,5 @@ issued-licenses-dashboard.html
 
 # Local scratch / test workspaces (never ship venvs or node_modules)
 .arena/
+
+node_modules/

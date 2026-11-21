@@ -2,7 +2,7 @@
 ;
 ; Build the portable app first using build-windows.bat, then compile with Inno Setup 6.
 ; MyAppVersion defaults to the current release (see version.py). CI overrides it with
-; the value from version.py:  iscc /DMyAppVersion=0.8.3 packaging\windows-installer.iss
+; the value from version.py:  iscc /DMyAppVersion=0.8.4 packaging\windows-installer.iss
 ;
 ; Design intent: the installer should read like the first screen of the product, not a
 ; bare file-copy wizard. Before the customer clicks Install it answers the four things a
@@ -11,7 +11,7 @@
 ; box or a paragraph of security jargon is what makes people abandon a download.
 #define MyAppName "Café Desk"
 #ifndef MyAppVersion
-#define MyAppVersion "0.8.3"
+#define MyAppVersion "0.8.4"
 #endif
 #define MyAppPublisher "Njwacko Studio"
 #define MyAppExeName "CafeDesk.exe"

@@ -2331,6 +2331,7 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
             pass
         s = Stub()
         s.events = queue.Queue(); s.busy = False; s._active_job_id = None
+        s._recovery_store = types.SimpleNamespace(invalidate=lambda: None)
         s.pending = []; s.statuses = []
         s._telemetry_lock = threading.Lock(); s._telemetry_counts = {}
         s.session_state = SessionState(s.events, s._telemetry_counts, s._telemetry_lock)

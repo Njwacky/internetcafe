@@ -70,7 +70,7 @@ class SavedServicesTests(unittest.TestCase):
                        card=Widget, label=Widget, entry=Widget, button=button,
                        button_row=Widget, BORDER='', INK='', MUTED='', GREEN='',
                        GREEN_HOVER='', BTN_PADX=8)
-        self.app = SimpleNamespace(busy=False, business_name=Widget(value='Shop'),
+        self.app = SimpleNamespace(busy=False, _recovery_store=Mock(), business_name=Widget(value='Shop'),
                                    body=None, heading=Mock(), status=Widget(),
                                    require_staff=Mock(return_value=True), show=Mock())
         can_clear = desktop_method('can_clear_receipt', self.ns)
