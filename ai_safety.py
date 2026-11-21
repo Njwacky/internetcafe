@@ -97,10 +97,28 @@ _LABELLED = re.compile(
     re.IGNORECASE,
 )
 
+# Street / postal addresses written without a label ("12 Mazisi Kunene Road, Glenwood, Durban 4001").
+_ADDRESS = re.compile(
+    r"\b(?:\d{1,5}[A-Za-z]?\s+(?:[A-Z][\w'\-]*\s+){1,4}"
+    r"(?:Road|Rd|Street|St|Avenue|Ave|Drive|Dr|Lane|Ln|Crescent|Cres|Close|Way|Place|Pl|Boulevard|Blvd|Highway|Hwy|Terrace)\b\.?"
+    r"|P\.?\s?O\.?\s+Box\s+\d+)"
+    r"(?:,\s*[A-Z][\w'\-]*(?:\s+[A-Z][\w'\-]*){0,3})*(?:,?\s+\d{4}\b)?"
+)
+
+#: Section headings used by the CV designs (kept in sync with cv_renderer.SECTIONS).
+SECTION_HEADINGS = {
+    "PROFESSIONAL PROFILE", "PROFILE", "SUMMARY", "SKILLS", "EXPERIENCE", "WORK EXPERIENCE",
+    "EDUCATION", "QUALIFICATIONS", "CERTIFICATIONS", "PROJECTS", "REFERENCES", "LANGUAGES",
+    "VOLUNTEERING", "ACHIEVEMENTS", "REFEREES", "PERSONAL DETAILS", "CONTACT DETAILS",
+}
+#: Sections that list *other people* (third-party personal data) – never sent to the AI.
+_PRIVATE_SECTIONS = {"REFERENCES", "REFEREES", "PERSONAL DETAILS", "CONTACT DETAILS", "NEXT OF KIN"}
+
 # Order matters: longest/most specific first so pieces are not split up.
 _PATTERNS = (
     ("EMAIL", _EMAIL),
     ("LINK", _URL),
+    ("ADDRESS", _ADDRESS),
     ("ID", _SA_ID),
     ("PHONE", _PHONE),
     ("NUMBER", _LONG_NUMBER),
@@ -108,7 +126,7 @@ _PATTERNS = (
 )
 
 _PLACEHOLDER = re.compile(
-    r"\[\[?\s*(NAME|EMAIL|PHONE|ID|LINK|NUMBER|DETAIL)[\s_\-]*(\d+)\s*\]?\]",
+    r"\[\[?\s*(NAME|EMAIL|PHONE|ID|LINK|NUMBER|DETAIL|ADDRESS)[\s_\-]*(\d+)\s*\]?\]",
     re.IGNORECASE,
 )
 
@@ -146,7 +164,8 @@ class ProtectedText:
             "ID": ("ID number", "ID numbers"),
             "LINK": ("web link", "web links"),
             "NUMBER": ("account/ID-style number", "account/ID-style numbers"),
-            "DETAIL": ("labelled personal detail", "labelled personal details"),
+            "DETAIL": ("private detail/reference line", "private details/reference lines"),
+            "ADDRESS": ("street/postal address", "street/postal addresses"),
             "HEADER_LINES": ("name/contact header line", "name/contact header lines"),
         }
         parts = []
@@ -164,7 +183,20 @@ def _looks_like_name(line: str) -> bool:
         return False
     if all(w.lower().strip(".,") in _NOT_NAME_WORDS for w in words):
         return False
+    if _is_heading(line):
+        return False
     return all(re.fullmatch(r"[A-Za-z\u00C0-\u024F'\-.]+", w) for w in words)
+
+
+def _is_heading(line: str) -> bool:
+    t = line.strip().rstrip(":")
+    return t.upper() in SECTION_HEADINGS or t.upper() in _PRIVATE_SECTIONS
+
+
+def _is_heading_like(line: str) -> bool:
+    """Same rule the CV renderer uses: a short UPPERCASE line is a section heading."""
+    t = line.strip()
+    return _is_heading(t) or (len(t) <= 65 and any(c.isalpha() for c in t) and t == t.upper() and not t.endswith("."))
 
 
 def _has_contact_detail(line: str) -> bool:
@@ -183,10 +215,15 @@ def protect_personal_details(text: str) -> ProtectedText:
     lines = text.splitlines()
     header: list[str] = []
     name = ""
-    second_is_contact = len(lines) >= 2 and (
-        _has_contact_detail(lines[1]) or re.fullmatch(r"\s*\[[^\]]+\]\s*", lines[1]) is not None
+    # Generated CVs / cover letters start "Name\nContact line\n\n…". The contact line may
+    # hold only "Gender: …" or a placeholder, so the layout itself is also a signal.
+    second_is_contact = len(lines) >= 2 and bool(lines[1].strip()) and (
+        _has_contact_detail(lines[1])
+        or re.fullmatch(r"\s*\[[^\]]+\]\s*", lines[1]) is not None
+        or (len(lines) > 2 and not lines[2].strip() and not _is_heading_like(lines[1]))
     )
-    if second_is_contact and _looks_like_name(lines[0]):
+    first_upper = lines[0].strip() == lines[0].strip().upper() if lines else False
+    if second_is_contact and _looks_like_name(lines[0]) and not (first_upper and not _has_contact_detail(lines[1])):
         name = lines[0].strip()
         header = lines[:2]
         lines = lines[2:]
@@ -195,8 +232,6 @@ def protect_personal_details(text: str) -> ProtectedText:
     elif lines and _looks_like_name(lines[0]) and len(lines) > 1 and not lines[1].strip():
         # A document that starts with just a name line.
         name = lines[0].strip()
-    body = "\n".join(lines)
-
     mapping: dict[str, str] = {}
     by_value: dict[str, str] = {}
     counters: dict[str, int] = {}
@@ -221,8 +256,9 @@ def protect_personal_details(text: str) -> ProtectedText:
                 if not 9 <= len(digits) <= 15:
                     return value
                 # Year ranges such as "2019 - 2023" are not phone numbers.
-                if re.fullmatch(r"(19|20)\d{2}\s*[-\u2013]\s*(19|20)\d{2}", value.strip()):
-                    return value
+                groups = re.findall(r"\d+", value)
+                if all(len(g) == 4 and g[:2] in ("19", "20") for g in groups):
+                    return value  # "2019 - 2023", "2015 2016 2017" are years, not phones
             # Sentence punctuation after a link/e-mail stays in the text, not the token.
             core = value.rstrip(".,;:!?)'\"")
             return token_for(kind, core) + value[len(core):] if core else value
@@ -230,6 +266,19 @@ def protect_personal_details(text: str) -> ProtectedText:
         # Protect existing placeholders from being matched by later patterns.
         parts = re.split(r"(\[\[[A-Z]+_\d+\]\])", s)
         return "".join(p if _PLACEHOLDER.fullmatch(p or "") else pattern.sub(repl, p) for p in parts)
+
+    # 0) Whole sections about other people (references) are never sent.
+    kept: list[str] = []
+    in_private = False
+    for line in lines:
+        if _is_heading_like(line):
+            in_private = line.strip().rstrip(":").upper() in _PRIVATE_SECTIONS
+            kept.append(line)
+        elif in_private and line.strip():
+            kept.append(token_for("DETAIL", line))
+        else:
+            kept.append(line)
+    body = "\n".join(kept)
 
     # 1) Values after sensitive labels ("ID number: …", "Address: …").
     def labelled(m: re.Match) -> str:
@@ -276,6 +325,16 @@ def restore_personal_details(reply: str, protected: ProtectedText) -> tuple[str,
         return ""  # invented placeholder – never print junk
 
     restored = _PLACEHOLDER.sub(repl, reply)
+
+    # Some models drop the brackets ("NAME_1"); restore those too, but only real tokens.
+    def bare(m: re.Match) -> str:
+        token = f"[[{m.group(1).upper()}_{int(m.group(2))}]]"
+        if token in lookup:
+            seen.add(token)
+            return lookup[token]
+        return m.group(0)
+
+    restored = re.sub(r"\b(NAME|EMAIL|PHONE|ID|LINK|NUMBER|DETAIL|ADDRESS)_(\d+)\b", bare, restored)
     missing = [t for t in protected.mapping if t.upper() not in seen]
     if protected.header:
         head = "\n".join(protected.header).rstrip("\n")
@@ -287,9 +346,13 @@ def restore_personal_details(reply: str, protected: ProtectedText) -> tuple[str,
 # Markdown -> plain-text clean-up
 # --------------------------------------------------------------------------------------
 
+# A chatty first line is only dropped when it clearly talks *about* the document,
+# so a real first sentence such as "Okay is my nickname…" is never removed.
 _PREAMBLE = re.compile(
-    r"^\s*(?:sure|certainly|of course|absolutely|okay|ok)\b[^\n]*$"
-    r"|^\s*(?:here(?:'s| is| are)|below is|i(?:'ve| have) (?:improved|revised|polished|edited|updated))\b[^\n]*$",
+    r"^\s*(?:sure|certainly|of course|absolutely|okay|ok|great)\b[^\n]*[:!]\s*$"
+    r"|^\s*(?:sure|certainly|of course|absolutely|okay|ok)[.!]?\s*$"
+    r"|^\s*(?:here(?:'s| is| are)|below is|i(?:'ve| have))\b[^\n]*"
+    r"(?:improved|revised|polished|edited|corrected|updated|proof-?read|version|rewritten)[^\n]*$",
     re.IGNORECASE,
 )
 _CLOSING_NOTE = re.compile(
@@ -320,6 +383,8 @@ def _strip_inline_markdown(line: str) -> str:
     line = re.sub(r"~~(.+?)~~", r"\1", line)
     # Any leftover lone emphasis markers.
     line = re.sub(r"(?<!\S)\*{2,}|\*{2,}(?!\S)", "", line)
+    # A lone "*" between spaces is a broken bullet, never real CV text.
+    line = re.sub(r"(?<=\S) +\* +(?=\S)", " ", line)
     return line
 
 
@@ -383,6 +448,15 @@ def clean_ai_document(text: str, original: str = "") -> str:
         # Any '#' left at the start of a line is never valid in our layout.
         line = re.sub(r"^\s*#+\s*", "", line)
         out.append(line.rstrip())
+
+    # The CV designs only style UPPERCASE headings. If the model wrote "Skills" or
+    # "Work experience:", put the heading back exactly as it was in the original.
+    original_headings = {
+        ln.strip().rstrip(":").upper(): ln.strip()
+        for ln in original.splitlines() if ln.strip() and _is_heading_like(ln)
+    }
+    if original_headings:
+        out = [original_headings.get(ln.strip().rstrip(":").upper(), ln) for ln in out]
 
     cleaned = "\n".join(out)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()

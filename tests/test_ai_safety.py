@@ -194,5 +194,67 @@ class ImproveDocumentFlowTests(unittest.TestCase):
         self.assertIs(post.call_args[1]["json"]["store"], False)
 
 
+class FiveWhysRegressionTests(unittest.TestCase):
+    """Holes found when re-checking the first version with a 5 Whys review."""
+
+    def test_name_hidden_even_when_contact_line_has_no_phone_or_email(self):
+        p = ai_safety.protect_personal_details("Thabo Mokoena\nGender: Male\n\nPROFILE\nThabo Mokoena is reliable.")
+        self.assertNotIn("Thabo", p.text)
+        self.assertNotIn("Mokoena", p.text)
+
+    def test_references_section_is_never_sent(self):
+        text = "PROFILE\nGood worker.\n\nREFERENCES\nMr John Smith, Store Manager\nMrs Zanele Khumalo, Teacher\n\nSKILLS\nTyping"
+        p = ai_safety.protect_personal_details(text)
+        for leak in ("John Smith", "Zanele", "Khumalo"):
+            self.assertNotIn(leak, p.text)
+        self.assertIn("Typing", p.text)  # sections after references are still proof-read
+        restored, missing = ai_safety.restore_personal_details(p.text, p)
+        self.assertEqual(restored, text)
+        self.assertEqual(missing, [])
+
+    def test_section_heading_is_not_mistaken_for_a_name_and_years_are_not_phones(self):
+        text = "ACHIEVEMENTS\nEmployee of the month 2015 2016 2017\n\nSKILLS\nTyping"
+        p = ai_safety.protect_personal_details(text)
+        self.assertEqual(p.header, [])
+        self.assertEqual(p.mapping, {})
+        self.assertEqual(p.text, text)
+
+    def test_bare_placeholders_and_lowercase_headings_are_repaired(self):
+        p = ai_safety.protect_personal_details("Sipho Ndlovu\n082 123 4567\n\nSKILLS\nTyping\n\nPROFILE\nSipho Ndlovu works hard.")
+        cleaned = ai_safety.clean_ai_document("Skills\nTyping\n\nProfile:\nNAME_1 works hard.", original=p.text)
+        restored, missing = ai_safety.restore_personal_details(cleaned, p)
+        self.assertIn("\nSKILLS\n", restored)
+        self.assertIn("\nPROFILE\n", restored)
+        self.assertIn("Sipho Ndlovu works hard.", restored)
+        self.assertEqual(missing, [])
+
+    def test_unlabelled_street_and_po_box_addresses_are_hidden(self):
+        p = ai_safety.protect_personal_details("PROFILE\nI live at 12 Mazisi Kunene Road, Glenwood, Durban 4001. Post: P.O. Box 55, Umlazi 4031")
+        for leak in ("Mazisi", "Glenwood", "4001", "Box 55", "Umlazi"):
+            self.assertNotIn(leak, p.text)
+
+    def test_cover_letter_signature_name_is_hidden(self):
+        import templates
+
+        values = {"name": "Ayanda Zulu", "contact": "ayanda@gmail.com", "skills": "typing", "experience": "cashier",
+                  "education": "matric", "role": "Cashier", "company": "Spar"}
+        doc = templates.make_document(templates.CATEGORIES[1], 0, values)
+        p = ai_safety.protect_personal_details(doc)
+        self.assertNotIn("Ayanda", p.text)
+        self.assertNotIn("ayanda@gmail.com", p.text)
+        self.assertEqual(ai_safety.restore_personal_details(p.text, p)[0], doc)
+
+    def test_real_first_sentence_is_not_dropped_as_chatter(self):
+        self.assertEqual(ai_safety.clean_ai_document("Okay is my nickname and I love sales."), "Okay is my nickname and I love sales.")
+        self.assertEqual(ai_safety.clean_ai_document("Here is your improved introduction.\nI love sales."), "I love sales.")
+        self.assertEqual(ai_safety.clean_ai_document("Certainly!\nI love sales."), "I love sales.")
+
+    def test_lone_asterisk_inside_a_sentence_is_removed(self):
+        self.assertEqual(
+            ai_safety.clean_ai_document("Key strengths include * Typing and filing."),
+            "Key strengths include Typing and filing.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
