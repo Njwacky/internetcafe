@@ -46,7 +46,14 @@ The app starts locked. Staff access locks after approximately five minutes witho
 
 If the PIN is forgotten, there is no built-in recovery. An administrator can reset the PIN by deleting the local `CafeDesk/settings.json` file, but this also resets that user's saved business name, icon selection and prices. Do not delete the entire folder: it also contains the sales database. Back up the folder first. Locations: Windows `%APPDATA%\CafeDesk`, macOS `~/Library/Application Support/CafeDesk`, and Linux `~/.config/CafeDesk` (or `$XDG_CONFIG_HOME/CafeDesk`). Saved PDFs and other documents are separate and are not deleted by this reset.
 
-An API key is held in memory only; it is not encrypted or persisted. Do not unlock staff access or leave a key in an unattended customer session. AI sends the entire editor text to your chosen AI provider (Google Gemini, OpenRouter, OpenAI, Groq, DeepSeek, or custom endpoint) after confirmation. Obtain customer permission and review provider policies and charges. Scanner and saved-file usage can leave copies in other applications and recent-file lists.
+An API key is held in memory only; it is not encrypted or persisted. Do not unlock staff access or leave a key in an unattended customer session. After confirmation, AI sends the draft to your chosen AI provider (Google Gemini, OpenRouter, OpenAI, Groq, DeepSeek, or custom endpoint) with these safeguards (`ai_safety.py`):
+
+- **Personal details stay on the computer.** The name and contact lines at the top of a CV or cover letter are held back completely. Names, e-mail addresses, phone numbers, South African ID numbers, links, long account-style numbers and values after labels such as `ID number:`, `Passport:` or `Address:` are replaced with placeholders like `[[EMAIL_1]]` before sending. The real values are put back locally when the reply arrives. If the AI drops a placeholder, staff are warned before the result is used.
+- **Plain text only.** The AI is told never to use Markdown, and any `*`, `#`, `**bold**`, bullets, code fences or "Here is your CV" lines in the reply are converted back to the app's layout: UPPERCASE section headings and `•` bullets.
+- **Prompt-injection guard.** The draft is sent inside `<document>` tags and the AI is told to treat everything inside only as text to proof-read.
+- **Transport and limits.** Requests use HTTPS (or `localhost` for Ollama/LM Studio), redirects are refused so the text cannot be forwarded elsewhere, drafts over 30,000 characters and oversized replies are rejected, OpenAI requests set `store: false`, and API keys are removed from error messages. Nothing is logged.
+
+Other wording (job history, schools, skills) is still sent, so obtain customer permission and review provider policies and charges. Free tiers such as Google Gemini free and OpenRouter free models may use the text to improve their models; the consent dialog says so. Scanner and saved-file usage can leave copies in other applications and recent-file lists.
 
 ### Anonymous usage statistics (opt-in, off by default)
 

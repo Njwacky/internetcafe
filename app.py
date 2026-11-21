@@ -23,6 +23,7 @@ install_ctk_entry_guard()
 
 from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, CAREER_ENTRY_FIELDS, field_labels_for, uses_company_field, make_document, parse_career_entries, serialize_career_entries
 import services
+import ai_safety
 import settings_store
 import sales_store
 import saved_services
@@ -2222,7 +2223,7 @@ class CafeDesk(ctk.CTk):
         button(btn_row,'Test AI connection',test_ai,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=195).pack(side='left',padx=(0,10))
         button(btn_row,'Clear key now',clear_key,secondary=True,width=130).pack(side='left')
 
-        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy & data minimization',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to your selected AI provider after confirmation. Get the customer’s explicit consent, avoid sending unnecessary ID numbers/private identifiers when polishing wording, and never leave your API key unlocked on a shared computer.',size=12,color='#F1D1A5',justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,12))
+        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy & data minimization',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'Before sending, Café Desk keeps the name/contact lines on this computer and replaces names, e-mails, phone numbers, ID numbers, links and account numbers with placeholders; the real values are put back locally. The rest of the wording is sent to your AI provider, so get the customer’s consent first. Formatting symbols (*, #) in the reply are removed automatically. The API key stays in memory only — clear it before leaving the desk.',size=12,color='#F1D1A5',justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,12))
     def improve(self):
         if not self.require_staff(): return
         text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
@@ -2232,23 +2233,27 @@ class CafeDesk(ctk.CTk):
             _,prov_label=services.detect_ai_provider(key,prov,curl)
         except ValueError as exc:
             return messagebox.showerror('AI settings',str(exc),parent=self)
-        if not messagebox.askyesno('Customer consent & privacy',f'Send the complete draft ({len(text):,} characters) to {prov_label} ({model})?\n\n• Get the customer’s explicit permission first.\n• Tip: remove ID numbers or sensitive personal details you do not want transmitted.\n• Standard API charges may apply.\n\nSend draft now?',parent=self): return
+        if len(text)>ai_safety.MAX_AI_INPUT_CHARS:
+            return messagebox.showerror('Draft too long',f'This draft has {len(text):,} characters. The AI limit is {ai_safety.MAX_AI_INPUT_CHARS:,}. Improve it in smaller parts.',parent=self)
+        hidden=ai_safety.protect_personal_details(text).summary()
+        training_note='\n• Free AI tiers (e.g. Google Gemini free, OpenRouter free models) may use the text to improve their models.' if prov_label in ('Google Gemini','OpenRouter') else ''
+        if not messagebox.askyesno('Customer consent & privacy',f'Send this draft to {prov_label} ({model}) for proof-reading?\n\n🔒 Kept on this computer (replaced with placeholders, never sent):\n{hidden}.\n\n• Get the customer’s explicit permission first.\n• Other wording in the draft (job history, schools, skills) IS sent.{training_note}\n• Standard API charges may apply.\n\nSend draft now?',parent=self): return
         req_gen=self.ai_generation
         def request():
-            reply,used_prov,used_model=services.call_ai_chat(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)
-            return reply,used_prov,used_model
+            return services.improve_document_with_ai(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)
         def complete(res):
             if self.ai_generation!=req_gen:
                 self.status.set('Discarded AI reply from a locked or cleared session')
                 return
-            result,used_prov,used_model=res
+            result,used_prov,used_model,missing=res['text'],res['provider'],res['model'],res['missing']
             current=self.current_text()
             if current!=text and not messagebox.askyesno('Draft changed','The draft changed while the request was running. Replace it with the AI result?',parent=self): return
+            if missing and not messagebox.askyesno('Check personal details',f'The AI left out {len(missing)} protected detail(s) (for example a phone number, e-mail or name). They may be missing from the improved draft.\n\nUse the AI result anyway? (Choose No to keep the original draft.)',parent=self): return
             self.doc_text=result
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',result)
             self.refresh_doc_preview()
-            self.status.set(f'Draft improved via {used_prov} ({used_model})')
-            messagebox.showinfo('Draft improved',f'Improved via {used_prov} ({used_model}).\nReview the AI result and check all facts before saving.',parent=self)
+            self.status.set(f'Draft improved via {used_prov} ({used_model}) • personal details kept private')
+            messagebox.showinfo('Draft improved',f'Improved via {used_prov} ({used_model}).\nPersonal details were kept on this computer and formatting symbols (*, #) were removed.\nReview the result and check all facts before saving.',parent=self)
         self.job(f'Improving draft with {prov_label}…',request,complete)
 
 if __name__=='__main__':

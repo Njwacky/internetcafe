@@ -1,6 +1,7 @@
 """Local document operations for Café Desk. No GUI dependencies."""
 from pathlib import Path
 import os, tempfile, io, shutil, subprocess, sys
+import ai_safety
 from xml.sax.saxutils import escape
 from pypdf import PdfReader, PdfWriter
 from PIL import Image, ImageOps, ImageSequence
@@ -649,11 +650,7 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
     if 'openrouter.ai' in endpoint:
         headers['HTTP-Referer']='https://github.com/Njwacky/internetcafe'
         headers['X-Title']='Cafe Desk Document Studio'
-    sys_msg=system_prompt or (
-        'Improve this career document for clarity, grammar and professionalism. '
-        'Preserve facts and placeholders. Never invent qualifications, dates, employers '
-        'or achievements. Return only the improved document.'
-    )
+    sys_msg=system_prompt or ai_safety.AI_SYSTEM_PROMPT
     payload:dict={
         'model':resolved_model,
         'messages':[
@@ -671,8 +668,11 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
             payload['max_completion_tokens']=int(max_tokens)
     elif max_tokens is not None:
         payload['max_tokens']=int(max_tokens)
+    if 'api.openai.com' in endpoint:
+        payload['store']=False  # do not keep the completion in the OpenAI dashboard
     try:
-        resp=requests.post(endpoint,headers=headers,json=payload,timeout=timeout)
+        # No redirects: a redirect could re-send the customer's text to another server.
+        resp=requests.post(endpoint,headers=headers,json=payload,timeout=timeout,allow_redirects=False)
     except requests.RequestException as exc:
         raise ValueError(f'Could not reach {provider_label} ({endpoint}). Check your internet connection and try again.') from exc
 
@@ -681,8 +681,10 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
     except ValueError:
         body={}
 
+    if 300<=resp.status_code<400:
+        raise ValueError(f'{provider_label} tried to redirect the request elsewhere (HTTP {resp.status_code}). It was blocked to protect customer data. Check the endpoint URL.')
     if not resp.ok:
-        detail=_extract_ai_error_detail(body)
+        detail=ai_safety.redact_secrets(_extract_ai_error_detail(body),key)
         hint=f': {detail[:220]}' if detail else '.'
         raise ValueError(f'{provider_label} request failed (HTTP {resp.status_code}){hint} Check the API key, model ("{resolved_model}"), and account quota/credits.')
 
@@ -692,5 +694,32 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
         raise ValueError(f'{provider_label} returned an unexpected response format.') from exc
     if not isinstance(content,str) or not content.strip():
         raise ValueError(f'{provider_label} returned an empty response. Try another model (for example openai/gpt-4o-mini or openrouter/auto).')
+    if len(content)>ai_safety.MAX_AI_OUTPUT_CHARS:
+        raise ValueError(f'{provider_label} returned an unexpectedly long response; it was discarded.')
     return content.strip(),provider_label,resolved_model
+
+def improve_document_with_ai(api_key:str, model:str, text:str, *, provider_choice:str='Auto-detect from API key', custom_url:str='', timeout:int=60)->dict:
+    """Privacy-safe "improve draft": hide personal details, call the AI, clean and restore.
+
+    Returns a dict with `text` (final plain-text document), `provider`, `model`,
+    `hidden` (summary of what was kept private) and `missing` (placeholders the AI
+    dropped - the matching details may be missing from the result).
+    """
+    if not (text or '').strip():
+        raise ValueError('Enter or create a draft first.')
+    if len(text)>ai_safety.MAX_AI_INPUT_CHARS:
+        raise ValueError(f'The draft is too long to send to AI ({len(text):,} characters; limit {ai_safety.MAX_AI_INPUT_CHARS:,}). Improve it in smaller parts.')
+    protected=ai_safety.protect_personal_details(text)
+    if not protected.text.strip():
+        raise ValueError('Nothing to improve: the draft only contains the name/contact header.')
+    reply,provider_label,resolved_model=call_ai_chat(
+        api_key,model,ai_safety.wrap_document(protected.text),
+        provider_choice=provider_choice,custom_url=custom_url,
+        system_prompt=ai_safety.AI_SYSTEM_PROMPT,timeout=timeout,
+    )
+    cleaned=ai_safety.clean_ai_document(reply,original=protected.text)
+    if not cleaned.strip():
+        raise ValueError(f'{provider_label} returned no usable text. Try again or choose another model.')
+    final,missing=ai_safety.restore_personal_details(cleaned,protected)
+    return {'text':final,'provider':provider_label,'model':resolved_model,'hidden':protected.summary(),'missing':missing}
 
