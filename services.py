@@ -540,9 +540,26 @@ AI_DEFAULT_MODELS={
     'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions':'gemini-2.5-flash',
     'https://openrouter.ai/api/v1/chat/completions':'openai/gpt-4o-mini',
     'https://api.openai.com/v1/chat/completions':'gpt-4o-mini',
-    'https://api.groq.com/openai/v1/chat/completions':'llama-3.3-70b-versatile',
+    'https://api.groq.com/openai/v1/chat/completions':'openai/gpt-oss-120b',
     'https://api.deepseek.com/chat/completions':'deepseek-chat',
 }
+
+# Groq shut these model IDs down for free/developer tiers (see
+# https://console.groq.com/docs/deprecations). Requests to them now fail, so map
+# any saved/typed old ID to Groq's recommended replacement.
+GROQ_RETIRED_MODELS={
+    'llama-3.3-70b-versatile':'openai/gpt-oss-120b',
+    'llama-3.1-8b-instant':'openai/gpt-oss-20b',
+    'qwen/qwen3-32b':'openai/gpt-oss-120b',
+    'qwen/qwen3.6-27b':'qwen/qwen3.8-27b',
+    'meta-llama/llama-4-scout-17b-16e-instruct':'openai/gpt-oss-120b',
+    'moonshotai/kimi-k2-instruct-0905':'openai/gpt-oss-120b',
+    'groq/compound':'openai/gpt-oss-120b',
+    'groq/compound-mini':'openai/gpt-oss-20b',
+}
+# GPT-OSS models on Groq are reasoning models: hidden reasoning tokens count
+# toward the completion budget, so tiny limits can leave the visible reply empty.
+GROQ_REASONING_MIN_TOKENS=512
 
 def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API key', custom_url:str='')->tuple[str,str]:
     """Resolve `(endpoint_url, provider_label)` from key prefix or explicit provider choice."""
@@ -579,6 +596,7 @@ def normalize_ai_model(model:str, endpoint_url:str)->str:
         other_provider_defaults.update({'openai/gpt-4o-mini','openrouter/auto'})
         if m in other_provider_defaults:
             return groq_default
+        return GROQ_RETIRED_MODELS.get(m,m)
     if 'generativelanguage.googleapis.com' in endpoint_url:
         if m.startswith('google/'):
             m=m.split('/',1)[1]
@@ -643,7 +661,15 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
             {'role':'user','content':user_text},
         ],
     }
-    if max_tokens is not None:
+    if 'api.groq.com' in endpoint:
+        # Groq documents `max_completion_tokens`; GPT-OSS needs reasoning headroom.
+        if resolved_model.startswith('openai/gpt-oss'):
+            payload['reasoning_effort']='low'
+            if max_tokens is not None:
+                payload['max_completion_tokens']=max(int(max_tokens),GROQ_REASONING_MIN_TOKENS)
+        elif max_tokens is not None:
+            payload['max_completion_tokens']=int(max_tokens)
+    elif max_tokens is not None:
         payload['max_tokens']=int(max_tokens)
     try:
         resp=requests.post(endpoint,headers=headers,json=payload,timeout=timeout)

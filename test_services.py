@@ -1032,6 +1032,23 @@ class DiagnosticRemediationTests(unittest.TestCase):
             self.assertEqual(groq_post_mock.call_args[0][0],groq_ep)
             self.assertEqual(groq_post_mock.call_args[1]['headers']['Authorization'],'Bearer gsk_dummytestkey')
             self.assertEqual(groq_post_mock.call_args[1]['json']['model'],groq_default)
+            # GPT-OSS is a reasoning model: keep enough completion budget for a visible reply.
+            groq_payload=groq_post_mock.call_args[1]['json']
+            self.assertEqual(groq_default,'openai/gpt-oss-120b')
+            self.assertEqual(groq_payload['reasoning_effort'],'low')
+            self.assertGreaterEqual(groq_payload['max_completion_tokens'],services.GROQ_REASONING_MIN_TOKENS)
+            self.assertNotIn('max_tokens',groq_payload)
+
+        # Retired Groq model IDs (shut down in 2026) are mapped to Groq's replacements.
+        self.assertEqual(services.normalize_ai_model('llama-3.3-70b-versatile',groq_ep),'openai/gpt-oss-120b')
+        self.assertEqual(services.normalize_ai_model('llama-3.1-8b-instant',groq_ep),'openai/gpt-oss-20b')
+        self.assertEqual(services.normalize_ai_model('qwen/qwen3-32b',groq_ep),'openai/gpt-oss-120b')
+        # Non-reasoning Groq models keep the caller's exact token limit.
+        with mock.patch('requests.post',return_value=fake_resp) as groq_post_mock:
+            services.call_ai_chat('gsk_dummytestkey','custom-groq-model','Hello',max_tokens=16)
+            groq_payload=groq_post_mock.call_args[1]['json']
+            self.assertEqual(groq_payload['max_completion_tokens'],16)
+            self.assertNotIn('reasoning_effort',groq_payload)
 
     def test_html_manual_bundled_and_complete(self):
         repo=Path(__file__).resolve().parent
