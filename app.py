@@ -118,7 +118,7 @@ class CafeDesk(ctk.CTk):
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._telemetry_online_anchor=0.0; self._pending_online_seconds=0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
         # Central state manager owns the shared, mutable session/telemetry containers so
         # screens and workers read from one source of truth (see app_state.SessionState).
         # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
@@ -136,6 +136,8 @@ class CafeDesk(ctk.CTk):
         try:
             self._telemetry_enabled=settings_store.telemetry_enabled()
             self._telemetry_consent_asked=bool(preferences.get('telemetry_consent_asked'))
+            if self._telemetry_enabled:
+                self._telemetry_online_anchor=time.monotonic()
         except Exception:
             self._telemetry_enabled=False; self._telemetry_consent_asked=False
         if not self._startup_error:
@@ -683,9 +685,15 @@ class CafeDesk(ctk.CTk):
                 return messagebox.showerror('Could not save preference',str(exc),parent=self)
             self._telemetry_enabled=enabled
             self._telemetry_consent_asked=True
-            if not enabled:
-                with self._telemetry_lock:
+            with self._telemetry_lock:
+                if not enabled:
                     self._telemetry_counts.clear()
+                    self._pending_online_seconds=0
+                    self._telemetry_online_anchor=0.0
+                else:
+                    # Start a fresh online-duration window; never bank pre-consent time.
+                    self._pending_online_seconds=0
+                    self._telemetry_online_anchor=time.monotonic()
             self.status.set('Anonymous usage statistics ' + ('enabled • thank you' if enabled else 'disabled • nothing is uploaded'))
         ctk.CTkSwitch(box,text='Share anonymous usage statistics',variable=var,command=toggle).pack(anchor='w',padx=18,pady=(0,10))
         label(box,'Turning this off also stops the online station heartbeat. Licences, updates and key sync still work.',
@@ -1325,7 +1333,16 @@ class CafeDesk(ctk.CTk):
     def _flush_telemetry_async(self, force=False):
         if not self._telemetry_enabled:
             return
+        now_m=time.monotonic()
         with self._telemetry_lock:
+            # Bank whole seconds online since the last accounting point so the owner
+            # dashboard can rank "PC online longest". Cap each gap so a sleeping
+            # machine cannot invent multi-hour online streaks in one flush.
+            if self._telemetry_online_anchor:
+                gap=int(now_m-self._telemetry_online_anchor)
+                if gap>0:
+                    self._pending_online_seconds=min(self._pending_online_seconds+min(gap,900),86400)
+            self._telemetry_online_anchor=now_m
             if self._telemetry_inflight:
                 return
             # Keep snapshot + clear atomic under the shared lock. SessionState.snapshot()
@@ -1335,12 +1352,16 @@ class CafeDesk(ctk.CTk):
                 return
             self._telemetry_counts.clear()
             self._telemetry_inflight=True
-            self._last_telemetry_flush=time.monotonic()
+            self._last_telemetry_flush=now_m
+            online_secs=self._pending_online_seconds
         cur_screen=self.current or 'Home'
-        def _done():
+        def _done(res=None):
             with self._telemetry_lock:
                 self._telemetry_inflight=False
-        self._workers.run_telemetry_flush(snapshot,cur_screen,APP_BUILD,self._telemetry_counts,self._telemetry_lock,_done)
+                # Only drop banked online time after the server accepted it.
+                if isinstance(res,dict) and res.get('ok') and online_secs:
+                    self._pending_online_seconds=max(0,self._pending_online_seconds-online_secs)
+        self._workers.run_telemetry_flush(snapshot,cur_screen,APP_BUILD,self._telemetry_counts,self._telemetry_lock,_done,online_secs)
 
     def _telemetry_tick(self):
         try: self._flush_telemetry_async(force=True)

@@ -527,12 +527,35 @@
           <div class="card">
             <div class="card-h">
               <div>
-                <h3>Most visited tools</h3>
-                <div class="sub">Last 14 days</div>
+                <h3>Most used page</h3>
+                <div class="sub" id="topToolsSub">Pages &amp; tools ranked by opens</div>
               </div>
               <button class="btn btn-ghost btn-sm" onclick="switchView('analytics')">Explore</button>
             </div>
             <div id="topTools"></div>
+          </div>
+        </div>
+
+        <div class="grid g-2 mt16">
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Most active PCs</h3>
+                <div class="sub">Which computer uses the app the most</div>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="switchView('analytics')">All PCs</button>
+            </div>
+            <div id="activePcLeaders"></div>
+          </div>
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Longest online</h3>
+                <div class="sub">Which PC stays online too much</div>
+              </div>
+              <span class="badge b-mute" id="onlineRangeBadge">range</span>
+            </div>
+            <div id="onlinePcLeaders"></div>
           </div>
         </div>
 
@@ -618,12 +641,12 @@
             <div class="card-h">
               <div>
                 <h3>Active computers</h3>
-                <div class="sub">Ranked by visits in range</div>
+                <div class="sub">Most used PCs · opens + online time in range</div>
               </div>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Station</th><th>Shop / area</th><th>Top tool</th><th style="text-align:right">Visits</th><th>Last seen</th><th>Action</th></tr></thead>
+                <thead><tr><th>Station</th><th>Shop / area</th><th>Top page</th><th style="text-align:right">Opens</th><th style="text-align:right">Online</th><th>Last seen</th><th>Action</th></tr></thead>
                 <tbody id="machineTable"></tbody>
               </table>
             </div>
@@ -980,7 +1003,7 @@ const DL_PAGE = `https://github.com/${REPO}/releases/latest`;
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const state = {
-  keys: [], reqs: [], releases: [], announcements: [], visits: [], stations: [], sales: [],
+  keys: [], reqs: [], releases: [], announcements: [], visits: [], stations: [], sales: [], onlineDaily: [],
   gh: null, sums: null, days: 14, view: "overview", email: "",
   lastSync: null, telemetryError: false, loading: false,
 };
@@ -1020,6 +1043,20 @@ function money(cents, cur = "R") {
 function isoDay(d) {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
   return z.toISOString().slice(0, 10);
+}
+function fmtDur(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? h + "h " + rm + "m" : h + "h";
+}
+function stationLabel(mid, fallback) {
+  const st = state.stations.find((s) => s.machine_id === mid);
+  if (st && st.station_name) return st.station_name;
+  return fallback || shortId(mid, 10);
 }
 function relTime(iso) {
   if (!iso) return "never";
@@ -1281,7 +1318,7 @@ async function refreshAll(manual = false) {
   const since = new Date(Date.now() - 120 * 86400000);
   const sinceIso = since.toISOString();
 
-  const [keysRes, reqRes, relRes, annRes, visitsRes, stationsRes, salesRes] = await Promise.all([
+  const [keysRes, reqRes, relRes, annRes, visitsRes, stationsRes, salesRes, onlineRes] = await Promise.all([
     sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).limit(1000),
     sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
     sb.from("app_releases").select("*").order("published_at", { ascending: false }).limit(30),
@@ -1293,6 +1330,10 @@ async function refreshAll(manual = false) {
     fetchPaged(() => sb.from("shop_sync_sales")
       .select("shop_id,created_at,station,total_cents,currency,voided_at")
       .gte("created_at", sinceIso).order("created_at", { ascending: false })).catch(() => null),
+    // Online-duration table (v0.8.3+); older projects without the migration just get [].
+    fetchPaged(() => sb.from("station_online_daily")
+      .select("visit_date,machine_id,shop_id,shop_name,city_label,station_name,online_seconds,last_online_at")
+      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true })).catch(() => null),
   ]);
 
   if (keysRes.error) toast(keysRes.error.message, "err");
@@ -1305,6 +1346,7 @@ async function refreshAll(manual = false) {
   state.visits = visitsRes || [];
   state.stations = stationsRes || [];
   state.sales = salesRes || [];
+  state.onlineDaily = onlineRes || [];
 
   await loadGithubRelease();
   state.lastSync = new Date();
@@ -1412,8 +1454,77 @@ function buildAnalytics() {
   const activeShops = new Set(state.keys.filter((k) => !k.revoked && k.shop_id && daysLeft(k.expires_at) >= 0).map((k) => k.shop_id));
   const expiring = state.keys.filter((k) => !k.revoked && daysLeft(k.expires_at) >= 0 && daysLeft(k.expires_at) <= 30).length;
 
+  // Online duration per PC in range (station_online_daily, v0.8.3+).
+  const byOnline = new Map();
+  for (const row of state.onlineDaily) {
+    if (String(row.visit_date) < fromKey) continue;
+    const mid = row.machine_id;
+    const cur = byOnline.get(mid) || {
+      seconds: 0, shopName: (row.shop_name || "").trim(), city: (row.city_label || "").trim(),
+      station: (row.station_name || "").trim(), days: new Set(),
+    };
+    cur.seconds += Number(row.online_seconds) || 0;
+    if (row.shop_name) cur.shopName = row.shop_name;
+    if (row.city_label) cur.city = row.city_label;
+    if (row.station_name) cur.station = row.station_name;
+    cur.days.add(String(row.visit_date));
+    byOnline.set(mid, cur);
+  }
+  // Lifetime online from heartbeats (covers PCs that predate daily rows).
+  for (const st of state.stations) {
+    const secs = Number(st.online_seconds) || 0;
+    if (secs <= 0) continue;
+    const cur = byOnline.get(st.machine_id) || {
+      seconds: 0, shopName: (st.shop_name || "").trim(), city: (st.city_label || "").trim(),
+      station: (st.station_name || "").trim(), days: new Set(),
+    };
+    // Only fold lifetime total in when the daily table has no range data for this PC.
+    if (!cur.days.size) cur.seconds = Math.max(cur.seconds, secs);
+    if (!cur.station && st.station_name) cur.station = st.station_name;
+    byOnline.set(st.machine_id, cur);
+  }
+
+  const topToolEntry = [...byTool.entries()].sort((x, y) => y[1] - x[1])[0] || null;
+  const mostUsedPage = topToolEntry ? topToolEntry[0] : null;
+  const mostUsedPageOpens = topToolEntry ? topToolEntry[1] : 0;
+
+  const machineRows = [...byMachine.entries()].map(([mid, row]) => {
+    const on = byOnline.get(mid);
+    const top = [...row.tools.entries()].sort((x, y) => y[1] - x[1])[0];
+    const st = state.stations.find((s) => s.machine_id === mid);
+    return {
+      mid,
+      visits: row.visits,
+      onlineSeconds: on ? on.seconds : 0,
+      topPage: top ? top[0] : null,
+      shopName: row.shopName || (on && on.shopName) || "",
+      city: row.city || (on && on.city) || "",
+      station: (st && st.station_name) || (on && on.station) || "",
+      last: row.last || (st ? st.last_seen_at : ""),
+      tools: row.tools,
+    };
+  });
+  // PCs with online time but zero tool opens in range still belong on the board.
+  for (const [mid, on] of byOnline.entries()) {
+    if (machineRows.some((r) => r.mid === mid)) continue;
+    const st = state.stations.find((s) => s.machine_id === mid);
+    machineRows.push({
+      mid, visits: 0, onlineSeconds: on.seconds, topPage: (st && st.current_screen) || null,
+      shopName: on.shopName || "", city: on.city || "",
+      station: on.station || (st && st.station_name) || "",
+      last: (st && st.last_seen_at) || "", tools: new Map(),
+    });
+  }
+
+  const byVisits = [...machineRows].sort((x, y) => y.visits - x.visits || y.onlineSeconds - x.onlineSeconds);
+  const byOnlineSorted = [...machineRows].sort((x, y) => y.onlineSeconds - x.onlineSeconds || y.visits - x.visits);
+  const mostActivePc = byVisits[0] || null;
+  const longestOnlinePc = byOnlineSorted[0] || null;
+
   return {
     days, inRange, total, today, series, byTool, byGroup, byCity, byShop, byMachine,
+    byOnline, machineRows, byVisits, byOnlineSorted,
+    mostUsedPage, mostUsedPageOpens, mostActivePc, longestOnlinePc,
     online, activeComputers, activeShops, expiring,
     revenueToday, revenueRange, salesInRange, salesByShop,
     todaySalesCount: todaySales.length,
@@ -1554,6 +1665,43 @@ function liveRow(st) {
   </div>`;
 }
 
+/* ---------------- PC leaderboards (most used / longest online) ---------------- */
+function renderPcLeaders(a) {
+  const activeHost = document.getElementById("activePcLeaders");
+  const onlineHost = document.getElementById("onlinePcLeaders");
+  const badge = document.getElementById("onlineRangeBadge");
+  if (badge) badge.textContent = `last ${a.days}d`;
+
+  const active = (a.byVisits || []).filter((r) => r.visits > 0).slice(0, 5);
+  if (activeHost) {
+    activeHost.innerHTML = active.length
+      ? active.map((r, i) => rankRow(
+          i + 1,
+          r.station || shortId(r.mid, 10),
+          `${r.shopName || "Unassigned"} · top: ${r.topPage || "—"}`,
+          r.visits,
+          "opens"
+        )).join("")
+      : `<div class="empty">No PC usage yet. Stations opt in from Help &amp; privacy → usage statistics.</div>`;
+  }
+
+  const online = (a.byOnlineSorted || []).filter((r) => r.onlineSeconds > 0).slice(0, 5);
+  if (onlineHost) {
+    // Custom rows: rankRow() runs values through num(), which would zero out "12h 30m".
+    onlineHost.innerHTML = online.length
+      ? online.map((r, i) => `
+        <div class="rank-row">
+          <div class="rank-no">${i + 1}</div>
+          <div class="rank-main">
+            <div class="t">${esc(r.station || shortId(r.mid, 10))}</div>
+            <div class="s">${esc(r.shopName || "Unassigned")} · ${num(r.visits)} opens</div>
+          </div>
+          <div class="rank-val"><div class="n">${esc(fmtDur(r.onlineSeconds))}</div><div class="u">online</div></div>
+        </div>`).join("")
+      : `<div class="empty">No online-time data yet.<br><span style="font-size:11.5px">Appears after PCs on v0.8.3+ send usage statistics.</span></div>`;
+  }
+}
+
 /* ---------------- render: overview ---------------- */
 function renderOverview() {
   const a = buildAnalytics();
@@ -1584,9 +1732,15 @@ function renderOverview() {
 
   const tools = [...a.byTool.entries()].sort((x, y) => y[1] - x[1]).slice(0, 7);
   const maxTool = tools.length ? tools[0][1] : 1;
+  const topToolsSub = document.getElementById("topToolsSub");
+  if (topToolsSub) topToolsSub.textContent = a.mostUsedPage
+    ? `Top: ${a.mostUsedPage} · last ${a.days} days`
+    : `Pages & tools ranked by opens · last ${a.days} days`;
   $("#topTools").innerHTML = tools.length
     ? tools.map(([name, v]) => barRow(name, TOOL_TO_GROUP[name] || "", v, maxTool, a.total ? ((v / a.total) * 100).toFixed(0) + "%" : "")).join("")
     : `<div class="empty">No tool usage recorded yet.<br><span style="font-size:11.5px">Stations running Café Desk v0.8.2+ report anonymised tool counts automatically.</span></div>`;
+
+  renderPcLeaders(a);
 
   $("#stationCount").textContent = `${state.stations.length} station${state.stations.length === 1 ? "" : "s"}`;
   $("#liveStations").innerHTML = state.stations.length
@@ -1614,15 +1768,13 @@ function renderAnalytics() {
   const a = buildAnalytics();
 
   const onlineNow = a.online.length;
-  const topCity = [...a.byCity.entries()].sort((x, y) => y[1].visits - x[1].visits)[0];
-  const topTool = [...a.byTool.entries()].sort((x, y) => y[1] - x[1])[0];
-  const avgPerPc = a.byMachine.size ? Math.round(a.total / a.byMachine.size) : 0;
-
+  const longest = a.longestOnlinePc;
+  const activePc = a.mostActivePc;
   const kpis = [
     { cls: "lime", ico: "pulse", label: "Total tool opens", value: num(a.total), sub: `Last ${a.days} days` },
-    { cls: "blue", ico: "pin", label: "Busiest place", value: topCity ? esc(topCity[0]) : "—", sub: topCity ? `${num(topCity[1].visits)} visits · ${num(topCity[1].machines.size)} PCs` : "No data yet", small: true },
-    { cls: "violet", ico: "sparkle", label: "Most used tool", value: topTool ? esc(topTool[0]) : "—", sub: topTool ? `${num(topTool[1])} opens` : "No data yet", small: true },
-    { cls: "teal", ico: "monitor", label: "Avg per computer", value: num(avgPerPc), sub: `${num(a.byMachine.size)} reporting PCs` },
+    { cls: "blue", ico: "pin", label: "Most used page", value: a.mostUsedPage ? esc(a.mostUsedPage) : "—", sub: a.mostUsedPage ? `${num(a.mostUsedPageOpens)} opens · last ${a.days} days` : "No data yet", small: true },
+    { cls: "violet", ico: "monitor", label: "Most active PC", value: activePc ? esc(activePc.station || shortId(activePc.mid, 10)) : "—", sub: activePc ? `${num(activePc.visits)} opens · ${esc(activePc.shopName || "unassigned")}` : "No data yet", small: true },
+    { cls: "teal", ico: "clock", label: "Longest online", value: longest ? esc(longest.station || shortId(longest.mid, 10)) : "—", sub: longest ? `${fmtDur(longest.onlineSeconds)} online · ${num(longest.visits)} opens` : "No online data yet", small: true },
   ];
   $("#analyticsKpis").innerHTML = kpis.map((k) => `
     <div class="kpi ${k.cls}">
@@ -1632,7 +1784,10 @@ function renderAnalytics() {
       <div class="s">${k.sub}</div>
     </div>`).join("");
 
-  $("#placesSub").textContent = `Every Café Desk tool ranked by opens · last ${a.days} days`;
+  $("#placesSub").textContent = `Most used pages ranked by opens · last ${a.days} days`;
+
+  // Overview leaderboards (also refreshed when Analytics re-renders).
+  renderPcLeaders(a);
   $$("#rangeTabs2 button").forEach((b) => b.classList.toggle("active", Number(b.dataset.days) === a.days));
 
   const toolRows = [...a.byTool.entries()].sort((x, y) => y[1] - x[1]);
@@ -1664,22 +1819,24 @@ function renderAnalytics() {
     ? a.online.slice(0, 8).map(liveRow).join("")
     : `<div class="empty">No PC has checked in during the last 5 minutes.</div>`;
 
-  const machines = [...a.byMachine.entries()].sort((x, y) => y[1].visits - x[1].visits).slice(0, 12);
+  const machines = a.byVisits.slice(0, 12);
   const stByMid = new Map(state.stations.map((s) => [s.machine_id, s]));
   $("#machineTable").innerHTML = machines.length
-    ? machines.map(([mid, row]) => {
+    ? machines.map((row) => {
+        const mid = row.mid;
         const st = stByMid.get(mid);
-        const top = [...row.tools.entries()].sort((x, y) => y[1] - x[1])[0];
+        const station = row.station || (st ? st.station_name : "") || shortId(mid, 10);
         return `<tr>
-          <td><div class="mono" style="color:var(--lime);font-size:11.2px">${esc(mid)}</div><div class="cell-sub">${esc(st ? st.station_name : "—")}</div></td>
+          <td><div class="mono" style="color:var(--lime);font-size:11.2px">${esc(mid)}</div><div class="cell-sub">${esc(station)}</div></td>
           <td>${esc(row.shopName || "—")}<div class="cell-sub">${esc(row.city || "No city")}</div></td>
-          <td><span class="badge b-blue">${esc(top ? top[0] : "—")}</span></td>
+          <td><span class="badge b-blue">${esc(row.topPage || "—")}</span></td>
           <td style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${num(row.visits)}</td>
+          <td style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${row.onlineSeconds ? esc(fmtDur(row.onlineSeconds)) : "—"}</td>
           <td style="color:var(--dim);font-size:11.5px">${st ? relTime(st.last_seen_at) : relTime(row.last)}</td>
           <td><button class="btn btn-danger btn-sm" data-delete-machine="${attr(mid)}">Delete PC data</button></td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="6" class="empty">No machines reporting yet.</td></tr>`;
+    : `<tr><td colspan="7" class="empty">No machines reporting yet.</td></tr>`;
 
   const shops = [...a.salesByShop.entries()].sort((x, y) => y[1].cents - x[1].cents).slice(0, 8);
   const maxSales = shops.length ? shops[0][1].cents : 1;

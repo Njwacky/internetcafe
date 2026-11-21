@@ -1648,9 +1648,27 @@ class WorkspaceTelemetryTests(unittest.TestCase):
         self.assertEqual(payload['p_current_screen'],'PDF tools')
         self.assertEqual(payload['p_city_label'],'Benoni')
         self.assertEqual(payload['p_screen_counts'],{'PDF tools':2,'Receipts':3,'Help & privacy':5000})
+        self.assertEqual(payload['p_online_seconds'],0)
         blob=str(payload).lower()
         for forbidden in ('secret.txt','customer','filename','document text','token'):
             self.assertNotIn(forbidden,blob)
+
+    def test_telemetry_sends_clamped_online_seconds(self):
+        import cloud_sync
+        from unittest import mock
+        seen={}
+        def fake_request(url,key,method,path,payload=None,extra_headers=None,timeout=5.0):
+            seen.update(payload or {})
+            return {'ok':True}
+        cfg={'supabase_url':'https://demo.supabase.co','supabase_anon_key':'anon-xyz'}
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=fake_request):
+            cloud_sync.send_workspace_telemetry(cfg,machine_id='CD-1111-2222-3333',
+                                                screen_counts={'Home':1},online_seconds=1234567)
+        self.assertEqual(seen['p_online_seconds'],86400)
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=fake_request):
+            cloud_sync.send_workspace_telemetry(cfg,machine_id='CD-1111-2222-3333',
+                                                screen_counts={'Home':1},online_seconds=-5)
+        self.assertEqual(seen['p_online_seconds'],0)
 
     def test_telemetry_unknown_screen_falls_back_to_home_and_offline_is_silent(self):
         import cloud_sync
@@ -1688,10 +1706,15 @@ class WorkspaceTelemetryTests(unittest.TestCase):
         repo=Path(__file__).resolve().parent
         schema=(repo/'supabase_schema.sql').read_text(encoding='utf-8')
         for fragment in ('public.station_heartbeats','public.workspace_tool_visits',
+                         'public.station_online_daily','p_online_seconds integer default 0',
                          'public.record_workspace_telemetry(','grant execute on function public.record_workspace_telemetry'):
             self.assertIn(fragment,schema)
+        mig=(repo/'supabase'/'migrations'/'20261121120000_pc_online_seconds.sql').read_text(encoding='utf-8')
+        for fragment in ('station_online_daily','p_online_seconds','online_seconds'):
+            self.assertIn(fragment,mig)
         dash=(repo/'owner-dashboard.html').read_text(encoding='utf-8')
-        for fragment in ('workspace_tool_visits','station_heartbeats','Most visited places',
+        for fragment in ('workspace_tool_visits','station_heartbeats','station_online_daily','Most visited places',
+                         'Longest online','Most active PCs','Most used page',
                          'CafeDesk-Setup.exe','CafeDesk-Windows-USB-Portable.zip','sync_github_release'):
             self.assertIn(fragment,dash)
         self.assertNotIn('service_role',dash)
@@ -2313,7 +2336,7 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
         s.session_state = SessionState(s.events, s._telemetry_counts, s._telemetry_lock)
         s._workers = types.SimpleNamespace(run_telemetry_flush=lambda *a, **k: None)
         s._telemetry_inflight = False; s._telemetry_enabled = False
-        s._last_telemetry_flush = 0.0; s.current = 'Home'
+        s._last_telemetry_flush = 0.0; s._telemetry_online_anchor = 0.0; s._pending_online_seconds = 0; s.current = 'Home'
         s.after = lambda ms, fn=None: s.pending.append(fn)
         s.status = types.SimpleNamespace(set=lambda v: s.statuses.append(v),
                                         get=lambda: '')

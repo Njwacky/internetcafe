@@ -69,19 +69,22 @@ class BackgroundTasks:
         """Check for an available app update off-thread; call ``on_result(res)`` with the result."""
         self._pool.run(check_fn, on_result=on_result)
 
-    def run_telemetry_flush(self, snapshot, cur_screen, app_version, counts, lock, on_done):
+    def run_telemetry_flush(self, snapshot, cur_screen, app_version, counts, lock, on_done, online_seconds=0):
         """Send a telemetry snapshot off-thread; call ``on_done()`` when finished.
 
         ``on_done`` always runs on the worker thread (even on failure) so the caller can
         clear its in-flight flag under ``lock``. A failed send re-merges ``snapshot``
         back into the live ``counts`` via :meth:`merge_failed_telemetry` so no counts
-        are lost. ``cloud_sync`` / ``settings_store`` are imported lazily to keep this
+        are lost. ``online_seconds`` is whole seconds of app-online time since the last
+        successful flush (0 when none); the server banks it into daily/lifetime totals.
+        ``cloud_sync`` / ``settings_store`` are imported lazily to keep this
         module importable without the network stack.
         """
         import cloud_sync
         import settings_store
 
         def _do():
+            res = {"ok": False, "error": "telemetry worker did not run"}
             try:
                 cfg = settings_store.load_settings()
                 res = cloud_sync.send_workspace_telemetry(
@@ -89,12 +92,17 @@ class BackgroundTasks:
                     current_screen=cur_screen,
                     screen_counts=snapshot,
                     app_version=app_version,
+                    online_seconds=int(online_seconds or 0),
                 )
                 if not res.get("ok") and snapshot:
                     self.merge_failed_telemetry(snapshot, counts, lock)
                 return res
             finally:
-                on_done()
+                # Pass the result so the caller can keep un-acked online seconds pending.
+                try:
+                    on_done(res)
+                except TypeError:
+                    on_done()
 
         self._pool.run(_do)
 
