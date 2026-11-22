@@ -221,8 +221,23 @@ jobs:
           $tagName = if ("${{ github.ref }}" -like "refs/tags/v*") { "${{ github.ref_name }}" } else { "v$ver" }
           gh release view $tagName >$null 2>&1
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tagName "installer-output\CafeDesk-Setup.exe" "CafeDesk-Windows-USB-Portable.zip" "CafeDesk-Release-Checksums.json" --clobber
-            gh release edit $tagName --title "Cafe Desk $tagName (Windows 10/11)" --notes $notes --latest
+            # Release already exists: its assets are IMMUTABLE. Replacing them would
+            # invalidate the owner-signed SHA-256 stored in Supabase (app_releases) and
+            # break every in-app update with "downloaded SHA-256 did not match owner
+            # signature". Only upload assets that are missing (e.g. a previous run died
+            # mid-upload); never replace an existing asset. To ship a new build, bump
+            # version.py and push a new v* tag.
+            $existing = @(gh release view $tagName --json assets --jq '.assets[].name')
+            $missing = @()
+            if ($existing -notcontains 'CafeDesk-Setup.exe') { $missing += 'installer-output\CafeDesk-Setup.exe' }
+            if ($existing -notcontains 'CafeDesk-Windows-USB-Portable.zip') { $missing += 'CafeDesk-Windows-USB-Portable.zip' }
+            if ($existing -notcontains 'CafeDesk-Release-Checksums.json') { $missing += 'CafeDesk-Release-Checksums.json' }
+            if ($missing.Count -gt 0) {
+              Write-Host "::warning title=Partial release $tagName::Uploading only missing assets: $($missing -join ', '). Existing assets were left untouched."
+              gh release upload $tagName @missing
+            } else {
+              Write-Host "::warning title=Release $tagName already published::Assets are immutable once published so in-app updates keep verifying. This build (Setup.exe SHA-256 $exeHash, Portable ZIP SHA-256 $zipHash) was NOT published. Bump version.py to ship a new build."
+            }
           } else {
             gh release create $tagName "installer-output\CafeDesk-Setup.exe" "CafeDesk-Windows-USB-Portable.zip" "CafeDesk-Release-Checksums.json" --title "Cafe Desk $tagName (Windows 10/11)" --notes $notes --latest
           }

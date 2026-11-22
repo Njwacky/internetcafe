@@ -609,6 +609,35 @@ class InAppUpdaterUnitTests(unittest.TestCase):
                             )
                 self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_download_hash_mismatch_tells_owner_to_resync_and_deletes_file(self):
+        # Regression: the signed Supabase SHA was stale (GitHub asset rebuilt after
+        # signing), so the download hash check failed. The app must still refuse,
+        # delete the file, and tell staff/owner exactly how to fix it.
+        priv_b64, pub_b64 = _make_keypair()
+        served_bytes = b'MZ' + b'\x90' * 5000
+        served_sha = hashlib.sha256(served_bytes).hexdigest()
+        stale_sha = '1' * 64
+        self.assertNotEqual(served_sha, stale_sha)
+        stale_sig = cloud_sync.sign_release_sha256('0.8.5', stale_sha, priv_b64)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {'CAFE_DESK_PUBLIC_KEY': pub_b64}, clear=False):
+                with mock.patch('urllib.request.urlopen', return_value=_FakeHTTPStream(served_bytes)):
+                    with self.assertRaises(ValueError) as ctx:
+                        cloud_sync.download_and_verify_update(
+                            'https://releases.example.com/CafeDesk-Setup.exe',
+                            stale_sha,
+                            tmp,
+                            version_label='0.8.5',
+                            expected_signature=stale_sig,
+                        )
+            msg = str(ctx.exception)
+            self.assertIn('Security check failed', msg)
+            self.assertIn('did not match owner signature', msg)
+            self.assertIn('Sync GitHub Release', msg)
+            self.assertIn('NOT changed', msg)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_5whys_toctou_tampering_and_can_apply_in_app_gating(self):
         priv_b64, pub_b64 = _make_keypair()
         exe_bytes = b'MZ' + b'\x90' * 5000

@@ -30,7 +30,7 @@ function loadEdgeHelpers() {
   };
   vm.createContext(ctx);
   vm.runInContext(
-    head + '\nglobalThis.exports = { importOwnerSigningKey, signReleaseSha256, releaseSigningMessage, isVerifiedOwnerEmail };',
+    head + '\nglobalThis.exports = { importOwnerSigningKey, signReleaseSha256, releaseSigningMessage, isVerifiedOwnerEmail, hashAfterLabel, parseReleaseBodyHashes, assetDigestSha, assertHashesAgree };',
     ctx,
   );
   return ctx.exports;
@@ -50,6 +50,42 @@ test('owner-admin Edge Function contains no plaintext owner email and signs both
   assert.match(edgeTs, /action === "sync_github_release"/);
   assert.match(edgeTs, /signReleaseSha256\(tag, chosenSha, cryptoKey\)/);
   assert.match(edgeTs, /signReleaseSha256\(tag, zipSha, cryptoKey\)/);
+});
+
+test('sync_github_release refuses to sign when manifest, digest and notes disagree', () => {
+  const { parseReleaseBodyHashes, assetDigestSha, assertHashesAgree } = loadEdgeHelpers();
+  const exeSha = 'd8071c93086a036fe984a69919dd0d1bf5e5c387dd6024a77e620286e465d368';
+  const zipSha = '7683759f0acda3957c8b6abfec1fbc4e63c0a5ad038dd93d81454e0618b0b435';
+  const body = [
+    '### Cafe Desk v0.8.5 - Windows 10/11 Official Build',
+    '',
+    '- **1-Click Windows Installer:** CafeDesk-Setup.exe',
+    `  - SHA-256: ${exeSha}`,
+    '- **USB Flash-Drive Portable Edition:** CafeDesk-Windows-USB-Portable.zip',
+    `  - SHA-256: ${zipSha}`,
+  ].join('\n');
+
+  // Labeled parsing follows the workflow notes format (hash on the line after the label).
+  // (Field-wise asserts: the helpers run in a vm context with a different Object prototype.)
+  const parsed = parseReleaseBodyHashes(body);
+  assert.equal(parsed.exeSha, exeSha);
+  assert.equal(parsed.zipSha, zipSha);
+  // Positional fallback still works for older notes without labels.
+  const fallback = parseReleaseBodyHashes(`${exeSha}\n${zipSha}`);
+  assert.equal(fallback.exeSha, exeSha);
+  assert.equal(fallback.zipSha, zipSha);
+
+  assert.equal(assetDigestSha({ digest: `sha256:${exeSha}` }), exeSha);
+  assert.equal(assetDigestSha({ digest: 'md5:abc' }), '');
+  assert.equal(assetDigestSha({}), '');
+
+  // Agreement passes; any disagreement must throw instead of signing a stale hash.
+  assert.doesNotThrow(() => assertHashesAgree('Setup.exe', [exeSha, exeSha, exeSha]));
+  assert.doesNotThrow(() => assertHashesAgree('Setup.exe', ['', exeSha, '']));
+  assert.throws(
+    () => assertHashesAgree('Setup.exe', [exeSha, '1'.repeat(64), exeSha]),
+    /checksums disagree/,
+  );
 });
 
 test('owner-admin Ed25519 release signature verifies identically in Python cloud_sync.verify_release_signature', async () => {

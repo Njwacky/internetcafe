@@ -1965,6 +1965,55 @@ function renderReqsTable() {
 }
 
 /* ---------------- render: fleet ---------------- */
+function parseReleaseBodyHashes(body) {
+  const text = String(body || "");
+  const hashAfter = (label) => {
+    const lines = text.split(/\r?\n/);
+    const needle = label.toLowerCase();
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].toLowerCase().includes(needle)) continue;
+      const here = lines[i].match(/\b([0-9a-f]{64})\b/i);
+      if (here) return here[1].toLowerCase();
+      const next = i + 1 < lines.length ? lines[i + 1].match(/\b([0-9a-f]{64})\b/i) : null;
+      if (next) return next[1].toLowerCase();
+    }
+    return "";
+  };
+  let exeSha = hashAfter("CafeDesk-Setup.exe");
+  let zipSha = hashAfter("CafeDesk-Windows-USB-Portable.zip");
+  if (!exeSha || !zipSha) {
+    const all = Array.from(text.matchAll(/\b([0-9a-f]{64})\b/gi), (m) => m[1].toLowerCase());
+    if (!exeSha && all[0]) exeSha = all[0];
+    if (!zipSha && all[1]) zipSha = all[1];
+  }
+  return { exeSha, zipSha };
+}
+
+function githubReleaseHashes() {
+  const sums = state.sums || {};
+  let exeSha = String(sums?.setup_exe?.sha256 || "").toLowerCase().trim();
+  let zipSha = String(sums?.usb_zip?.sha256 || "").toLowerCase().trim();
+  if (!exeSha || !zipSha) {
+    const parsed = parseReleaseBodyHashes(state.gh && state.gh.body ? String(state.gh.body) : "");
+    if (!exeSha) exeSha = parsed.exeSha;
+    if (!zipSha) zipSha = parsed.zipSha;
+  }
+  if (!exeSha || !zipSha) {
+    const assets = state.gh && Array.isArray(state.gh.assets) ? state.gh.assets : [];
+    const exeAsset = assets.find((a) => String(a.name || "").toLowerCase().endsWith(".exe"));
+    const zipAsset = assets.find((a) => String(a.name || "").toLowerCase().endsWith(".zip"));
+    if (!exeSha && exeAsset && typeof exeAsset.digest === "string") {
+      const dm = exeAsset.digest.match(/^sha256:([0-9a-f]{64})$/i);
+      if (dm) exeSha = dm[1].toLowerCase();
+    }
+    if (!zipSha && zipAsset && typeof zipAsset.digest === "string") {
+      const dm = zipAsset.digest.match(/^sha256:([0-9a-f]{64})$/i);
+      if (dm) zipSha = dm[1].toLowerCase();
+    }
+  }
+  return { exeSha, zipSha };
+}
+
 function renderFleet() {
   const tb = $("#releasesTbody");
   const ghVer = state.gh && state.gh.tag_name ? String(state.gh.tag_name).replace(/^v/i, "").trim() : "";
@@ -1976,7 +2025,21 @@ function renderFleet() {
         <td><button class="btn btn-primary btn-sm" onclick="syncGithubRelease()">Sync &amp; sign v${esc(ghVer)}</button></td>
       </tr>`
     : "";
-  tb.innerHTML = unsyncedBanner + (state.releases.length
+  // Stale-record guard: if the signed Supabase SHA no longer matches the GitHub
+  // file, every in-app update fails with "downloaded SHA-256 did not match owner
+  // signature". Surface it here so the owner re-syncs before customers hit it.
+  const ghRow = ghVer ? state.releases.find((r) => String(r.version) === ghVer) : null;
+  const ghHashes = githubReleaseHashes();
+  const exeMismatch = Boolean(ghRow && ghHashes.exeSha && String(ghRow.sha256 || "").toLowerCase() !== ghHashes.exeSha);
+  const zipMismatch = Boolean(ghRow && ghHashes.zipSha && String(ghRow.portable_sha256 || "").toLowerCase() && String(ghRow.portable_sha256 || "").toLowerCase() !== ghHashes.zipSha);
+  const mismatchBanner = (exeMismatch || zipMismatch)
+    ? `<tr style="background:rgba(255,107,107,.08)">
+        <td colspan="4"><strong style="color:#FF8A8A">GitHub Release v${esc(ghVer)}</strong> <span class="badge b-exp">Checksum mismatch</span>
+          <span style="color:var(--muted);font-size:11.8px;margin-left:6px">The signed record does not match the GitHub file — in-app updates will fail until re-synced.</span></td>
+        <td><button class="btn btn-primary btn-sm" onclick="syncGithubRelease()">Re-sync &amp; sign v${esc(ghVer)}</button></td>
+      </tr>`
+    : "";
+  tb.innerHTML = mismatchBanner + unsyncedBanner + (state.releases.length
     ? state.releases.map((r) => {
         const signed = Boolean(r.signature && String(r.signature).trim());
         const hasPortable = Boolean(r.portable_signature && String(r.portable_signature).trim());
