@@ -109,11 +109,11 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
 
 1. **One-time Owner Keypair Setup (on YOUR private PC only):**
    ```bash
-   python admin_keygen.py --init-keys --apply-public-key
+   python admin_keygen.py --init-keys
    ```
    - Generates your secret private signing key in `owner-keys/cafedesk_owner.private.key` and the matching public key in `owner-keys/cafedesk_owner.public.txt` (**the whole `owner-keys/` folder is gitignored — NEVER share it, and never copy it or `admin_keygen.py` onto a customer USB!**).
-   - Writes only your Ed25519 **public key** into `license_guard.py`. Commit that change.
-   - `packaging\build-windows.bat` and `packaging/build-unix.sh` now **refuse to build** while the demo key is still embedded. For a throw-away test build only, set `CAFE_DESK_ALLOW_DEMO_KEY=1`.
+   - In git, `license_guard.py` intentionally keeps the placeholder demo key so plain source checkouts fail closed (`ReleaseTrustTests`), while GitHub Actions injects `secrets.CAFE_DESK_PUBLIC_KEY` at release build time. For a **local** USB/installer build on your private laptop, run `python admin_keygen.py --apply-public-key` before `packaging\build-windows.bat` (then `git checkout -- license_guard.py` afterwards so your working tree stays clean).
+   - `packaging\build-windows.bat` and `packaging/build-unix.sh` **refuse to build** while the demo key is still embedded. For a throw-away test build only, set `CAFE_DESK_ALLOW_DEMO_KEY=1`.
 
    **Then add the GitHub Actions secret (required for release builds):**
 
@@ -129,13 +129,14 @@ Packaged USB / installer builds (`CafeDesk.exe`) automatically enforce **Method 
    5. **Secret:** paste the public key line, with no quotes and no trailing spaces.
    6. Click **Add secret**. Then re-run the **Build USB Portable & Installer Packages** workflow.
 
-   The release job then overwrites the embedded key with the secret before packaging and re-checks it, so a mismatched or missing secret cannot silently ship a demo-key build. `.github/check_release_key.py` is the guard: **release builds (push to `main`, `v*` tags, manual runs) fail closed** when the secret is missing or the demo key is embedded, while **pull-request builds only warn** — those artifacts are throw-away and must never be handed to a customer.
+   The release job then overwrites the embedded key with the secret before packaging, inspects the compiled PyInstaller `PYZ` bytecode in `dist/CafeDesk`, and verifies both packaged release files (`CafeDesk-Windows-USB-Portable.zip` and `CafeDesk-Setup.exe`) before uploading. `.github/check_release_key.py` is the guard: **release builds (push to `main`, `v*` tags, manual runs) fail closed** when the secret is missing or the demo key is embedded, while **pull-request builds only warn** — those artifacts are throw-away and must never be handed to a customer.
 
-   **Verify what you actually published** (do this after a release, on the file you downloaded from the Releases page):
+   **Verify what you actually published** (do this after a release, on the exact files you downloaded from the Releases page):
    ```bash
    python tools/verify_release_key.py CafeDesk-Windows-USB-Portable.zip
+   python tools/verify_release_key.py CafeDesk-Setup.exe
    ```
-   It scans the artifact's own bytes and reports `PASS: this artifact embeds YOUR owner public key` or `FAIL: the DEMO signing key is embedded in this file`. Build-time guards cannot catch a mis-pasted secret that happens to be a different valid 32-byte value; this reads the shipped file itself. Add `--expect <key>` when `owner-keys/` is not present on that machine.
+   It inspects the compiled `license_guard` Python bytecode inside `CafeDesk.exe`'s PyInstaller `PYZ` archive (and the uncompressed `release-key.meta` record inside `CafeDesk-Setup.exe`), prints the artifact's SHA-256 and `public_key_sha256`, and reports `PASS: this artifact embeds YOUR owner public key` or `FAIL: the DEMO signing key is embedded in this file`. Add `--expect <key>` when `owner-keys/` is not present on that machine, or `--verify-release-sig <version> <signature>` to confirm the embedded public key also verifies Supabase's `app_releases` Ed25519 signature.
 
    *Why the demo key must never ship:* it is a placeholder that lives in this repository. The matching **private** half was never committed, so a stranger cannot forge a licence from it today — but you have no control over who holds it, you cannot revoke or rotate it away from copies already distributed, and anyone who ever obtained it (an old contractor, a leaked backup) could issue themselves keys you can never distinguish from your own. A build signed with your own keypair is the only one you control.
 

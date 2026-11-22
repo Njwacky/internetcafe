@@ -50,7 +50,9 @@ CLOCK_ROLLBACK_GRACE_DAYS = 2
 # The sample Ed25519 owner key that ships in this repository. NEVER trust it in a
 # customer build — CI (.github/workflows/build-usb.yml) and packaging/build-windows.bat
 # refuse to produce a release while DEFAULT_OWNER_PUBLIC_KEY_B64 still equals this.
-DEMO_OWNER_PUBLIC_KEY_B64 = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
+# Assembled at import time so compiled `license_guard.pyc` in an owner-signed release
+# embeds ONLY `DEFAULT_OWNER_PUBLIC_KEY_B64` as a 43-character key literal.
+DEMO_OWNER_PUBLIC_KEY_B64 = ''.join(('tuAEglg-NweqdIgh4Jbojl', '4yQW4iWMOd3fLEbLMV7lI'))
 
 # Default embedded Ed25519 public key (32 raw bytes, URL-safe base64).
 # Run `python admin_keygen.py --init-keys` once on YOUR private laptop to generate

@@ -92,12 +92,19 @@ jobs:
           CAFE_DESK_PUBLIC_KEY: ${{ secrets.CAFE_DESK_PUBLIC_KEY }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python .github/check_release_key.py --warn-only --apply-if-available || true
+            if [ -n "$CAFE_DESK_PUBLIC_KEY" ]; then
+              python .github/check_release_key.py --apply
+              echo "HAS_SIGNING_KEY=true" >> "$GITHUB_ENV"
+            else
+              python .github/check_release_key.py --warn-only --apply-if-available || true
+              echo "HAS_SIGNING_KEY=false" >> "$GITHUB_ENV"
+            fi
           elif [ -z "$CAFE_DESK_PUBLIC_KEY" ]; then
             echo "::error title=Missing repository secret::Set the CAFE_DESK_PUBLIC_KEY secret to your owner Ed25519 PUBLIC key (see README: One-time Owner Keypair Setup). Shipping without it would verify licenses against the demo key."
             exit 1
           else
             python .github/check_release_key.py --apply
+            echo "HAS_SIGNING_KEY=true" >> "$GITHUB_ENV"
           fi
 
       - name: Build USB-ready 1-Year Licensed folder (dist\CafeDesk)
@@ -117,41 +124,65 @@ jobs:
             echo pause
           ) > "dist\CafeDesk\Enable-USB-Portable-Data.bat"
 
+      # The installer is the artifact a café actually double-clicks. Refuse to wrap a folder
+      # whose bundled bytecode still carries the demo key: a crafted /D override, a bypassed
+      # build script or a hand-run PyInstaller must never turn into a downloadable Setup.exe.
+      # When verified, this also writes `dist/CafeDesk/_internal/release-key.meta` from the
+      # compiled PyInstaller bytecode so `tools/verify_release_key.py` can inspect Setup.exe.
+      - name: Refuse to build an installer from a demo-key app folder
+        if: github.event_name != 'pull_request' || env.HAS_SIGNING_KEY == 'true'
+        shell: bash
+        env:
+          CAFE_DESK_PUBLIC_KEY: ${{ secrets.CAFE_DESK_PUBLIC_KEY }}
+        run: python .github/check_release_key.py --dist-dir dist/CafeDesk
+
       - name: Zip USB-ready portable folder
         shell: pwsh
         run: Compress-Archive -Path "dist\CafeDesk" -DestinationPath "CafeDesk-Windows-USB-Portable.zip" -Force
 
-      # The installer is the artifact a café actually double-clicks. Refuse to wrap a folder
-      # whose bundled bytecode still carries the demo key: a crafted /D override, a bypassed
-      # build script or a hand-run PyInstaller must never turn into a downloadable Setup.exe.
-      - name: Refuse to build an installer from a demo-key app folder
-        shell: bash
-        run: python .github/check_release_key.py --dist-dir dist/CafeDesk
-
       - name: Build optional Windows Setup.exe (Inno Setup 6)
+        if: github.event_name != 'pull_request' || env.HAS_SIGNING_KEY == 'true'
         shell: pwsh
         run: |
           $ver = (python -c "from version import __version__; print(__version__)").Trim()
           iscc /DMyAppVersion=$ver "packaging\windows-installer.iss"
 
+      - name: Verify packaged release artifacts embed owner Ed25519 public key
+        if: github.event_name != 'pull_request' || env.HAS_SIGNING_KEY == 'true'
+        shell: bash
+        env:
+          CAFE_DESK_PUBLIC_KEY: ${{ secrets.CAFE_DESK_PUBLIC_KEY }}
+        run: |
+          python tools/verify_release_key.py CafeDesk-Windows-USB-Portable.zip --expect "$CAFE_DESK_PUBLIC_KEY"
+          python tools/verify_release_key.py installer-output/CafeDesk-Setup.exe --expect "$CAFE_DESK_PUBLIC_KEY"
+
       - name: Generate SHA-256 Checksums Manifest
         shell: pwsh
+        env:
+          CAFE_DESK_PUBLIC_KEY: ${{ secrets.CAFE_DESK_PUBLIC_KEY }}
         run: |
-          $exeHash = (Get-FileHash "installer-output\CafeDesk-Setup.exe" -Algorithm SHA256).Hash.ToLower()
           $zipHash = (Get-FileHash "CafeDesk-Windows-USB-Portable.zip" -Algorithm SHA256).Hash.ToLower()
           $ver = (python -c "from version import __version__; print(__version__)").Trim()
-          @{
+          $manifest = [ordered]@{
             version = $ver.Trim()
             built_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            setup_exe = @{
+          }
+          if ($env:CAFE_DESK_PUBLIC_KEY) {
+            $pubHash = (python -c "import hashlib, os; print(hashlib.sha256(os.environ['CAFE_DESK_PUBLIC_KEY'].strip().encode('ascii')).hexdigest())").Trim()
+            $manifest["public_key_sha256"] = $pubHash
+          }
+          if (Test-Path "installer-output\CafeDesk-Setup.exe") {
+            $exeHash = (Get-FileHash "installer-output\CafeDesk-Setup.exe" -Algorithm SHA256).Hash.ToLower()
+            $manifest["setup_exe"] = @{
               filename = "CafeDesk-Setup.exe"
               sha256 = $exeHash
             }
-            usb_zip = @{
-              filename = "CafeDesk-Windows-USB-Portable.zip"
-              sha256 = $zipHash
-            }
-          } | ConvertTo-Json -Depth 4 | Set-Content -Path "CafeDesk-Release-Checksums.json" -Encoding UTF8
+          }
+          $manifest["usb_zip"] = @{
+            filename = "CafeDesk-Windows-USB-Portable.zip"
+            sha256 = $zipHash
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path "CafeDesk-Release-Checksums.json" -Encoding UTF8
 
       - name: Upload Windows USB Portable ZIP & Setup.exe artifacts
         uses: actions/upload-artifact@v7

@@ -60,7 +60,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 ; admin_keygen.py and owner-keys/ must never travel to a customer PC.
-Source: "..\dist\CafeDesk\*"; DestDir: "{app}"; Excludes: "CafeDeskData\*,owner-keys\*,*admin_keygen*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\CafeDesk\*"; DestDir: "{app}"; Excludes: "CafeDeskData\*,owner-keys\*,*admin_keygen*,_internal\release-key.meta"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Keep the 76-byte public-key verification stamp uncompressed so `python tools/verify_release_key.py CafeDesk-Setup.exe`
+; can verify the exact owner public key inside the downloaded single-file installer without executing it.
+Source: "..\dist\CafeDesk\_internal\release-key.meta"; DestDir: "{app}\_internal"; Flags: ignoreversion nocompression skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "Café Desk document studio"
