@@ -1,4 +1,4 @@
-# Café Desk — Local-First Desktop Document Studio (`v0.8.4`)
+# Café Desk — Local-First Desktop Document Studio (`v0.8.5`)
 
 **0.8.4 sync/privacy patch:** see [fixes and coordinated cloud migration instructions](docs/deep-app-audit-fixes.md). Cloud sales sync now requires protocol 2 on the database and an upgrade of every shop PC; local sales stay available during migration.
 

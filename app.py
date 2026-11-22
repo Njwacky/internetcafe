@@ -45,6 +45,7 @@ from forms_ui import show_forms
 import license_guard
 import license_ui
 import cloud_sync
+import app_updater
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
@@ -123,7 +124,7 @@ class CafeDesk(ctk.CTk):
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._telemetry_online_anchor=0.0; self._pending_online_seconds=0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._telemetry_online_anchor=0.0; self._pending_online_seconds=0; self._entitlement_sync_running=False; self._update_check_running=False; self._available_update=None; self._prepared_update=None; self.topbar_update_btn=None; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
         # Central state manager owns the shared, mutable session/telemetry containers so
         # screens and workers read from one source of truth (see app_state.SessionState).
         # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
@@ -138,7 +139,7 @@ class CafeDesk(ctk.CTk):
             log_exception('create_shell', exc); self._startup_error=f'The workspace shell could not be drawn: {exc}'
         try: self.title(self.business_name.get())
         except Exception: pass
-        self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick)
+        self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick); self.after(1200,self._consume_startup_update_notice); self.after(3500,self.remote_update_tick)
         try:
             self._telemetry_enabled=settings_store.telemetry_enabled()
             self._telemetry_consent_asked=bool(preferences.get('telemetry_consent_asked'))
@@ -654,6 +655,204 @@ class CafeDesk(ctk.CTk):
                 self.close_app()
         elif activated:
             self.status.set('Cloud license approval applied successfully')
+    def _consume_startup_update_notice(self):
+        try:
+            self._workers._pool.run(app_updater.cleanup_stale_staging)
+            notice=app_updater.consume_last_update_result()
+            if not isinstance(notice,dict): return
+            if notice.get('status')=='completed':
+                self.status.set(f'Updated to Café Desk v{APP_BUILD}  •  License, PIN, prices & sales history preserved')
+            elif notice.get('status')=='failed':
+                detail=str(notice.get('detail') or 'Installer could not finish.')
+                self.status.set(f'Previous in-app update did not finish ({detail}) • still running v{APP_BUILD}')
+        except Exception:
+            self._log_exception('_consume_startup_update_notice')
+    def remote_update_tick(self):
+        # Quietly check for signed in-app updates after launch and every 4 hours.
+        self.after(14400000,self.remote_update_tick)
+        try:
+            cfg=settings_store.load_settings()
+            if self._update_check_running or not cloud_sync.is_supabase_configured(cfg): return
+            self._update_check_running=True
+        except Exception:
+            self._log_exception('remote_update_tick')
+            self._update_check_running=False
+            return
+        self._workers.run_app_update_badge(
+            lambda: cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD),
+            lambda res: self.events.put(('ok',self._finish_silent_update_check,res,None)),
+        )
+    def _finish_silent_update_check(self,res):
+        self._update_check_running=False
+        if not isinstance(res,dict) or not res.get('ok'): return
+        if app_updater.can_apply_in_app(res):
+            was_known=bool(self._available_update and self._available_update.get('latest_version')==res.get('latest_version'))
+            self._set_available_update(res,notify_status=not was_known)
+            if self.current=='Home' and not was_known and not self.busy:
+                try: self.show('Home')
+                except Exception: pass
+        else:
+            self._set_available_update(None)
+    def _set_available_update(self,res,notify_status=False):
+        self._available_update=res if app_updater.can_apply_in_app(res) else None
+        btn=getattr(self,'topbar_update_btn',None)
+        if btn is not None and btn.winfo_exists():
+            if self._available_update:
+                ver=str(self._available_update.get('latest_version') or '').strip()
+                btn.configure(text=f'↑ Update v{ver}' if ver else '↑ Update now')
+                btn.pack(side='right',padx=(0,8),pady=15)
+            else:
+                btn.pack_forget()
+        if notify_status and self._available_update and not self.busy:
+            ver=str(self._available_update.get('latest_version') or '').strip()
+            self.status.set(f'Update ready: Café Desk v{ver} — click “↑ Update v{ver}” in the top bar to update in-app')
+    def _confirm_ready_for_update_restart(self,latest_version):
+        if self.busy:
+            messagebox.showinfo('Please wait','Wait for the current task to finish before restarting for the update.',parent=self)
+            return False
+        if saved_services.unprotected_sales(self.receipt_items) and not messagebox.askyesno(
+            'Saved sales are not protected',
+            'Some saved work has neither a sales record nor a durable retry copy. Retry Record sale from Receipts first, or restart anyway?',
+            parent=self,
+        ):
+            return False
+        if self.has_unsaved_work() and not messagebox.askyesno(
+            f'Restart into Café Desk v{latest_version}?',
+            f'Save any open customer drafts, scans, OCR text, PDF queues, cards or forms before Café Desk restarts into v{latest_version}.\n\nRestart and apply the update now?',
+            parent=self,
+        ):
+            self.status.set(f'Update v{latest_version} verified & ready — save your work, then click “↑ Update v{latest_version}” to restart')
+            return False
+        return True
+    def _apply_prepared_update_and_restart(self,prepared):
+        if not self._confirm_ready_for_update_restart(prepared.version):
+            return False
+        # Clean up session temp BEFORE spawning the external updater and never block
+        # exit with a modal warning dialog once the child PID-waiter has started.
+        self._recovery_store.invalidate()
+        try: self.session_temp.cleanup()
+        except OSError: pass
+        try:
+            app_updater.apply_prepared_update(prepared)
+        except Exception as exc:
+            messagebox.showerror('Could not apply update',str(exc),parent=self)
+            return False
+        self._prepared_update=None
+        self.destroy()
+        return True
+    def check_and_update_in_app(self):
+        if self.busy:
+            return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
+        cfg=settings_store.load_settings()
+        if not cloud_sync.is_supabase_configured(cfg):
+            return messagebox.showinfo(
+                'Configure Cloud Updates',
+                'Add your Supabase Project URL and Public Anon Key in Business Settings → Multi-PC Shop & Supabase Cloud Sync to enable 1-click in-app updates.',
+                parent=self,
+            )
+        def _run_chk():
+            return {
+                'update': cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD),
+                'announcements': cloud_sync.fetch_app_announcements(cfg),
+            }
+        def _done_chk(result):
+            res=result['update']
+            announcements=result.get('announcements') or []
+            if announcements:
+                notice_text='\n\n'.join(f"{str(a.get('title') or 'Café Desk notice')}\n{str(a.get('message') or '')}" for a in announcements[:5])
+                messagebox.showinfo('Café Desk news & offers',notice_text,parent=self)
+            if not res.get('ok'):
+                return messagebox.showerror('Update Check Failed',str(res.get('error') or 'Could not check updates.'),parent=self)
+            if not res.get('update_available'):
+                self._set_available_update(None)
+                self.status.set(f'Up to date • Café Desk v{APP_BUILD}')
+                if self.current=='About & contact':
+                    try: self.show('About & contact')
+                    except Exception: pass
+                return messagebox.showinfo('Up to Date',f'You already have the latest Café Desk version (v{APP_BUILD}).',parent=self)
+            self._set_available_update(res)
+            if self.current=='About & contact':
+                try: self.show('About & contact')
+                except Exception: pass
+            self.start_in_app_update(res)
+        self.job('Checking for Café Desk updates…',_run_chk,_done_chk)
+    def start_in_app_update(self,res=None):
+        if self.busy:
+            return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
+        target_res=res if isinstance(res,dict) else self._available_update
+        if not isinstance(target_res,dict) or not target_res.get('update_available'):
+            return self.check_and_update_in_app()
+        ver=str(target_res.get('latest_version') or '').strip()
+        notes=target_res.get('release_notes') or 'Bug fixes and improvements.'
+        mode=app_updater.detect_install_mode()
+        if not str(target_res.get('signature') or '').strip() and not str(target_res.get('portable_signature') or '').strip():
+            return messagebox.showwarning(
+                'Update Not Signed',
+                f'Version {ver} is published but is NOT signed by the owner.\n\n'
+                'For safety Café Desk will not apply an unverified update. '
+                'Ask the owner to publish a signed release, then check again.',
+                parent=self,
+            )
+        if mode=='source':
+            return messagebox.showinfo(
+                f'Update v{ver} Available (Source Mode)',
+                f'Café Desk v{ver} is available (you are running v{APP_BUILD} from a Python source checkout).\n\n'
+                'Run `git pull` to update source files. Packaged Windows and USB portable builds apply updates in-place automatically.',
+                parent=self,
+            )
+        try:
+            app_updater.select_release_package(target_res,mode)
+        except app_updater.UnsignedUpdateError:
+            return messagebox.showwarning(
+                'Update Not Signed',
+                f'Version {ver} is published without an owner signature for this edition.\n\n'
+                'Ask the owner to publish a signed release, then check again.',
+                parent=self,
+            )
+        except Exception as exc:
+            return messagebox.showerror('Update Unavailable',str(exc),parent=self)
+
+        # If this exact update was already staged & verified earlier in the session, re-verify
+        # its SHA-256 and extracted payload (closes TOCTOU in %TEMP%) and apply immediately.
+        prep=self._prepared_update
+        if prep is not None and prep.version==ver.lstrip('vV'):
+            if app_updater.is_prepared_update_intact(prep):
+                self._apply_prepared_update_and_restart(prep)
+                return
+            self._prepared_update=None
+
+        ask_msg=(
+            f'Café Desk v{ver} is ready to install inside the app (you have v{APP_BUILD}).\n\n'
+            f"What's new:\n{notes}\n\n"
+            'Update in-place now and restart Café Desk automatically?\n'
+            '(No separate download or setup wizard needed — your computer license, PIN, prices, and sales history stay untouched.)'
+        )
+        if not messagebox.askyesno('Update Café Desk In-App',ask_msg,parent=self):
+            return
+
+        progress_gate={'last':0.0}
+        def _progress(done_bytes,total_bytes):
+            now_t=time.monotonic()
+            if total_bytes and done_bytes<total_bytes and (now_t-progress_gate['last'])<0.15:
+                return
+            progress_gate['last']=now_t
+            if total_bytes>0:
+                pct=min(100,int((done_bytes*100)/total_bytes))
+                mb_done=done_bytes/1048576
+                mb_tot=total_bytes/1048576
+                msg=f'Updating Café Desk to v{ver} in-app… {pct}% ({mb_done:.1f} / {mb_tot:.1f} MB)'
+            else:
+                mb_done=done_bytes/1048576
+                msg=f'Updating Café Desk to v{ver} in-app… {mb_done:.1f} MB'
+            self.events.put(('ok',lambda m=msg:self.status.set(m),None,None))
+
+        def _run_stage():
+            return app_updater.prepare_in_app_update(target_res,install_mode=mode,progress_cb=_progress)
+        def _done_stage(prepared):
+            self._prepared_update=prepared
+            self.status.set(f'Owner signature & SHA-256 verified for v{prepared.version} • restarting Café Desk…')
+            self._apply_prepared_update_and_restart(prepared)
+        self.job(f'Updating Café Desk to v{ver} in-app…',_run_stage,_done_stage,timeout=600)
     def projects_screen(self):
         self.heading(self.body,'Projects & recovery','Save your work to reopen and keep working later.')
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Save or open a project',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
@@ -866,98 +1065,35 @@ class CafeDesk(ctk.CTk):
 
         contact_box=card(self.body);contact_box.pack(fill='x',pady=(0,12))
 
-        # --- Remote Over-the-Internet App Updater Card ---
+        # --- Seamless In-App Self-Updater Card ---
         upd_box=card(self.body); upd_box.pack(fill='x',pady=(0,12),before=contact_box)
-        label(upd_box,'Remote App Updates & Online Key Sync (Over the Internet)',size=16,bold=True,color=LIME).pack(anchor='w',padx=20,pady=(18,4))
+        label(upd_box,'In-App Updates & Online Key Sync',size=16,bold=True,color=LIME).pack(anchor='w',padx=20,pady=(18,4))
         label(
             upd_box,
-            f'Current installed version: v{APP_BUILD}. Check for newer Café Desk releases over the internet (owner-signed, SHA-256 verified installer; your license, PIN, price list, and sales history stay untouched).',
+            f'Current installed version: v{APP_BUILD}. Updates download in the background, verify the owner Ed25519 signature and SHA-256 checksum, apply in-place, and reopen Café Desk automatically — no separate app download or reinstall needed. Your license, PIN, price list, and sales history stay untouched.',
             size=12,color=MUTED,wraplength=740,justify='left',
         ).pack(anchor='w',padx=20,pady=(0,12))
 
-
-        def update_dot_state(available):
+        def update_dot_state(res_obj):
             if not update_dot.winfo_exists(): return
-            if available:
-                update_dot.pack(side='left',before=check_updates_button,padx=(0,8))
+            available=bool(isinstance(res_obj,dict) and res_obj.get('update_available'))
+            ver=str((res_obj or {}).get('latest_version') or '').strip()
+            if available and app_updater.can_apply_in_app(res_obj):
+                update_dot.configure(text=f'● v{ver} ready to install in-app' if ver else '● Update ready')
+                update_dot.pack(side='left',before=check_updates_button,padx=(0,10))
+                if check_updates_button.winfo_exists():
+                    check_updates_button.configure(text=f'Update to v{ver} Now' if ver else 'Update In-App Now')
+            elif available:
+                cur_mode=app_updater.detect_install_mode()
+                sub='source checkout' if cur_mode=='source' else 'awaiting owner signature'
+                update_dot.configure(text=f'● v{ver} available ({sub})' if ver else f'● Update available ({sub})')
+                update_dot.pack(side='left',before=check_updates_button,padx=(0,10))
+                if check_updates_button.winfo_exists():
+                    check_updates_button.configure(text='Check & Update In-App')
             else:
                 update_dot.pack_forget()
-
-        def check_updates_click():
-            cfg=settings_store.load_settings()
-            if not cloud_sync.is_supabase_configured(cfg):
-                return messagebox.showinfo(
-                    'Configure Cloud Updates',
-                    'Add your Supabase Project URL and Public Anon Key in Business Settings → Multi-PC Shop & Supabase Cloud Sync to enable 1-click over-the-internet updates.',
-                    parent=self,
-                )
-            def _run_chk():
-                return {
-                    'update': cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD),
-                    'announcements': cloud_sync.fetch_app_announcements(cfg),
-                }
-            def _done_chk(result):
-                res=result['update']
-                announcements=result.get('announcements') or []
-                if announcements:
-                    notice_text='\n\n'.join(f"{str(a.get('title') or 'Café Desk notice')}\n{str(a.get('message') or '')}" for a in announcements[:5])
-                    messagebox.showinfo('Café Desk news & offers',notice_text,parent=self)
-                if not res.get('ok'):
-                    return messagebox.showerror('Update Check Failed',str(res.get('error') or 'Could not check updates.'),parent=self)
-                update_dot_state(bool(res.get('update_available')))
-                if not res.get('update_available'):
-                    self.status.set(f'Up to date • Café Desk v{APP_BUILD}')
-                    return messagebox.showinfo('Up to Date',f"You already have the latest Café Desk version (v{APP_BUILD}).",parent=self)
-                notes=res.get('release_notes') or 'Bug fixes and improvements.'
-                # Fail closed: this build refuses unsigned installers, so say so plainly
-                # instead of downloading something that will be rejected afterwards.
-                if not str(res.get('signature') or '').strip():
-                    return messagebox.showwarning(
-                        'Update Not Signed',
-                        f"Version {res['latest_version']} is published but is NOT signed by the owner.\n\n"
-                        'For safety this build will not download or install an unverified installer. '
-                        'Ask the owner to publish a signed release, then check again.',
-                        parent=self,
-                    )
-                ask_msg=(
-                    f"New version available: Café Desk v{res['latest_version']} (you have v{APP_BUILD})\n\n"
-                    f"What's new:\n{notes}\n\n"
-                    f"Download & verify the owner-signed update (SHA-256 + Ed25519 signature)?\n"
-                    f"(Your computer license, PIN, prices, and sales history are preserved.)"
-                )
-                if not messagebox.askyesno('Update Available!',ask_msg,parent=self):
-                    return
-                dl_dir=Path.home()/'Downloads'
-                if not dl_dir.is_dir(): dl_dir=Path(self.session_temp.name)
-                def _run_dl():
-                    return cloud_sync.download_and_verify_update(
-                        res['download_url'],
-                        res['sha256'],
-                        dl_dir,
-                        version_label=res['latest_version'],
-                        expected_signature=res.get('signature',''),
-                    )
-                def _done_dl(saved_installer):
-                    self.status.set(f'Verified update downloaded: {saved_installer.name}')
-                    if sys.platform.startswith('win') and str(saved_installer).lower().endswith('.exe'):
-                        if messagebox.askyesno(
-                            'Update Verified — Launch Installer?',
-                            f'Owner signature & SHA-256 verification passed!\nSaved to:\n{saved_installer}\n\nClose Café Desk and launch the v{res["latest_version"]} installer now?',
-                            parent=self,
-                        ):
-                            try:
-                                os.startfile(str(saved_installer))
-                                self.close_app()
-                            except Exception as exc:
-                                messagebox.showerror('Could not start installer',str(exc),parent=self)
-                    else:
-                        messagebox.showinfo(
-                            'Update Downloaded & Verified',
-                            f'Owner signature & SHA-256 checksum verified!\nSaved update package to:\n{saved_installer}',
-                            parent=self,
-                        )
-                self.job(f"Downloading & verifying Café Desk v{res['latest_version']}…",_run_dl,_done_dl)
-            self.job('Checking for remote Café Desk updates…',_run_chk,_done_chk)
+                if check_updates_button.winfo_exists():
+                    check_updates_button.configure(text='Check & Update In-App')
 
         def sync_keys_online_click():
             cfg=settings_store.load_settings()
@@ -981,17 +1117,31 @@ class CafeDesk(ctk.CTk):
             self.job('Syncing Machine ID approvals from cloud…',_do_k,_done_k)
 
         urow=ctk.CTkFrame(upd_box,fg_color='transparent'); urow.pack(fill='x',padx=20,pady=(0,18))
-        update_dot=ctk.CTkLabel(urow,text='● Update available',text_color='#FFCC66',font=('Segoe UI',11,'bold'))
-        check_updates_button=button(urow,'Check for App Updates',check_updates_click,fg_color=LIME,hover_color='#A9EB65',text_color='#142018')
+        known_ver=str((self._available_update or {}).get('latest_version') or '').strip() if self._available_update else ''
+        update_dot=ctk.CTkLabel(urow,text=f'● v{known_ver} ready to install in-app' if known_ver else '● Update available',text_color='#FFCC66',font=('Segoe UI',11,'bold'))
+        check_updates_button=button(
+            urow,
+            f'Update to v{known_ver} Now' if known_ver else 'Check & Update In-App',
+            lambda:self.start_in_app_update(self._available_update) if self._available_update else self.check_and_update_in_app(),
+            fg_color=LIME,hover_color='#A9EB65',text_color='#142018',
+        )
         check_updates_button.pack(side='left',padx=(0,BTN_PADX))
+        if known_ver:
+            update_dot.pack(side='left',before=check_updates_button,padx=(0,10))
+            button(urow,'Check Again',self.check_and_update_in_app,ghost=True).pack(side='left',padx=(0,BTN_PADX))
         button(urow,'Sync Approved Keys Online',sync_keys_online_click,secondary=True).pack(side='left')
         if cloud_sync.is_supabase_configured(settings_store.load_settings()):
             self._workers.run_app_update_badge(
                 lambda: cloud_sync.check_for_app_update(settings_store.load_settings(), current_version=APP_BUILD),
-                lambda res: (
-                    self.after(0, lambda: update_dot_state(bool(res.get('update_available'))))
-                    if res.get('ok') else None
-                ),
+                lambda res: self.events.put((
+                    'ok',
+                    lambda r: (
+                        self._set_available_update(r if r.get('update_available') else None),
+                        update_dot_state(r),
+                    ) if isinstance(r, dict) and r.get('ok') else None,
+                    res,
+                    None,
+                )),
             )
         lic_status=license_guard.current_license_status()
         lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12),before=contact_box)
@@ -1389,6 +1539,7 @@ class CafeDesk(ctk.CTk):
         self.lock_staff_btn.bind('<Enter>',lambda _e:self.status.set('Click to lock staff access & clear AI key' if self.staff_unlocked else 'Staff access is locked'))
         button(bar,'? Help',self.quick_help,secondary=True,width=80,height=34).pack(side='right',padx=(0,8),pady=15)
         button(bar,'Online Templates',self.open_online_templates,secondary=True,width=138,height=34).pack(side='right',padx=(0,8),pady=15)
+        self.topbar_update_btn=button(bar,'↑ Update now',self.start_in_app_update,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=144,height=34)
         ctk.CTkLabel(bar,textvariable=self.clock,text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=12,weight='bold')).pack(side='right',padx=(0,20))
         self.container=ctk.CTkFrame(main,fg_color='transparent'); self.container.grid(row=1,column=0,sticky='nsew',padx=28,pady=(0,8))
         footer=ctk.CTkFrame(main,fg_color='transparent',height=25); footer.grid(row=2,column=0,sticky='ew',padx=30,pady=(0,10)); label(footer,'●',size=10,color='#B9FF70').pack(side='left',padx=(0,5)); ctk.CTkLabel(footer,textvariable=self.status,text_color=MUTED,font=ctk.CTkFont(family=FONT,size=11)).pack(side='left')
@@ -1469,6 +1620,15 @@ class CafeDesk(ctk.CTk):
     def heading(self,parent,title,subtitle):
         label(parent,title,size=24,bold=True).pack(anchor='w',pady=(2,3)); label(parent,subtitle,size=13,color=MUTED,wraplength=740,justify='left').pack(anchor='w',pady=(0,18))
     def home(self):
+        if self._available_update and self._available_update.get('update_available'):
+            uver=str(self._available_update.get('latest_version') or '').strip()
+            unotes=str(self._available_update.get('release_notes') or 'Improvements and bug fixes.').strip().splitlines()[0][:120]
+            ubanner=ctk.CTkFrame(self.body,fg_color='#1C2B22',corner_radius=14,border_width=1,border_color='#3D5E44')
+            ubanner.pack(fill='x',pady=(0,14))
+            uleft=ctk.CTkFrame(ubanner,fg_color='transparent'); uleft.pack(side='left',fill='x',expand=True,padx=18,pady=12)
+            label(uleft,f'New update ready: Café Desk v{uver}',size=14,bold=True,color=LIME).pack(anchor='w')
+            label(uleft,f'{unotes}  •  Updates inside the app and reopens automatically.',size=12,color='#D4E5D8',wraplength=560,justify='left').pack(anchor='w',pady=(2,0))
+            button(ubanner,f'Update & Restart (v{uver})',lambda:self.start_in_app_update(self._available_update),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=196,height=36).pack(side='right',padx=18,pady=12)
         hero=ctk.CTkFrame(self.body,fg_color='#202B43',corner_radius=18); hero.pack(fill='x',pady=(0,20)); hero.grid_columnconfigure(0,weight=1)
         label(hero,'YOUR ALL-IN-ONE WORKSPACE',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=26,pady=(25,6))
         label(hero,'Big help for life’s little paperwork.',size=27,bold=True,color='white').pack(anchor='w',padx=26)

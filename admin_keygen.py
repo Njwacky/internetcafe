@@ -698,11 +698,22 @@ def _interactive_cli() -> int:
             print(f'\n[OK] Synced {count} issued Machine ID key(s) to Supabase `issued_machine_keys`.')
             return 0
         if sub == 'c':
-            ver = input('New App Version (e.g. 0.8.1): ').strip()
-            dl_url = input('HTTPS Installer URL (e.g. GitHub Release or Supabase Storage URL): ').strip()
+            ver = input('New App Version (e.g. 0.8.5): ').strip()
+            dl_url = input('HTTPS Installer URL (e.g. GitHub Release .exe URL): ').strip()
             sha_or_path = input('Local .exe/.zip path (to compute SHA-256) OR 64-char SHA-256 hash: ').strip()
+            port_url = input('Optional Portable USB .zip HTTPS URL (Enter to skip): ').strip()
+            port_sha = ''
+            if port_url:
+                port_sha = input('Local Portable .zip path OR 64-char SHA-256 hash: ').strip()
             notes = input('Short release notes for shop staff: ').strip()
-            row = cloud_sync.owner_publish_app_release(ver, dl_url, sha_or_path, release_notes=notes)
+            row = cloud_sync.owner_publish_app_release(
+                ver,
+                dl_url,
+                sha_or_path,
+                release_notes=notes,
+                portable_download_url=port_url,
+                portable_file_path_or_sha256=port_sha,
+            )
             print(f"\n[OK] Published Café Desk v{row['version']} (SHA-256: {row['sha256']}) to Supabase!")
             return 0
         if sub == 'd':
@@ -807,6 +818,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--setup-supabase', nargs=2, metavar=('SUPABASE_URL', 'SERVICE_ROLE_KEY'), help='Save your Supabase URL and secret service_role key into gitignored owner-keys/supabase-owner.json.')
     parser.add_argument('--sync-supabase', action='store_true', help='Push all issued Machine IDs & keys from owner-keys/ to Supabase so customer PCs can click "Check Online Approval".')
     parser.add_argument('--publish-release', nargs=3, metavar=('VERSION', 'HTTPS_URL', 'FILE_OR_SHA256'), help='Publish a new Café Desk release to Supabase for remote over-the-internet shop updates.')
+    parser.add_argument('--portable-release', nargs=2, metavar=('PORTABLE_HTTPS_URL', 'PORTABLE_FILE_OR_SHA256'), help='Optional signed portable USB .zip URL and file/SHA-256 to pair with --publish-release.')
     parser.add_argument('--release-notes', default='', help='Release notes text when using --publish-release.')
     parser.add_argument('--revoke', metavar='LICENSE_ID', help='Remotely revoke a specific License ID on Supabase.')
     parser.add_argument('--pending-requests', action='store_true', help='List pending online activation requests submitted from customer PCs.')
@@ -824,7 +836,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.publish_release:
         ver, dl_url, file_or_sha = args.publish_release
-        row = cloud_sync.owner_publish_app_release(ver, dl_url, file_or_sha, release_notes=args.release_notes)
+        port_url, port_sha = args.portable_release if args.portable_release else ('', '')
+        row = cloud_sync.owner_publish_app_release(
+            ver,
+            dl_url,
+            file_or_sha,
+            release_notes=args.release_notes,
+            portable_download_url=port_url,
+            portable_file_path_or_sha256=port_sha,
+        )
         print(f"Published Café Desk v{row['version']} -> {row['download_url']} (SHA-256: {row['sha256']})")
         return 0
 

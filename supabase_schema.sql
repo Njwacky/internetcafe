@@ -37,18 +37,24 @@ create extension if not exists pgcrypto;
 -- 1. REMOTE OVER-THE-INTERNET APP RELEASES (Public Read-Only, Owner Write-Only)
 -- -----------------------------------------------------------------------------
 create table if not exists public.app_releases (
-    version         text primary key,
-    download_url    text not null,
-    sha256          text not null,
-    signature       text not null default '', -- Ed25519 sig over CAFE-DESK-RELEASE-V1:{version}:{sha256}
-    release_notes   text not null default '',
-    mandatory       boolean not null default false,
-    min_os          text not null default 'Windows 10+',
-    published_at    timestamptz not null default now()
+    version                 text primary key,
+    download_url            text not null,
+    sha256                  text not null,
+    signature               text not null default '', -- Ed25519 sig over CAFE-DESK-RELEASE-V1:{version}:{sha256}
+    portable_download_url   text not null default '',
+    portable_sha256         text not null default '',
+    portable_signature      text not null default '', -- Ed25519 sig over CAFE-DESK-RELEASE-V1:{version}:{portable_sha256}
+    release_notes           text not null default '',
+    mandatory               boolean not null default false,
+    min_os                  text not null default 'Windows 10+',
+    published_at            timestamptz not null default now()
 );
 
--- Migration for projects created before release signing (safe to re-run):
+-- Migration for projects created before release signing / portable in-app updates (safe to re-run):
 alter table public.app_releases add column if not exists signature text not null default '';
+alter table public.app_releases add column if not exists portable_download_url text not null default '';
+alter table public.app_releases add column if not exists portable_sha256 text not null default '';
+alter table public.app_releases add column if not exists portable_signature text not null default '';
 
 alter table public.app_releases enable row level security;
 

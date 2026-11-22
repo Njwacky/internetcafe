@@ -1967,15 +1967,34 @@ function renderReqsTable() {
 /* ---------------- render: fleet ---------------- */
 function renderFleet() {
   const tb = $("#releasesTbody");
-  tb.innerHTML = state.releases.length
-    ? state.releases.map((r) => `<tr>
-        <td><strong style="color:var(--lime)">v${esc(r.version)}</strong>${r.mandatory ? ' <span class="badge b-warn">Mandatory</span>' : ""}</td>
+  const ghVer = state.gh && state.gh.tag_name ? String(state.gh.tag_name).replace(/^v/i, "").trim() : "";
+  const ghSynced = !ghVer || state.releases.some((r) => String(r.version) === ghVer && r.signature && String(r.signature).trim());
+  const unsyncedBanner = !ghSynced
+    ? `<tr style="background:rgba(185,255,112,.06)">
+        <td colspan="4"><strong style="color:var(--lime)">GitHub Release v${esc(ghVer)}</strong> <span class="badge b-warn">Not synced to in-app updates</span>
+          <span style="color:var(--muted);font-size:11.8px;margin-left:6px">Sign &amp; sync so every shop PC receives v${esc(ghVer)} inside the app.</span></td>
+        <td><button class="btn btn-primary btn-sm" onclick="syncGithubRelease()">Sync &amp; sign v${esc(ghVer)}</button></td>
+      </tr>`
+    : "";
+  tb.innerHTML = unsyncedBanner + (state.releases.length
+    ? state.releases.map((r) => {
+        const signed = Boolean(r.signature && String(r.signature).trim());
+        const hasPortable = Boolean(r.portable_signature && String(r.portable_signature).trim());
+        const sigBadge = signed
+          ? `<span class="badge b-ok">Signed</span>${hasPortable ? ' <span class="badge b-blue">+ USB ZIP</span>' : ""}`
+          : '<span class="badge b-warn">Unsigned</span>';
+        const signAction = signed
+          ? ""
+          : ` <button class="btn btn-ghost btn-sm" data-sign-release="${attr(r.version)}">Sign</button>`;
+        return `<tr>
+        <td><strong style="color:var(--lime)">v${esc(r.version)}</strong> ${sigBadge}${r.mandatory ? ' <span class="badge b-warn">Mandatory</span>' : ""}</td>
         <td class="mono" style="font-size:11.4px">${esc(String(r.published_at || "").slice(0, 10))}</td>
         <td class="mono" style="font-size:10.6px;color:var(--dim)">${esc(shortId(r.sha256 || "", 14))}</td>
         <td style="max-width:340px;font-size:11.8px;color:var(--muted)">${esc(r.release_notes || "—")}</td>
-        <td><a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${attr(r.download_url)}">Download</a></td>
-      </tr>`).join("")
-    : `<tr><td colspan="5" class="empty">No remote updates published yet. Builds from GitHub Actions publish automatically once synced.</td></tr>`;
+        <td><div class="row-actions"><a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${attr(r.download_url)}">Download</a>${signAction}</div></td>
+      </tr>`;
+      }).join("")
+    : `<tr><td colspan="5" class="empty">No remote updates published yet. Builds from GitHub Actions publish automatically once synced.</td></tr>`);
 
   const at = $("#announcementsTbody");
   if (at) at.innerHTML = state.announcements.length ? state.announcements.map((a) => `
@@ -2009,6 +2028,33 @@ document.addEventListener("click", async (e) => {
       await navigator.clipboard.writeText(copyBtn.dataset.copy);
       toast("License key copied.");
     } catch (_) { toast("Copy failed — long-press the key instead.", "err"); }
+    return;
+  }
+
+  const signRelBtn = e.target.closest("[data-sign-release]");
+  if (signRelBtn) {
+    const ver = signRelBtn.dataset.signRelease;
+    const rel = state.releases.find((r) => String(r.version) === String(ver));
+    if (!rel) return;
+    signRelBtn.disabled = true;
+    try {
+      await callOwnerAdmin({
+        action: "publish_release",
+        version: rel.version,
+        download_url: rel.download_url,
+        sha256: rel.sha256,
+        portable_download_url: rel.portable_download_url || "",
+        portable_sha256: rel.portable_sha256 || "",
+        release_notes: rel.release_notes || "",
+        mandatory: Boolean(rel.mandatory),
+        published_at: rel.published_at || undefined,
+      });
+      toast(`Signed Café Desk v${rel.version} for seamless in-app updates.`);
+      await refreshAll();
+    } catch (err) {
+      toast(err.message || "Could not sign release.", "err");
+      signRelBtn.disabled = false;
+    }
     return;
   }
 
@@ -2255,12 +2301,16 @@ async function publishReleaseNow() {
       $("#relUrl").value = download_url;
     }
     if (!download_url.startsWith("https://")) throw new Error("Download URL must start with https://");
-    btn.textContent = "Publishing…";
-    const { error } = await sb.from("app_releases").upsert({
-      version, download_url, sha256, signature: "", release_notes, mandatory: false, published_at: new Date().toISOString(),
+    btn.textContent = "Signing & publishing…";
+    await callOwnerAdmin({
+      action: "publish_release",
+      version,
+      download_url,
+      sha256,
+      release_notes,
+      mandatory: false,
     });
-    if (error) throw new Error(error.message);
-    toast(`Published Café Desk v${version} — every shop can update remotely.`);
+    toast(`Published owner-signed Café Desk v${version} — every shop can update directly inside the app.`);
     await refreshAll();
   } catch (err) {
     toast(err.message, "err");
@@ -2286,10 +2336,14 @@ async function publishAnnouncement() {
 }
 
 async function syncGithubRelease() {
-  toast("Reading latest GitHub build…", "info");
+  toast("Signing & syncing latest GitHub build…", "info");
   try {
-    const res = await callOwnerAdmin({ action: "sync_github_release", repo: REPO });
-    toast(`Synced v${res.release.version} into auto-update.`);
+    const notesEl = $("#relNotes");
+    const release_notes = notesEl ? notesEl.value.trim() : "";
+    const payload = { action: "sync_github_release", repo: REPO };
+    if (release_notes) payload.release_notes = release_notes;
+    const res = await callOwnerAdmin(payload);
+    toast(`Signed & synced Café Desk v${res.release.version} (Installer + USB ZIP) for in-app updates.`);
     await refreshAll();
   } catch (err) {
     toast(err.message, "err");
