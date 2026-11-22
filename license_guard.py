@@ -56,7 +56,7 @@ DEMO_OWNER_PUBLIC_KEY_B64 = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
 # your own private/public keypair and replace this public key before selling builds!
 # NOTE: rewritten in-place by `admin_keygen.py --apply-public-key` — the line shape must stay
 # `DEFAULT_OWNER_PUBLIC_KEY_B64 = '<base64>'` so the rewrite keeps working.
-DEFAULT_OWNER_PUBLIC_KEY_B64 = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
+DEFAULT_OWNER_PUBLIC_KEY_B64 = '14W-XVzHc9Ju8X-87VLoIt8frfFWHPWvSJPsHijrz3w'
 
 
 class LicenseError(ValueError):
