@@ -1747,7 +1747,8 @@ class WorkspaceTelemetryTests(unittest.TestCase):
         dash=(repo/'owner-dashboard.html').read_text(encoding='utf-8')
         for fragment in ('workspace_tool_visits','station_heartbeats','station_online_daily','Most visited places',
                          'Longest online','Most active PCs','Most used page',
-                         'CafeDesk-Setup.exe','CafeDesk-Windows-USB-Portable.zip','sync_github_release'):
+                         'CafeDesk-Setup.exe','CafeDesk-Windows-USB-Portable.zip','sync_github_release',
+                         'Checksum mismatch','githubReleaseHashes'):
             self.assertIn(fragment,dash)
         self.assertNotIn('service_role',dash)
 
@@ -1834,8 +1835,14 @@ class WorkspaceTelemetryTests(unittest.TestCase):
     def test_windows_workflow_publishes_direct_download_release(self):
         wf=(Path(__file__).resolve().parent/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
         for fragment in ('permissions:','contents: write','gh release create','gh release upload',
-                         '--clobber','CafeDesk-Release-Checksums.json','installer-output/CafeDesk-Setup.exe'):
+                         'CafeDesk-Release-Checksums.json','installer-output/CafeDesk-Setup.exe'):
             self.assertIn(fragment,wf)
+        # Published release assets are immutable: replacing them would invalidate the
+        # owner-signed SHA-256 in Supabase and break every in-app update. The workflow
+        # must never overwrite an existing asset; a new build requires a version bump.
+        self.assertNotIn('--clobber',wf)
+        self.assertIn('immutable',wf)
+        self.assertIn('Bump version.py',wf)
 
 
 class SecurityHardeningTests(unittest.TestCase):

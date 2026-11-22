@@ -451,7 +451,11 @@ def download_and_verify_update(
         part_path.unlink(missing_ok=True)
         raise ValueError(
             f'Security check failed: downloaded installer SHA-256 ({actual_hash[:12]}…) '
-            f'did not match owner signature ({clean_hash[:12]}…). File deleted.'
+            f'did not match owner signature ({clean_hash[:12]}…) for v{version_label}. '
+            'File deleted and your copy was NOT changed. '
+            'This usually means the published update record is out of date (the file on the '
+            'server changed after it was signed). Please ask the owner to open the Owner '
+            'Dashboard and click “Sync GitHub Release” for this version, then try again.'
         )
 
     os.replace(part_path, final_path)

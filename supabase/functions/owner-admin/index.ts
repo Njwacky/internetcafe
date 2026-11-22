@@ -77,6 +77,55 @@ async function signReleaseSha256(version: string, sha256Hex: string, cryptoKey: 
   return b64uEncode(new Uint8Array(sigBuf));
 }
 
+// --- GitHub release checksum helpers (pure, unit-tested) ---
+// A published SHA-256 must describe the exact bytes customers will download.
+// The checksums manifest, the GitHub asset digest (computed by GitHub from the
+// stored bytes) and the release notes are three independent claims about the
+// same file. If they ever disagree — e.g. Sync was clicked mid-upload —
+// publishing any one of them would sign a hash that does not match the file
+// and break every in-app update. Fail loudly instead.
+function hashAfterLabel(body, label) {
+  const lines = String(body || "").split(/\r?\n/);
+  const needle = String(label || "").toLowerCase();
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].toLowerCase().includes(needle)) continue;
+    const here = lines[i].match(/\b([0-9a-f]{64})\b/i);
+    if (here) return here[1].toLowerCase();
+    const next = i + 1 < lines.length ? lines[i + 1].match(/\b([0-9a-f]{64})\b/i) : null;
+    if (next) return next[1].toLowerCase();
+  }
+  return "";
+}
+
+function parseReleaseBodyHashes(body) {
+  const text = String(body || "");
+  let exeSha = hashAfterLabel(text, "CafeDesk-Setup.exe");
+  let zipSha = hashAfterLabel(text, "CafeDesk-Windows-USB-Portable.zip");
+  if (!exeSha || !zipSha) {
+    const all = Array.from(text.matchAll(/\b([0-9a-f]{64})\b/gi), (m) => m[1].toLowerCase());
+    if (!exeSha && all[0]) exeSha = all[0];
+    if (!zipSha && all[1]) zipSha = all[1];
+  }
+  return { exeSha, zipSha };
+}
+
+function assetDigestSha(asset) {
+  if (!asset || typeof asset.digest !== "string") return "";
+  const dm = asset.digest.match(/^sha256:([0-9a-f]{64})$/i);
+  return dm ? dm[1].toLowerCase() : "";
+}
+
+function assertHashesAgree(label, values) {
+  const present = (values || []).filter((v) => /^[0-9a-f]{64}$/.test(String(v || "")));
+  if (present.length > 1 && present.some((v) => v !== present[0])) {
+    throw new Error(
+      "GitHub release " + label + " checksums disagree (manifest vs asset digest vs release notes). " +
+      "The release may still be uploading — wait a minute and click Sync again. " +
+      "Refusing to publish a checksum that does not match the actual file.",
+    );
+  }
+}
+
 function validateHttpsUrl(rawUrl: string, label = "Download URL"): string {
   const clean = String(rawUrl || "").trim();
   let parsed: URL;
@@ -382,34 +431,39 @@ Deno.serve(async (req: Request) => {
       const zipAsset = assets.find((a) => String(a.name || "").toLowerCase().endsWith(".zip"));
       const manifestAsset = assets.find((a) => String(a.name || "").toLowerCase().endsWith("checksums.json"));
 
-      let exeSha = "";
-      let zipSha = "";
+      let manifestExeSha = "";
+      let manifestZipSha = "";
       if (manifestAsset && manifestAsset.browser_download_url) {
         const mResp = await fetch(String(manifestAsset.browser_download_url));
         if (mResp.ok) {
           try {
             const mText = (await mResp.text()).replace(/^\uFEFF/, "").trim();
             const mJson = JSON.parse(mText);
-            exeSha = String(mJson?.setup_exe?.sha256 || "").toLowerCase().trim();
-            zipSha = String(mJson?.usb_zip?.sha256 || "").toLowerCase().trim();
-          } catch {
+            const manifestVer = String(mJson?.version || "").trim().replace(/^v/i, "");
+            if (manifestVer && manifestVer !== tag) {
+              throw new Error(
+                `Checksums manifest is for v${manifestVer} but the GitHub release is v${tag}. ` +
+                "The release may still be uploading — wait a minute and click Sync again.",
+              );
+            }
+            manifestExeSha = String(mJson?.setup_exe?.sha256 || "").toLowerCase().trim();
+            manifestZipSha = String(mJson?.usb_zip?.sha256 || "").toLowerCase().trim();
+          } catch (err) {
+            if (err instanceof Error && /Checksums manifest is for/.test(err.message)) throw err;
             // Fall through to GitHub asset digests / release body checksums below
           }
         }
       }
-      if (!exeSha && exeAsset && typeof exeAsset.digest === "string") {
-        const dm = exeAsset.digest.match(/^sha256:([0-9a-f]{64})$/i);
-        if (dm) exeSha = dm[1].toLowerCase();
-      }
-      if (!zipSha && zipAsset && typeof zipAsset.digest === "string") {
-        const dm = zipAsset.digest.match(/^sha256:([0-9a-f]{64})$/i);
-        if (dm) zipSha = dm[1].toLowerCase();
-      }
-      if ((!exeSha || !zipSha) && ghRel.body) {
-        const allHashes = Array.from(String(ghRel.body).matchAll(/\b([0-9a-f]{64})\b/gi), (m) => m[1].toLowerCase());
-        if (!exeSha && allHashes[0]) exeSha = allHashes[0];
-        if (!zipSha && allHashes[1]) zipSha = allHashes[1];
-      }
+      const digestExeSha = assetDigestSha(exeAsset);
+      const digestZipSha = assetDigestSha(zipAsset);
+      const bodyHashes = parseReleaseBodyHashes(ghRel.body || "");
+      // Every independent claim about the same file must agree before signing.
+      assertHashesAgree("Setup.exe", [digestExeSha, manifestExeSha, bodyHashes.exeSha]);
+      assertHashesAgree("Portable ZIP", [digestZipSha, manifestZipSha, bodyHashes.zipSha]);
+      // GitHub's asset digest is computed from the stored bytes, so it wins;
+      // the manifest and release notes are fallbacks for older releases.
+      const exeSha = digestExeSha || manifestExeSha || bodyHashes.exeSha;
+      const zipSha = digestZipSha || manifestZipSha || bodyHashes.zipSha;
 
       const chosenAsset = exeAsset || zipAsset;
       const chosenSha = exeAsset ? exeSha : zipSha;
