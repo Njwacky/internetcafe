@@ -1745,6 +1745,8 @@ class CafeDesk(ctk.CTk):
                 if 0<=j<len(files): files[i],files[j]=files[j],files[i]; refresh(j)
         actions=button_row(box,pady=(0,18))
         button(actions,'Merge & save' if kind=='pdf' else 'Convert to PDF',lambda:self.save_files(kind),width=150).pack(side='left',padx=(0,BTN_PADX))
+        if kind=='image':
+            button(box,'Unlock more pages',lambda:license_ui.open_addon_modal(self,feature=license_guard.FEATURE_SCAN_PAGES,feature_title='More scan pages'),secondary=True,width=160).pack(anchor='w',padx=20,pady=(0,12))
         button(actions,'＋ Add files',add,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(actions,'Remove',remove,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(actions,'Clear all',clear_all,ghost=True).pack(side='left',padx=(0,BTN_PADX))
@@ -2191,24 +2193,6 @@ class CafeDesk(ctk.CTk):
         box=card(self.body); box.pack(fill='x')
         label(box,'Connect an AI provider',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
         label(box,'Paste a Google Gemini key (AIza... from aistudio.google.com/api-keys), OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek key. Auto-detect routes AIza... keys to Gemini, sk-or-... keys to OpenRouter, and gsk_... keys to Groq with a compatible default model.',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,12))
-
-        gem_card=ctk.CTkFrame(box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER)
-        gem_card.pack(fill='x',padx=20,pady=(0,14))
-        label(gem_card,'GOOGLE AI STUDIO — GET A GEMINI API KEY (FREE TIER AVAILABLE)',size=10,bold=True,color=LIME).pack(anchor='w',padx=14,pady=(10,3))
-        gem_row=ctk.CTkFrame(gem_card,fg_color='transparent'); gem_row.pack(fill='x',padx=14,pady=(0,10))
-        gem_url_entry=entry(gem_row); gem_url_entry.insert(0,services.GOOGLE_AI_STUDIO_KEYS_URL); gem_url_entry.configure(state='readonly'); gem_url_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
-        def open_gemini_keys():
-            try:
-                services.open_external_url(services.GOOGLE_AI_STUDIO_KEYS_URL)
-                self.status.set('Opened Google AI Studio API keys page in your browser')
-            except ValueError as exc:
-                messagebox.showerror('Could not open link',str(exc),parent=self)
-        def copy_gemini_keys():
-            self.clipboard_clear(); self.clipboard_append(services.GOOGLE_AI_STUDIO_KEYS_URL); self.update_idletasks()
-            self.status.set('Copied Google AI Studio link to clipboard')
-            messagebox.showinfo('Copied',f'Copied link:\n{services.GOOGLE_AI_STUDIO_KEYS_URL}',parent=self)
-        button(gem_row,'↗ Get Gemini API key',open_gemini_keys,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
-        button(gem_row,'Copy link',copy_gemini_keys,ghost=True).pack(side='left')
 
         label(box,'Provider',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         custom_wrap=ctk.CTkFrame(box,fg_color='transparent')

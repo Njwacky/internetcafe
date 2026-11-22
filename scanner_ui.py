@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import messagebox,filedialog
 from PIL import Image,ImageOps
 import customtkinter as ctk
-import win32_scanner,services
+import win32_scanner,services,license_guard,license_ui
 from scan_editor import ScanEditor
 
 def show_scanner(app,parent,card,label,button):
@@ -42,6 +42,11 @@ def show_scanner(app,parent,card,label,button):
     def scan():
         if app.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=app)
         if not app.scanner_device_id:return messagebox.showinfo('Select a scanner','Click Find / refresh scanners, then select your scanner from the list.',parent=app)
+        try:
+            services.check_scan_page_limit(len(app.scanned_pages)+1)
+        except ValueError as exc:
+            messagebox.showinfo('Free scan limit',str(exc),parent=app)
+            return license_ui.open_addon_modal(app,feature=license_guard.FEATURE_SCAN_PAGES,feature_title='More scan pages',on_updated=lambda _:app.show('Scan & images'))
         device=app.scanner_device_id;out=str(Path(app.session_temp.name)/('scan-'+uuid.uuid4().hex+'.bmp'))
         def done(path):
             app.scanned_pages.append(path);app.image_files.append(path)
@@ -86,6 +91,7 @@ def show_scanner(app,parent,card,label,button):
         sel=listing.curselection()
         if sel:review(app.scanned_pages[sel[0]])
         else:messagebox.showinfo('Select a scan','Select a scanned page to review.',parent=app)
+    button(box,'Unlock more than 5 pages (one-time payment)',lambda:license_ui.open_addon_modal(app,feature=license_guard.FEATURE_SCAN_PAGES,feature_title='More scan pages',on_updated=lambda _:app.show('Scan & images')),secondary=True,width=270).pack(anchor='w',padx=20,pady=(0,8))
     button(row,'Review / edit scan',review_selected,secondary=True,width=155).pack(side='left',padx=(0,8))
     button(row,'Save scans as PDF',save_pdf,width=185).pack(side='left',padx=(0,8));button(row,'Delete scan',remove,secondary=True,width=135).pack(side='left')
     label(box,'Scans are temporary files on this computer until saved. Next customer or normal exit attempts to remove them; crashes may leave copies. Saved PDFs are not deleted.',size=11,color='#A2ACC5',wraplength=730,justify='left').pack(anchor='w',padx=20,pady=(0,16))

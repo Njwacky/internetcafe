@@ -16,6 +16,7 @@ import settings_store
 MAX_IMAGE_PIXELS=50_000_000
 MAX_IMAGE_FILE_BYTES=60*1024*1024
 MAX_IMAGE_FRAMES=300
+FREE_SCAN_PAGES=5
 MAX_PDF_PAGES=2000
 MAX_PDF_FILE_BYTES=150*1024*1024
 MAX_PDF_PAGE_DIM_PT=14400.0
@@ -273,6 +274,14 @@ def split_each_page(source,folder):
             raise
     return len(targets)
 
+def check_scan_page_limit(page_count):
+    """Enforce the free per-job page limit; the paid add-on is machine-specific."""
+    if page_count>FREE_SCAN_PAGES:
+        import license_guard
+        if not license_guard.current_addon_status(license_guard.FEATURE_SCAN_PAGES).get('valid'):
+            raise ValueError(f'Free scan and image PDFs are limited to {FREE_SCAN_PAGES} pages per job. Contact the team for a one-time paid unlock: WhatsApp {DEVELOPER_WHATSAPP_LOCAL} or email {DEVELOPER_EMAIL}.')
+
+
 def images_to_pdf(paths,destination):
     if not paths: raise ValueError('Add at least one image.')
     _different(paths,destination)
@@ -284,6 +293,8 @@ def images_to_pdf(paths,destination):
                     total_frames+=1
                     if total_frames>MAX_IMAGE_FRAMES:
                         raise ValueError(f'Too many image frames (maximum {MAX_IMAGE_FRAMES}).')
+                    if total_frames == FREE_SCAN_PAGES+1:
+                        check_scan_page_limit(total_frames)
                     if frame.width*frame.height>MAX_IMAGE_PIXELS:
                         raise ValueError(f'Frame in “{Path(path).name}” exceeds the {MAX_IMAGE_PIXELS:,}-pixel safety limit.')
                     image=ImageOps.exif_transpose(frame.copy())
@@ -295,6 +306,8 @@ def images_to_pdf(paths,destination):
                     if story: story.append(PageBreak())
                     story.append(PDFImage(buffer,width=w*scale,height=h*scale))
         SimpleDocTemplate(temp,pagesize=A4,leftMargin=24,rightMargin=24,topMargin=24,bottomMargin=24).build(story)
+        if Path(temp).stat().st_size>MAX_PDF_FILE_BYTES:
+            raise ValueError(f'The PDF exceeds the {MAX_PDF_FILE_BYTES//(1024*1024)} MB size limit. Save fewer pages per PDF or reduce image sizes.')
     _atomic_write(destination,build)
 
 def export_text(text,destination):
