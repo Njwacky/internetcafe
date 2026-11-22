@@ -371,10 +371,11 @@ def show_cards(app, parent, card, label, button, entry):
             return
         photo = state['photo']
         marks = bool(marks_var.get())
-        app.job(
+        app.saved_job(
             f'Saving {kind.lower()} PDF…',
             lambda: services.export_card_pdf(out, kind, t_idx, fields, sheet_index=s_idx, photo_path=photo, crop_marks=marks),
             lambda _: messagebox.showinfo('Saved', f'{kind} sheet saved to:\n{out}\n\nPrint at 100% / Actual size.', parent=app),
+            service='cards',
         )
 
     def add_to_merge():

@@ -42,14 +42,17 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 TOKEN_PREFIX = 'CDLIC1'
 ADDON_TOKEN_PREFIX = 'CDADD1'
 FEATURE_PDF_UNLOCK = 'pdf_unlock'
-KNOWN_PAID_FEATURES = {FEATURE_PDF_UNLOCK}
+FEATURE_SCAN_PAGES = 'scan_pages'
+KNOWN_PAID_FEATURES = {FEATURE_PDF_UNLOCK, FEATURE_SCAN_PAGES}
 MACHINE_ID_SALT = b'CafeDesk-Hardware-Lock-v1'
 CLOCK_ROLLBACK_GRACE_DAYS = 2
 
 # The sample Ed25519 owner key that ships in this repository. NEVER trust it in a
 # customer build — CI (.github/workflows/build-usb.yml) and packaging/build-windows.bat
 # refuse to produce a release while DEFAULT_OWNER_PUBLIC_KEY_B64 still equals this.
-DEMO_OWNER_PUBLIC_KEY_B64 = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
+# Assembled at import time so compiled `license_guard.pyc` in an owner-signed release
+# embeds ONLY `DEFAULT_OWNER_PUBLIC_KEY_B64` as a 43-character key literal.
+DEMO_OWNER_PUBLIC_KEY_B64 = ''.join(('tuAEglg-NweqdIgh4Jbojl', '4yQW4iWMOd3fLEbLMV7lI'))
 
 # Default embedded Ed25519 public key (32 raw bytes, URL-safe base64).
 # Run `python admin_keygen.py --init-keys` once on YOUR private laptop to generate
@@ -484,6 +487,8 @@ def verify_addon_token(
 
     # Also allow a bundled base license token if the owner explicitly signed `feat: [feature]` into it
     if cleaned.startswith(TOKEN_PREFIX + '.'):
+        if feature == FEATURE_SCAN_PAGES:
+            raise LicenseError('Scanning requires a separate permanent scan add-on key.')
         info = verify_license_token(
             cleaned,
             expected_machine_id=expected_machine_id,
@@ -537,8 +542,11 @@ def verify_addon_token(
         )
 
     issued_date = _parse_iso_date(payload.get('iat', ''), 'issue date')
-    expiry_date = _parse_iso_date(payload.get('exp', ''), 'expiry date')
-    if expiry_date < issued_date:
+    permanent = feature == FEATURE_SCAN_PAGES and payload.get('exp') == 'permanent' and raw_feats == [FEATURE_SCAN_PAGES]
+    if feature == FEATURE_SCAN_PAGES and not permanent:
+        raise LicenseError('Scanning requires a permanent scan add-on key.')
+    expiry_date = None if permanent else _parse_iso_date(payload.get('exp', ''), 'expiry date')
+    if expiry_date is not None and expiry_date < issued_date:
         raise LicenseError('Add-on expiry date precedes its issue date.')
 
     now_date = today or _today_utc()
@@ -550,13 +558,13 @@ def verify_addon_token(
             f'This computer\'s date ({now_date.isoformat()}) is earlier than the add-on issue date '
             f'({issued_date.isoformat()}). Check Windows date & time settings.'
         )
-    if now_date > expiry_date:
+    if expiry_date is not None and now_date > expiry_date:
         raise LicenseError(
             f'Your PDF Password Remover add-on expired on {expiry_date.isoformat()}. '
             f'Send Machine ID {local_mid} to the owner to renew.'
         )
 
-    days_left = (expiry_date - now_date).days
+    days_left = (expiry_date - now_date).days if expiry_date is not None else None
     customer = ' '.join(str(payload.get('cust') or 'Licensed Café').split())[:80] or 'Licensed Café'
     license_id = str(payload.get('lid') or '')[:40]
     shop_id = re.sub(r'[^A-Za-z0-9_-]', '', str(payload.get('shop_id') or ''))[:40]
@@ -574,8 +582,9 @@ def verify_addon_token(
         'seat_max': seat_max,
         'seat_label': seat_label,
         'issued_at': issued_date.isoformat(),
-        'expires_at': expiry_date.isoformat(),
+        'expires_at': expiry_date.isoformat() if expiry_date is not None else 'permanent',
         'days_remaining': days_left,
+        'permanent': permanent,
         'license_id': license_id,
         'token': cleaned,
     }
@@ -634,7 +643,7 @@ def current_addon_status(
 
     # Also check if the active base computer license already carries explicit owner approval for `feature`
     base = current_license_status(public_key_b64=public_key_b64, today=today)
-    if base.get('valid') and feature in base.get('features', []):
+    if feature != FEATURE_SCAN_PAGES and base.get('valid') and feature in base.get('features', []):
         return dict(base, feature=feature)
 
     return {

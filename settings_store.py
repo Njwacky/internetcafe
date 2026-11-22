@@ -109,6 +109,7 @@ def _default_dict():
         'business_icon':DEFAULT_ICON,
         'currency':'R',
         'prices':[],
+        'receipt_service_links':{},
         'station_name':_default_station(),
         'shop_id':'',
         'city_label':'',
@@ -153,7 +154,7 @@ def _parse_settings_file(target):
         if k in (
             'pin_salt','pin_hash','currency','prices','failed_attempts','lockout_until_epoch',
             'station_name','shop_id','city_label','lan_sync_folder','supabase_url','supabase_anon_key',
-            'telemetry_enabled','telemetry_consent_asked',
+            'telemetry_enabled','telemetry_consent_asked','receipt_service_links',
         )
     })
     default.update(business_name=name,business_icon=icon if icon in ICONS else DEFAULT_ICON)
@@ -374,3 +375,14 @@ def import_shop_profile_pack(src_path,path=None):
             data['supabase_anon_key']=s_anon[:512]
     _write(data,path)
     return data
+
+
+def save_receipt_service_links(links,path=None):
+    """Staff-selected saved-work rates; prices themselves remain in the price list."""
+    from saved_services import SERVICES
+    data=load_settings(path,strict=True)
+    names={row['name'] for row in data['prices']}
+    if not isinstance(links,dict) or any(k not in SERVICES or v not in names for k,v in links.items()):
+        raise ValueError('Choose an existing price-list service for each saved-work rate.')
+    data['receipt_service_links']=dict(links)
+    _write(data,path)

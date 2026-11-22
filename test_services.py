@@ -36,6 +36,21 @@ class Tests(unittest.TestCase):
         tif=self.p/'multipage.tif'; Image.new('RGB',(100,150),'white').save(tif,save_all=True,append_images=[Image.new('RGB',(100,150),'black')])
         dest=self.p/'images.pdf'; services.images_to_pdf([img,tif],dest); self.assertEqual(len(PdfReader(dest).pages),3)
         output=self.p/'draft.txt'; services.export_text('Hello',output); self.assertEqual(output.read_text(),'Hello')
+    def test_images_pdf_size_limit_preserves_existing_output(self):
+        from unittest.mock import patch
+        img=self.p/'scan.png'; Image.new('RGB',(50,50),'white').save(img)
+        dest=self.p/'scan.pdf'
+        services.images_to_pdf([img],dest)
+        original=dest.read_bytes(); size=len(original)
+        # The boundary is inclusive, and an oversized export must not replace a file.
+        with patch.object(services,'MAX_PDF_FILE_BYTES',size):
+            services.images_to_pdf([img],dest)
+        dest.write_bytes(b'existing PDF')
+        with patch.object(services,'MAX_PDF_FILE_BYTES',size-1):
+            with self.assertRaisesRegex(ValueError,'PDF exceeds.*size limit'):
+                services.images_to_pdf([img],dest)
+        self.assertEqual(dest.read_bytes(),b'existing PDF')
+        self.assertEqual(list(self.p.glob('.cafedesk-*')),[])
     def test_cv_exports(self):
         for i in range(10):
             out=self.p/f'cv{i}.pdf'; services.export_document_pdf(make_document(CATEGORIES[0],i,{'name':'Nandi'}),out,CATEGORIES[0],i)
@@ -1032,6 +1047,23 @@ class DiagnosticRemediationTests(unittest.TestCase):
             self.assertEqual(groq_post_mock.call_args[0][0],groq_ep)
             self.assertEqual(groq_post_mock.call_args[1]['headers']['Authorization'],'Bearer gsk_dummytestkey')
             self.assertEqual(groq_post_mock.call_args[1]['json']['model'],groq_default)
+            # GPT-OSS is a reasoning model: keep enough completion budget for a visible reply.
+            groq_payload=groq_post_mock.call_args[1]['json']
+            self.assertEqual(groq_default,'openai/gpt-oss-120b')
+            self.assertEqual(groq_payload['reasoning_effort'],'low')
+            self.assertGreaterEqual(groq_payload['max_completion_tokens'],services.GROQ_REASONING_MIN_TOKENS)
+            self.assertNotIn('max_tokens',groq_payload)
+
+        # Retired Groq model IDs (shut down in 2026) are mapped to Groq's replacements.
+        self.assertEqual(services.normalize_ai_model('llama-3.3-70b-versatile',groq_ep),'openai/gpt-oss-120b')
+        self.assertEqual(services.normalize_ai_model('llama-3.1-8b-instant',groq_ep),'openai/gpt-oss-20b')
+        self.assertEqual(services.normalize_ai_model('qwen/qwen3-32b',groq_ep),'openai/gpt-oss-120b')
+        # Non-reasoning Groq models keep the caller's exact token limit.
+        with mock.patch('requests.post',return_value=fake_resp) as groq_post_mock:
+            services.call_ai_chat('gsk_dummytestkey','custom-groq-model','Hello',max_tokens=16)
+            groq_payload=groq_post_mock.call_args[1]['json']
+            self.assertEqual(groq_payload['max_completion_tokens'],16)
+            self.assertNotIn('reasoning_effort',groq_payload)
 
     def test_html_manual_bundled_and_complete(self):
         repo=Path(__file__).resolve().parent
@@ -1648,9 +1680,27 @@ class WorkspaceTelemetryTests(unittest.TestCase):
         self.assertEqual(payload['p_current_screen'],'PDF tools')
         self.assertEqual(payload['p_city_label'],'Benoni')
         self.assertEqual(payload['p_screen_counts'],{'PDF tools':2,'Receipts':3,'Help & privacy':5000})
+        self.assertEqual(payload['p_online_seconds'],0)
         blob=str(payload).lower()
         for forbidden in ('secret.txt','customer','filename','document text','token'):
             self.assertNotIn(forbidden,blob)
+
+    def test_telemetry_sends_clamped_online_seconds(self):
+        import cloud_sync
+        from unittest import mock
+        seen={}
+        def fake_request(url,key,method,path,payload=None,extra_headers=None,timeout=5.0):
+            seen.update(payload or {})
+            return {'ok':True}
+        cfg={'supabase_url':'https://demo.supabase.co','supabase_anon_key':'anon-xyz'}
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=fake_request):
+            cloud_sync.send_workspace_telemetry(cfg,machine_id='CD-1111-2222-3333',
+                                                screen_counts={'Home':1},online_seconds=1234567)
+        self.assertEqual(seen['p_online_seconds'],86400)
+        with mock.patch.object(cloud_sync,'_supabase_request',side_effect=fake_request):
+            cloud_sync.send_workspace_telemetry(cfg,machine_id='CD-1111-2222-3333',
+                                                screen_counts={'Home':1},online_seconds=-5)
+        self.assertEqual(seen['p_online_seconds'],0)
 
     def test_telemetry_unknown_screen_falls_back_to_home_and_offline_is_silent(self):
         import cloud_sync
@@ -1688,11 +1738,17 @@ class WorkspaceTelemetryTests(unittest.TestCase):
         repo=Path(__file__).resolve().parent
         schema=(repo/'supabase_schema.sql').read_text(encoding='utf-8')
         for fragment in ('public.station_heartbeats','public.workspace_tool_visits',
+                         'public.station_online_daily','p_online_seconds integer default 0',
                          'public.record_workspace_telemetry(','grant execute on function public.record_workspace_telemetry'):
             self.assertIn(fragment,schema)
+        mig=(repo/'supabase'/'migrations'/'20261121120000_pc_online_seconds.sql').read_text(encoding='utf-8')
+        for fragment in ('station_online_daily','p_online_seconds','online_seconds'):
+            self.assertIn(fragment,mig)
         dash=(repo/'owner-dashboard.html').read_text(encoding='utf-8')
-        for fragment in ('workspace_tool_visits','station_heartbeats','Most visited places',
-                         'CafeDesk-Setup.exe','CafeDesk-Windows-USB-Portable.zip','sync_github_release'):
+        for fragment in ('workspace_tool_visits','station_heartbeats','station_online_daily','Most visited places',
+                         'Longest online','Most active PCs','Most used page',
+                         'CafeDesk-Setup.exe','CafeDesk-Windows-USB-Portable.zip','sync_github_release',
+                         'Checksum mismatch','githubReleaseHashes'):
             self.assertIn(fragment,dash)
         self.assertNotIn('service_role',dash)
 
@@ -1779,8 +1835,14 @@ class WorkspaceTelemetryTests(unittest.TestCase):
     def test_windows_workflow_publishes_direct_download_release(self):
         wf=(Path(__file__).resolve().parent/'.github'/'workflows'/'build-usb.yml').read_text(encoding='utf-8')
         for fragment in ('permissions:','contents: write','gh release create','gh release upload',
-                         '--clobber','CafeDesk-Release-Checksums.json','installer-output/CafeDesk-Setup.exe'):
+                         'CafeDesk-Release-Checksums.json','installer-output/CafeDesk-Setup.exe'):
             self.assertIn(fragment,wf)
+        # Published release assets are immutable: replacing them would invalidate the
+        # owner-signed SHA-256 in Supabase and break every in-app update. The workflow
+        # must never overwrite an existing asset; a new build requires a version bump.
+        self.assertNotIn('--clobber',wf)
+        self.assertIn('immutable',wf)
+        self.assertIn('Bump version.py',wf)
 
 
 class SecurityHardeningTests(unittest.TestCase):
@@ -2308,12 +2370,13 @@ class TimerAndPrivacyHardeningTests(unittest.TestCase):
             pass
         s = Stub()
         s.events = queue.Queue(); s.busy = False; s._active_job_id = None
+        s._recovery_store = types.SimpleNamespace(invalidate=lambda: None)
         s.pending = []; s.statuses = []
         s._telemetry_lock = threading.Lock(); s._telemetry_counts = {}
         s.session_state = SessionState(s.events, s._telemetry_counts, s._telemetry_lock)
         s._workers = types.SimpleNamespace(run_telemetry_flush=lambda *a, **k: None)
         s._telemetry_inflight = False; s._telemetry_enabled = False
-        s._last_telemetry_flush = 0.0; s.current = 'Home'
+        s._last_telemetry_flush = 0.0; s._telemetry_online_anchor = 0.0; s._pending_online_seconds = 0; s.current = 'Home'
         s.after = lambda ms, fn=None: s.pending.append(fn)
         s.status = types.SimpleNamespace(set=lambda v: s.statuses.append(v),
                                         get=lambda: '')

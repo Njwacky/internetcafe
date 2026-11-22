@@ -302,10 +302,11 @@ def show_forms(app, parent, card, label, button, entry):
             initialfile=f'{slug}.pdf',
         )
         if out:
-            app.job(
+            app.saved_job(
                 'Saving PDF form…',
                 lambda: services.export_form_pdf(spec, out),
                 lambda _: messagebox.showinfo('Form saved', f'Printable / fillable PDF saved:\n{out}', parent=app),
+                service='forms',
             )
 
     def send_to_merge():

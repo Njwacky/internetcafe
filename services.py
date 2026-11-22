@@ -1,6 +1,7 @@
 """Local document operations for Café Desk. No GUI dependencies."""
 from pathlib import Path
 import os, tempfile, io, shutil, subprocess, sys
+import ai_safety
 from xml.sax.saxutils import escape
 from pypdf import PdfReader, PdfWriter
 from PIL import Image, ImageOps, ImageSequence
@@ -15,6 +16,7 @@ import settings_store
 MAX_IMAGE_PIXELS=50_000_000
 MAX_IMAGE_FILE_BYTES=60*1024*1024
 MAX_IMAGE_FRAMES=300
+FREE_SCAN_PAGES=5
 MAX_PDF_PAGES=2000
 MAX_PDF_FILE_BYTES=150*1024*1024
 MAX_PDF_PAGE_DIM_PT=14400.0
@@ -272,6 +274,14 @@ def split_each_page(source,folder):
             raise
     return len(targets)
 
+def check_scan_page_limit(page_count):
+    """Enforce the free per-job page limit; the paid add-on is machine-specific."""
+    if page_count>FREE_SCAN_PAGES:
+        import license_guard
+        if not license_guard.current_addon_status(license_guard.FEATURE_SCAN_PAGES).get('valid'):
+            raise ValueError(f'Free scan and image PDFs are limited to {FREE_SCAN_PAGES} pages per job. Contact the team for a one-time paid unlock: WhatsApp {DEVELOPER_WHATSAPP_LOCAL} or email {DEVELOPER_EMAIL}.')
+
+
 def images_to_pdf(paths,destination):
     if not paths: raise ValueError('Add at least one image.')
     _different(paths,destination)
@@ -283,6 +293,8 @@ def images_to_pdf(paths,destination):
                     total_frames+=1
                     if total_frames>MAX_IMAGE_FRAMES:
                         raise ValueError(f'Too many image frames (maximum {MAX_IMAGE_FRAMES}).')
+                    if total_frames == FREE_SCAN_PAGES+1:
+                        check_scan_page_limit(total_frames)
                     if frame.width*frame.height>MAX_IMAGE_PIXELS:
                         raise ValueError(f'Frame in “{Path(path).name}” exceeds the {MAX_IMAGE_PIXELS:,}-pixel safety limit.')
                     image=ImageOps.exif_transpose(frame.copy())
@@ -294,6 +306,8 @@ def images_to_pdf(paths,destination):
                     if story: story.append(PageBreak())
                     story.append(PDFImage(buffer,width=w*scale,height=h*scale))
         SimpleDocTemplate(temp,pagesize=A4,leftMargin=24,rightMargin=24,topMargin=24,bottomMargin=24).build(story)
+        if Path(temp).stat().st_size>MAX_PDF_FILE_BYTES:
+            raise ValueError(f'The PDF exceeds the {MAX_PDF_FILE_BYTES//(1024*1024)} MB size limit. Save fewer pages per PDF or reduce image sizes.')
     _atomic_write(destination,build)
 
 def export_text(text,destination):
@@ -540,9 +554,26 @@ AI_DEFAULT_MODELS={
     'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions':'gemini-2.5-flash',
     'https://openrouter.ai/api/v1/chat/completions':'openai/gpt-4o-mini',
     'https://api.openai.com/v1/chat/completions':'gpt-4o-mini',
-    'https://api.groq.com/openai/v1/chat/completions':'llama-3.3-70b-versatile',
+    'https://api.groq.com/openai/v1/chat/completions':'openai/gpt-oss-120b',
     'https://api.deepseek.com/chat/completions':'deepseek-chat',
 }
+
+# Groq shut these model IDs down for free/developer tiers (see
+# https://console.groq.com/docs/deprecations). Requests to them now fail, so map
+# any saved/typed old ID to Groq's recommended replacement.
+GROQ_RETIRED_MODELS={
+    'llama-3.3-70b-versatile':'openai/gpt-oss-120b',
+    'llama-3.1-8b-instant':'openai/gpt-oss-20b',
+    'qwen/qwen3-32b':'openai/gpt-oss-120b',
+    'qwen/qwen3.6-27b':'qwen/qwen3.8-27b',
+    'meta-llama/llama-4-scout-17b-16e-instruct':'openai/gpt-oss-120b',
+    'moonshotai/kimi-k2-instruct-0905':'openai/gpt-oss-120b',
+    'groq/compound':'openai/gpt-oss-120b',
+    'groq/compound-mini':'openai/gpt-oss-20b',
+}
+# GPT-OSS models on Groq are reasoning models: hidden reasoning tokens count
+# toward the completion budget, so tiny limits can leave the visible reply empty.
+GROQ_REASONING_MIN_TOKENS=512
 
 def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API key', custom_url:str='')->tuple[str,str]:
     """Resolve `(endpoint_url, provider_label)` from key prefix or explicit provider choice."""
@@ -579,6 +610,7 @@ def normalize_ai_model(model:str, endpoint_url:str)->str:
         other_provider_defaults.update({'openai/gpt-4o-mini','openrouter/auto'})
         if m in other_provider_defaults:
             return groq_default
+        return GROQ_RETIRED_MODELS.get(m,m)
     if 'generativelanguage.googleapis.com' in endpoint_url:
         if m.startswith('google/'):
             m=m.split('/',1)[1]
@@ -631,11 +663,7 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
     if 'openrouter.ai' in endpoint:
         headers['HTTP-Referer']='https://github.com/Njwacky/internetcafe'
         headers['X-Title']='Cafe Desk Document Studio'
-    sys_msg=system_prompt or (
-        'Improve this career document for clarity, grammar and professionalism. '
-        'Preserve facts and placeholders. Never invent qualifications, dates, employers '
-        'or achievements. Return only the improved document.'
-    )
+    sys_msg=system_prompt or ai_safety.AI_SYSTEM_PROMPT
     payload:dict={
         'model':resolved_model,
         'messages':[
@@ -643,10 +671,21 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
             {'role':'user','content':user_text},
         ],
     }
-    if max_tokens is not None:
+    if 'api.groq.com' in endpoint:
+        # Groq documents `max_completion_tokens`; GPT-OSS needs reasoning headroom.
+        if resolved_model.startswith('openai/gpt-oss'):
+            payload['reasoning_effort']='low'
+            if max_tokens is not None:
+                payload['max_completion_tokens']=max(int(max_tokens),GROQ_REASONING_MIN_TOKENS)
+        elif max_tokens is not None:
+            payload['max_completion_tokens']=int(max_tokens)
+    elif max_tokens is not None:
         payload['max_tokens']=int(max_tokens)
+    if 'api.openai.com' in endpoint:
+        payload['store']=False  # do not keep the completion in the OpenAI dashboard
     try:
-        resp=requests.post(endpoint,headers=headers,json=payload,timeout=timeout)
+        # No redirects: a redirect could re-send the customer's text to another server.
+        resp=requests.post(endpoint,headers=headers,json=payload,timeout=timeout,allow_redirects=False)
     except requests.RequestException as exc:
         raise ValueError(f'Could not reach {provider_label} ({endpoint}). Check your internet connection and try again.') from exc
 
@@ -655,8 +694,10 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
     except ValueError:
         body={}
 
+    if 300<=resp.status_code<400:
+        raise ValueError(f'{provider_label} tried to redirect the request elsewhere (HTTP {resp.status_code}). It was blocked to protect customer data. Check the endpoint URL.')
     if not resp.ok:
-        detail=_extract_ai_error_detail(body)
+        detail=ai_safety.redact_secrets(_extract_ai_error_detail(body),key)
         hint=f': {detail[:220]}' if detail else '.'
         raise ValueError(f'{provider_label} request failed (HTTP {resp.status_code}){hint} Check the API key, model ("{resolved_model}"), and account quota/credits.')
 
@@ -666,5 +707,32 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
         raise ValueError(f'{provider_label} returned an unexpected response format.') from exc
     if not isinstance(content,str) or not content.strip():
         raise ValueError(f'{provider_label} returned an empty response. Try another model (for example openai/gpt-4o-mini or openrouter/auto).')
+    if len(content)>ai_safety.MAX_AI_OUTPUT_CHARS:
+        raise ValueError(f'{provider_label} returned an unexpectedly long response; it was discarded.')
     return content.strip(),provider_label,resolved_model
+
+def improve_document_with_ai(api_key:str, model:str, text:str, *, provider_choice:str='Auto-detect from API key', custom_url:str='', timeout:int=60)->dict:
+    """Privacy-safe "improve draft": hide personal details, call the AI, clean and restore.
+
+    Returns a dict with `text` (final plain-text document), `provider`, `model`,
+    `hidden` (summary of what was kept private) and `missing` (placeholders the AI
+    dropped - the matching details may be missing from the result).
+    """
+    if not (text or '').strip():
+        raise ValueError('Enter or create a draft first.')
+    if len(text)>ai_safety.MAX_AI_INPUT_CHARS:
+        raise ValueError(f'The draft is too long to send to AI ({len(text):,} characters; limit {ai_safety.MAX_AI_INPUT_CHARS:,}). Improve it in smaller parts.')
+    protected=ai_safety.protect_personal_details(text)
+    if not protected.text.strip():
+        raise ValueError('Nothing to improve: the draft only contains the name/contact header.')
+    reply,provider_label,resolved_model=call_ai_chat(
+        api_key,model,ai_safety.wrap_document(protected.text),
+        provider_choice=provider_choice,custom_url=custom_url,
+        system_prompt=ai_safety.AI_SYSTEM_PROMPT,timeout=timeout,
+    )
+    cleaned=ai_safety.clean_ai_document(reply,original=protected.text)
+    if not cleaned.strip():
+        raise ValueError(f'{provider_label} returned no usable text. Try again or choose another model.')
+    final,missing=ai_safety.restore_personal_details(cleaned,protected)
+    return {'text':final,'provider':provider_label,'model':resolved_model,'hidden':protected.summary(),'missing':missing}
 

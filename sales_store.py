@@ -1,5 +1,6 @@
 """Local sales records, independent of GUI. No payment processing or tax logic."""
-import csv,json,shutil,sqlite3
+import csv,json,shutil,sqlite3,uuid
+import license_guard
 from contextlib import closing
 from datetime import date,datetime
 from decimal import Decimal,InvalidOperation
@@ -9,7 +10,7 @@ import services
 
 
 class SalesStoreError(ValueError):
-    """Raised when the local sales SQLite file is damaged or unreadable."""
+    """Raised when the local sales SQLite file cannot complete an operation."""
 
 
 def db_path():
@@ -29,14 +30,30 @@ def _quarantine_corrupt_db(target):
     return corrupt_copy
 
 
-def connect(path=None):
+def _database_error(exc,target):
+    """Do not misdiagnose a busy/read-only/full disk as database corruption."""
+    code=(getattr(exc,'sqlite_errorcode',0) or 0) & 0xff
+    if code in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED):
+        return SalesStoreError('Sales database is busy or locked. Close other app instances and retry. Completed saved sales remain in the local retry queue when available.')
+    if code==sqlite3.SQLITE_FULL:
+        return SalesStoreError('Sales database could not be written because the disk is full. Free space and retry the pending saved sales.')
+    if code==sqlite3.SQLITE_READONLY:
+        return SalesStoreError('Sales database is read-only. Check folder permissions and retry the pending saved sales.')
+    if code in (sqlite3.SQLITE_CORRUPT,sqlite3.SQLITE_NOTADB):
+        _quarantine_corrupt_db(target)
+        name=Path(target).name
+        return SalesStoreError(f'Local sales database ({name}) is damaged or unreadable. A quarantine copy ({name}.corrupt) was saved when possible; restore a backup or archive the damaged file, then retry pending saved sales.')
+    return SalesStoreError('Could not access the local sales database: '+str(exc)+'. Check storage and permissions, then retry pending saved sales.')
+
+
+def connect(path=None,timeout=10):
     target=Path(path or db_path()); target.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     try:
-        conn=sqlite3.connect(target,timeout=10)
+        conn=sqlite3.connect(target,timeout=timeout)
         try: settings_store._harden(target)
         except Exception: pass
         conn.execute('PRAGMA foreign_keys=ON')
-        conn.execute('PRAGMA busy_timeout=10000')
+        conn.execute(f'PRAGMA busy_timeout={int(max(0,timeout)*1000)}')
         conn.execute('''CREATE TABLE IF NOT EXISTS sales (
             sale_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, station TEXT NOT NULL DEFAULT '',
             business TEXT NOT NULL, currency TEXT NOT NULL, total_cents INTEGER NOT NULL,
@@ -49,28 +66,32 @@ def connect(path=None):
         if 'void_reason' not in cols:
             conn.execute('ALTER TABLE sales ADD COLUMN void_reason TEXT')
         conn.execute('CREATE INDEX IF NOT EXISTS sales_date_idx ON sales(created_at)')
+        conn.execute('CREATE TABLE IF NOT EXISTS sales_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         conn.commit()
         return conn
     except sqlite3.DatabaseError as exc:
         try: conn.close()
         except Exception: pass
-        _quarantine_corrupt_db(target)
-        raise SalesStoreError(
-            f'Local sales database ({target.name}) is damaged or unreadable. '
-            f'A quarantine copy ({target.name}.corrupt) was saved; restore a backup or archive the damaged file.'
-        ) from exc
+        raise _database_error(exc,target) from exc
 
 
 def validate_items(items):
-    if not items or len(items)>500:raise ValueError('A sale must have between 1 and 500 service lines.')
+    if not isinstance(items,list) or not items or len(items)>500:raise ValueError('A sale must have between 1 and 500 service lines.')
     out=[];total=0
     for item in items:
-        name=str(item['name']).strip()
+        if not isinstance(item,dict) or not all(k in item for k in ('name','qty','price')):
+            raise ValueError('Invalid service line.')
+        if not isinstance(item['name'],str):raise ValueError('Invalid service name.')
+        name=item['name'].strip()
         if not name or len(name)>80:raise ValueError('Invalid service name.')
         try:
-            qty=int(item['qty']);value=Decimal(str(item['price']))
+            raw_qty=item['qty']
+            if isinstance(raw_qty,bool) or not (type(raw_qty) is int or (isinstance(raw_qty,str) and raw_qty.isascii() and raw_qty.isdigit())):
+                raise ValueError()
+            qty=int(raw_qty);value=Decimal(str(item['price']))
             if not 1<=qty<=999 or not value.is_finite() or value<0 or value>10000000 or value.as_tuple().exponent < -2:raise ValueError()
         except (ValueError,TypeError,InvalidOperation):raise ValueError('Invalid quantity or price.')
+        if value==0:value=Decimal('0.00')  # -0.00 and 0.00 are the same free service.
         cents=int(value*100);total+=cents*qty;out.append({'name':name,'qty':qty,'price':format(value,'.2f')})
     return out,total
 
@@ -89,13 +110,14 @@ def record_sale(sale_id,business,currency,items,created_at=None,path=None,statio
             conn.execute('BEGIN IMMEDIATE')
             old=conn.execute('SELECT business,currency,total_cents,items_json FROM sales WHERE sale_id=?',(sale_id,)).fetchone()
             if old:
-                if old!=(business,currency,total,payload):raise ValueError('This sale reference already exists with different details.')
+                old_items,_=validate_items(json.loads(old[3]))
+                old_payload=json.dumps(old_items,ensure_ascii=False,separators=(',',':'))
+                if (*old[:3],old_payload)!=(business,currency,total,payload):raise ValueError('This sale reference already exists with different details.')
                 conn.rollback();return False
             conn.execute('INSERT INTO sales(sale_id,created_at,station,business,currency,total_cents,items_json) VALUES(?,?,?,?,?,?,?)',(sale_id,when,clean_station,business,currency,total,payload));conn.commit()
         except sqlite3.DatabaseError as exc:
             conn.rollback()
-            _quarantine_corrupt_db(path or db_path())
-            raise SalesStoreError('Could not record sale because the local sales database is damaged.') from exc
+            raise _database_error(exc,path or db_path()) from exc
         except Exception:
             conn.rollback();raise
     return True
@@ -125,7 +147,7 @@ def void_sale(sale_id,reason='Mistaken entry',voided_at=None,path=None):
             conn.commit()
         except sqlite3.DatabaseError as exc:
             conn.rollback()
-            raise SalesStoreError('Could not void sale because the local sales database is damaged.') from exc
+            raise _database_error(exc,path or db_path()) from exc
         except Exception:
             conn.rollback();raise
     return True
@@ -158,8 +180,7 @@ def report(start,end,path=None,limit=500):
             by_station=conn.execute("SELECT CASE WHEN TRIM(COALESCE(station,''))='' THEN 'Unlabeled PC' ELSE station END AS station_label, currency, COUNT(*) AS count, COALESCE(SUM(total_cents),0) AS cents FROM sales WHERE voided_at IS NULL AND substr(created_at,1,10) BETWEEN ? AND ? GROUP BY station_label, currency ORDER BY station_label, currency",(start,end)).fetchall()
             void_count=conn.execute("SELECT COUNT(*) FROM sales WHERE voided_at IS NOT NULL AND substr(created_at,1,10) BETWEEN ? AND ?",(start,end)).fetchone()[0]
     except sqlite3.DatabaseError as exc:
-        _quarantine_corrupt_db(path or db_path())
-        raise SalesStoreError('Sales database is damaged or unreadable. Restore a backup or archive sales.sqlite3.') from exc
+        raise _database_error(exc,path or db_path()) from exc
     return {
         'rows':[dict(r) for r in rows],
         'totals':[dict(r) for r in totals],
@@ -168,15 +189,15 @@ def report(start,end,path=None,limit=500):
     }
 
 
-def export_sales_records(start=None,end=None,path=None,limit=5000):
+def export_sales_records(start=None,end=None,path=None,limit=None):
     """Return normalized sale dicts suitable for multi-PC JSON/LAN/Supabase sync."""
     with closing(connect(path)) as conn:
         conn.row_factory=sqlite3.Row
         if start and end:
             s,e=date_range(start,end)
-            rows=conn.execute("SELECT * FROM sales WHERE substr(created_at,1,10) BETWEEN ? AND ? ORDER BY created_at DESC LIMIT ?",(s,e,limit)).fetchall()
+            rows=conn.execute("SELECT * FROM sales WHERE substr(created_at,1,10) BETWEEN ? AND ? ORDER BY created_at DESC LIMIT ?",(s,e,limit if limit is not None else -1)).fetchall()
         else:
-            rows=conn.execute("SELECT * FROM sales ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall()
+            rows=conn.execute("SELECT * FROM sales ORDER BY created_at DESC, sale_id DESC LIMIT ?",(limit if limit is not None else -1,)).fetchall()
     out=[]
     for r in rows:
         try: items=json.loads(r['items_json'])
@@ -196,56 +217,70 @@ def export_sales_records(start=None,end=None,path=None,limit=5000):
 
 
 def merge_external_sales(records,path=None):
-    """Idempotently merge sales from other shop PCs (SQLite file, JSON pack, or Supabase sync).
+    """Merge valid rows; report rejected rows/conflicts without hiding partial success.
 
-    Existing `sale_id` rows are NEVER duplicated; if a sale was voided on another PC, the void
-    status propagates cleanly.
+    Money, original date and station are immutable. Voids are monotonic, but may
+    only attach to an identical original sale, never merely a matching ID.
     """
     if not isinstance(records,list):
         raise ValueError('Sales sync data must be a list of sale records.')
-    inserted=0; updated_voids=0; skipped=0
+    inserted=0; updated_voids=0; skipped=0; rejected=0; conflicts=0; errors=[]
+    def reject(index,reason,conflict=False):
+        nonlocal rejected,conflicts
+        rejected+=1
+        if conflict:conflicts+=1
+        if len(errors)<20:errors.append(f'Row {index+1}: {reason}')
     with closing(connect(path)) as conn:
         try:
             conn.execute('BEGIN IMMEDIATE')
-            for rec in records:
-                if not isinstance(rec,dict):
-                    skipped+=1; continue
-                sid=str(rec.get('sale_id') or '').strip()[:64]
-                if not sid:
-                    skipped+=1; continue
-                raw_items=rec.get('items')
-                if raw_items is None and rec.get('items_json'):
-                    raw_items=json.loads(str(rec['items_json']))
-                if not isinstance(raw_items,list) or not raw_items:
-                    skipped+=1; continue
+            for index,rec in enumerate(records):
                 try:
+                    if not isinstance(rec,dict):raise ValueError('Sale must be an object.')
+                    sid=rec.get('sale_id')
+                    if not isinstance(sid,str) or not sid.strip() or len(sid)>64:raise ValueError('Invalid sale reference.')
+                    raw_items=rec.get('items')
+                    if raw_items is None and rec.get('items_json'):
+                        raw_items=json.loads(str(rec['items_json']))
                     clean_items,calc_cents=validate_items(raw_items)
                     bname=settings_store.clean_name(rec.get('business') or settings_store.DEFAULT_NAME)
-                    curr=str(rec.get('currency') or 'R').strip()[:8]
+                    curr=str(rec.get('currency') or 'R').strip()
+                    if not curr or len(curr)>8 or any(c in curr for c in '\n\r|'):raise ValueError('Invalid currency.')
                     when=str(rec.get('created_at') or '').strip()
                     datetime.fromisoformat(when)
-                except Exception:
-                    skipped+=1; continue
-                st=' '.join(str(rec.get('station') or '').split())[:40]
-                v_at=str(rec.get('voided_at') or '').strip() or None
-                v_reason=' '.join(str(rec.get('void_reason') or '').split())[:160] or None
-                payload=json.dumps(clean_items,ensure_ascii=False,separators=(',',':'))
-                existing=conn.execute('SELECT voided_at FROM sales WHERE sale_id=?',(sid,)).fetchone()
+                    st=' '.join(str(rec.get('station') or '').split())[:40]
+                    v_at=str(rec.get('voided_at') or '').strip() or None
+                    if v_at:datetime.fromisoformat(v_at)
+                    v_reason=' '.join(str(rec.get('void_reason') or '').split())[:160] or None
+                    if 'total_cents' in rec and (type(rec['total_cents']) is not int or rec['total_cents']!=calc_cents):
+                        raise ValueError('Sale total does not match its service lines.')
+                    payload=json.dumps(clean_items,ensure_ascii=False,separators=(',',':'))
+                except (ValueError,TypeError,KeyError,InvalidOperation) as exc:
+                    reject(index,str(exc));continue
+                existing=conn.execute('SELECT created_at,station,business,currency,total_cents,items_json,voided_at FROM sales WHERE sale_id=?',(sid,)).fetchone()
+                immutable=(when,st,bname,curr,calc_cents,payload)
                 if existing is None:
                     conn.execute(
                         'INSERT INTO sales(sale_id,created_at,station,business,currency,total_cents,items_json,voided_at,void_reason) VALUES(?,?,?,?,?,?,?,?,?)',
-                        (sid,when,st,bname,curr,calc_cents,payload,v_at,v_reason),
+                        (sid,*immutable,v_at,v_reason),
                     )
                     inserted+=1
-                elif v_at and not existing[0]:
-                    conn.execute('UPDATE sales SET voided_at=?, void_reason=? WHERE sale_id=?',(v_at,v_reason or 'Voided on shop PC',sid))
-                    updated_voids+=1
                 else:
-                    skipped+=1
+                    # Older ledgers may serialize equivalent item JSON with spaces.
+                    old_items,_=validate_items(json.loads(existing[5]))
+                    old=(*existing[:5],json.dumps(old_items,ensure_ascii=False,separators=(',',':')))
+                    if old!=immutable:
+                        reject(index,'Sale reference conflicts with immutable recorded details.',True);continue
+                    if v_at and not existing[6]:
+                        conn.execute('UPDATE sales SET voided_at=?, void_reason=? WHERE sale_id=?',(v_at,v_reason or 'Voided on shop PC',sid))
+                        updated_voids+=1
+                    else:skipped+=1
             conn.commit()
+        except sqlite3.DatabaseError as exc:
+            conn.rollback();raise _database_error(exc,path or db_path()) from exc
         except Exception:
-            conn.rollback(); raise
-    return {'inserted':inserted,'updated_voids':updated_voids,'skipped':skipped}
+            conn.rollback();raise
+    return {'inserted':inserted,'updated_voids':updated_voids,'skipped':skipped,
+            'rejected':rejected,'conflicts':conflicts,'errors':errors}
 
 
 def merge_from_file(source_file,path=None):
@@ -255,35 +290,52 @@ def merge_from_file(source_file,path=None):
         raise FileNotFoundError('Selected sales file was not found.')
     if src.suffix.lower() in ('.json',):
         raw=json.loads(src.read_text(encoding='utf-8'))
-        recs=raw.get('sales',[]) if isinstance(raw,dict) else raw
+        if isinstance(raw,dict) and 'sales' not in raw:
+            raise ValueError('Sales file has no sales array.')
+        recs=raw['sales'] if isinstance(raw,dict) else raw
         return merge_external_sales(recs,path=path)
     # Otherwise treat as SQLite backup from another PC
-    other_records=export_sales_records(path=src,limit=50000)
+    other_records=export_sales_records(path=src)
     return merge_external_sales(other_records,path=path)
 
 
+def sync_identity(path=None):
+    """Stable ledger identity + machine binding; editable station names are labels only.
+
+    A copied backup on a different PC gets a distinct identity. Two ledgers on the
+    same PC also remain distinct. Legacy label-based snapshots are read, not erased.
+    """
+    with closing(connect(path)) as conn:
+        conn.execute('INSERT OR IGNORE INTO sales_metadata(key,value) VALUES(?,?)',('sync_uuid',uuid.uuid4().hex))
+        seed=conn.execute('SELECT value FROM sales_metadata WHERE key=?',('sync_uuid',)).fetchone()[0]
+        conn.commit()
+    return uuid.uuid5(uuid.NAMESPACE_OID,license_guard.get_machine_id()+'|'+seed).hex
+
+
 def sync_lan_folder(folder_path,station_name='',path=None):
-    """Two-way offline LAN folder sync: writes this PC's sales snapshot and merges all other PCs' snapshots."""
+    """Full-history snapshots preserve old voids; failures are explicit partial results."""
     folder=Path(str(folder_path or '').strip())
     if not str(folder_path or '').strip():
         raise ValueError('Choose a Shared Network / USB Sync Folder in Business Settings first.')
     folder.mkdir(parents=True,exist_ok=True)
-    safe_station=''.join(c if c.isalnum() or c in ('-','_') else '-' for c in (station_name or 'pc')).strip('-')[:32] or 'pc'
-    own_file=folder/f'sales-{safe_station}.cafesales.json'
-    own_records=export_sales_records(path=path,limit=5000)
-    own_payload=json.dumps({'format':'cafedesk-sales-v1','station':station_name,'sales':own_records},ensure_ascii=False)
+    identity=sync_identity(path)
+    own_file=folder/f'sales-{identity}.cafesales.json'
+    own_records=export_sales_records(path=path)
+    own_payload=json.dumps({'format':'cafedesk-sales-v2','station':station_name,'device_id':identity,'sales':own_records},ensure_ascii=False)
     services._atomic_write(own_file,lambda tmp: Path(tmp).write_text(own_payload,encoding='utf-8'))
-
-    total_in=0; total_void=0; files_read=0
+    total_in=0; total_void=0; files_read=0; rejected=0; errors=[]
     for peer_file in sorted(folder.glob('sales-*.cafesales.json')):
-        if peer_file.resolve()==own_file.resolve():
-            continue
+        if peer_file.resolve()==own_file.resolve():continue
         try:
             res=merge_from_file(peer_file,path=path)
-            total_in+=res['inserted']; total_void+=res['updated_voids']; files_read+=1
-        except Exception:
-            continue
-    return {'inserted':total_in,'updated_voids':total_void,'peer_files':files_read,'own_file':str(own_file)}
+            total_in+=res['inserted'];total_void+=res['updated_voids'];files_read+=1
+            rejected+=res['rejected']
+            if res['rejected']:errors.append(f"{peer_file.name}: {res['rejected']} rejected row(s). "+'; '.join(res['errors'][:3]))
+        except Exception as exc:
+            errors.append(f'{peer_file.name}: {exc}')
+    return {'inserted':total_in,'updated_voids':total_void,'peer_files':files_read,
+            'own_file':str(own_file),'rejected':rejected,'errors':errors,'complete':not errors}
+
 
 
 _CSV_FORMULA_PREFIXES = (

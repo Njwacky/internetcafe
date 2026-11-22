@@ -2,7 +2,7 @@
 ;
 ; Build the portable app first using build-windows.bat, then compile with Inno Setup 6.
 ; MyAppVersion defaults to the current release (see version.py). CI overrides it with
-; the value from version.py:  iscc /DMyAppVersion=0.8.3 packaging\windows-installer.iss
+; the value from version.py:  iscc /DMyAppVersion=0.8.5 packaging\windows-installer.iss
 ;
 ; Design intent: the installer should read like the first screen of the product, not a
 ; bare file-copy wizard. Before the customer clicks Install it answers the four things a
@@ -11,7 +11,7 @@
 ; box or a paragraph of security jargon is what makes people abandon a download.
 #define MyAppName "Café Desk"
 #ifndef MyAppVersion
-#define MyAppVersion "0.8.3"
+#define MyAppVersion "0.8.5"
 #endif
 #define MyAppPublisher "Njwacko Studio"
 #define MyAppExeName "CafeDesk.exe"
@@ -60,7 +60,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 ; admin_keygen.py and owner-keys/ must never travel to a customer PC.
-Source: "..\dist\CafeDesk\*"; DestDir: "{app}"; Excludes: "CafeDeskData\*,owner-keys\*,*admin_keygen*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\CafeDesk\*"; DestDir: "{app}"; Excludes: "CafeDeskData\*,owner-keys\*,*admin_keygen*,_internal\release-key.meta"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Keep the 76-byte public-key verification stamp uncompressed so `python tools/verify_release_key.py CafeDesk-Setup.exe`
+; can verify the exact owner public key inside the downloaded single-file installer without executing it.
+Source: "..\dist\CafeDesk\_internal\release-key.meta"; DestDir: "{app}\_internal"; Flags: ignoreversion nocompression skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "Café Desk document studio"
@@ -68,6 +71,11 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Open Café Desk and activate this computer"; Flags: nowait postinstall skipifsilent
+
+[InstallDelete]
+; Clear the previous PyInstaller runtime bundle before copying the new release so
+; upgraded libraries never collide with stale DLL/.pyd files. CafeDeskData is never touched.
+Type: filesandordirs; Name: "{app}\_internal"
 
 [UninstallDelete]
 ; Only installer-created notes; customer documents and CafeDeskData are never touched.

@@ -23,10 +23,15 @@ install_ctk_entry_guard()
 
 from templates import NAMES, CV_NAMES, CATEGORIES, LABELS, CAREER_ENTRY_FIELDS, field_labels_for, uses_company_field, make_document, parse_career_entries, serialize_career_entries
 import services
+import ai_safety
+import ai_key_store
 import settings_store
 import sales_store
+import saved_services
+import sales_outbox
 import price_list
 import projects
+from recovery_store import RecoveryStore
 import privacy
 import bluetooth_access
 from sales_ui import show_reports
@@ -40,6 +45,7 @@ from forms_ui import show_forms
 import license_guard
 import license_ui
 import cloud_sync
+import app_updater
 
 ctk.set_appearance_mode('dark')
 ctk.set_default_color_theme('green')
@@ -118,12 +124,13 @@ class CafeDesk(ctk.CTk):
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._entitlement_sync_running=False; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._telemetry_online_anchor=0.0; self._pending_online_seconds=0; self._entitlement_sync_running=False; self._update_check_running=False; self._available_update=None; self._prepared_update=None; self.topbar_update_btn=None; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
         # Central state manager owns the shared, mutable session/telemetry containers so
         # screens and workers read from one source of truth (see app_state.SessionState).
         # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
         self.session_state=SessionState(self.events,self._telemetry_counts,self._telemetry_lock)
         self._workers=BackgroundTasks()
+        self._recovery_store=RecoveryStore(self.recovery_dir())
         # A crash while drawing one screen must never leave a half-built, unusable window.
         # The shell, the timers and the event pump are created first, so even a missing
         # asset or a bad widget option still leaves staff a working app plus a clear status.
@@ -132,10 +139,12 @@ class CafeDesk(ctk.CTk):
             log_exception('create_shell', exc); self._startup_error=f'The workspace shell could not be drawn: {exc}'
         try: self.title(self.business_name.get())
         except Exception: pass
-        self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick)
+        self.update_clock(); self.after(100,self.poll_events); self.after(5000,self.check_idle); self.after(60000,self.recovery_tick); self.after(45000,self._telemetry_tick); self.after(12000,self.remote_entitlement_tick); self.after(1200,self._consume_startup_update_notice); self.after(3500,self.remote_update_tick)
         try:
             self._telemetry_enabled=settings_store.telemetry_enabled()
             self._telemetry_consent_asked=bool(preferences.get('telemetry_consent_asked'))
+            if self._telemetry_enabled:
+                self._telemetry_online_anchor=time.monotonic()
         except Exception:
             self._telemetry_enabled=False; self._telemetry_consent_asked=False
         if not self._startup_error:
@@ -145,6 +154,7 @@ class CafeDesk(ctk.CTk):
         if self._startup_error:
             try: self.status.set('Startup problem • '+self._startup_error+' • use the sidebar or Help & privacy')
             except Exception: pass
+        self.after(1800,self._notify_pending_sales)
         if settings_corrupted:
             self.status.set('Settings file damaged • staff access locked fail-closed until restored')
         if not settings_corrupted and not self._startup_error:
@@ -221,7 +231,9 @@ class CafeDesk(ctk.CTk):
             self._close_confirmed_busy=True
             if not messagebox.askyesno('Task still running','A document is still being processed. Closing now abandons that task.\n\nClose Café Desk anyway?',parent=self):
                 self._close_confirmed_busy=False; return
+        if saved_services.unprotected_sales(self.receipt_items) and not messagebox.askyesno('Saved sales are not protected','Some saved work has neither a sales record nor a durable retry copy. Closing now can lose those earnings. Retry Record sale from Receipts first. Close anyway?',parent=self):return
         if self.has_unsaved_work() and not messagebox.askyesno('Close Café Desk?','Current workspace data (drafts, scans, OCR text/images, PDF queues, cards, forms or sheets) will be closed. Save any work you need first. If recovery is enabled, the latest copy may not include recent changes. Close anyway?',parent=self): return
+        self._recovery_store.invalidate()
         self.remove_session_files(); self.destroy()
     def remove_session_files(self):
         try: self.session_temp.cleanup()
@@ -462,7 +474,9 @@ class CafeDesk(ctk.CTk):
                     rem_after=settings_store.lockout_remaining()
                     if rem_after>0: self.lockout_until=time.monotonic()+rem_after
                     messagebox.showerror('Staff access','Incorrect PIN. After 5 failed attempts, staff access locks for 60 seconds.',parent=self); return False
-            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer'); return True
+            self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer')
+            self._load_saved_ai_key(pin)
+            return True
         except settings_store.CorruptedSettingsError as exc:
             bak=settings_store.settings_path().with_name('settings.json.bak')
             if bak.is_file() and messagebox.askyesno('Settings damaged (fail-closed)',f'{exc}\n\nA verified backup (settings.json.bak) exists. Restore settings.json.bak now so you can enter your staff PIN?',parent=self):
@@ -476,6 +490,26 @@ class CafeDesk(ctk.CTk):
                 messagebox.showerror('Settings damaged (fail-closed)',f'{exc}\n\nFolder:\n{settings_store.settings_path().parent}',parent=self)
             return False
         except (ValueError,OSError) as exc: messagebox.showerror('Staff access',str(exc),parent=self); return False
+    def _load_saved_ai_key(self,pin):
+        """After a correct PIN, unlock a key saved with “Remember on this computer”."""
+        try:
+            info=ai_key_store.saved_key_info()
+            if not info or self.key.get().strip(): return
+            if info.get('damaged'): self.status.set('Staff unlocked • saved AI key file is damaged (AI settings → Forget saved key)'); return
+            data=ai_key_store.load_key(pin)
+            if not data: return
+            self.key.set(data['api_key'])
+            if data.get('provider') in services.AI_PROVIDERS: self.ai_provider.set(data['provider'])
+            if data.get('model'): self.model.set(data['model'])
+            if data.get('custom_url'):
+                services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])  # https/localhost only
+                self.ai_custom_url.set(data['custom_url'])
+            self.status.set(f"Staff unlocked • saved AI key loaded ({info.get('hint','')})")
+        except (ai_key_store.SavedKeyError,ValueError) as exc:
+            self.key.set('')
+            self.status.set(f'Staff unlocked • saved AI key not loaded: {exc}')
+        except Exception:
+            self._log_exception('load_saved_ai_key')
     def change_pin(self):
         try:
             rem=settings_store.lockout_remaining()
@@ -493,7 +527,14 @@ class CafeDesk(ctk.CTk):
             confirm=simpledialog.askstring('Confirm staff PIN','Enter the new PIN again:',show='*',parent=self)
             if confirm is None: return
             if new!=confirm: raise ValueError('PINs do not match.')
-            settings_store.set_pin(new); messagebox.showinfo('PIN updated','Staff PIN changed.',parent=self)
+            had_saved_key=bool(ai_key_store.saved_key_info())
+            settings_store.set_pin(new)
+            note=''
+            if had_saved_key:
+                try: rewrapped=ai_key_store.rewrap_for_new_pin(old,new)
+                except (OSError,ValueError): rewrapped=False
+                note='\n\nThe saved AI key now unlocks with the new PIN.' if rewrapped else '\n\nThe saved AI key could not be moved to the new PIN. Open AI settings and save the key again.'
+            messagebox.showinfo('PIN updated','Staff PIN changed.'+note,parent=self)
         except (ValueError,OSError) as exc: messagebox.showerror('Could not update PIN',str(exc),parent=self)
     def update_lock_button(self):
         btn=getattr(self,'lock_staff_btn',None)
@@ -517,7 +558,7 @@ class CafeDesk(ctk.CTk):
         if not messagebox.askyesno('Save private project','The project will include document details and copies of any photos. It is not encrypted. Save only where appropriate for the customer. Continue?',parent=self): return
         filename='career-project.cafeproject' if kind=='career' else 'picture-sheet.cafeproject'
         path=filedialog.asksaveasfilename(parent=self,defaultextension='.cafeproject',filetypes=[('Café Desk project','*.cafeproject')],initialfile=filename)
-        if path:self.job('Saving project…',lambda:projects.save(kind,snapshot,path),lambda _:messagebox.showinfo('Project saved',f'Project saved to:\n{path}\n\nKeep it private; it includes photos.',parent=self))
+        if path:self.saved_job('Saving project…',lambda:projects.save(kind,snapshot,path),lambda _:messagebox.showinfo('Project saved',f'Project saved to:\n{path}\n\nKeep it private; it includes photos.',parent=self),'project')
     def open_project(self,path=None,allow_recovery=False):
         if self.busy: return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
         path=path or filedialog.askopenfilename(parent=self,filetypes=[('Café Desk project','*.cafeproject')])
@@ -539,11 +580,7 @@ class CafeDesk(ctk.CTk):
     def recovery_dir(self):return settings_store.settings_path().parent/'recovery'
     def recovery_exists(self):return any((self.recovery_dir()/(name+ext)).exists() for name in ('career','sheet') for ext in ('.cafeproject','.prev.cafeproject'))
     def delete_recovery_copies(self,notify=True):
-        failed=[]
-        for name in ('career','sheet'):
-            for ext in ('.cafeproject','.prev.cafeproject'):
-                try:(self.recovery_dir()/(name+ext)).unlink(missing_ok=True)
-                except OSError:failed.append(name+ext)
+        failed=self._recovery_store.clear()
         if failed:messagebox.showwarning('Recovery files remain','Some recovery files could not be removed. Check the recovery folder manually.',parent=self)
         elif notify:messagebox.showinfo('Recovery cleared','Recovery copies were deleted. Saved projects and original files were not deleted.',parent=self)
     def recover_project(self,kind):
@@ -580,21 +617,13 @@ class CafeDesk(ctk.CTk):
         if career['draft'].strip() or any(v.strip() for v in career['fields'].values()) or career['photo']:jobs.append(('career',career))
         if sheet['items']:jobs.append(('sheet',sheet))
         if not jobs:return
-        directory=self.recovery_dir()
+        generation=self._recovery_store.generation()
         def work():
-            import shutil
-            directory.mkdir(parents=True,exist_ok=True,mode=0o700)
-            for kind,data in jobs:
-                cur_file=directory/(kind+'.cafeproject')
-                prev_file=directory/(kind+'.prev.cafeproject')
-                if cur_file.exists():
-                    try: shutil.copy2(cur_file,prev_file)
-                    except OSError: pass
-                projects.save(kind,data,str(cur_file),allow_internal=True)
+            return self._recovery_store.save(generation,jobs)
         def on_fail(err_msg):
             self.status.set(f'Auto-recovery failed ({err_msg}) • save your work manually!')
             self._last_recovery_error=str(err_msg)
-        self.job('Saving recovery copy…',work,lambda _:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted'),error_cb=on_fail)
+        self.job('Saving recovery copy…',work,lambda saved:self.status.set('Recovery copy saved locally • previous checkpoint retained • not encrypted') if saved else None,error_cb=on_fail)
     def recovery_tick(self):
         try: self.perform_recovery()
         except Exception: self._log_exception('recovery_tick')
@@ -626,6 +655,204 @@ class CafeDesk(ctk.CTk):
                 self.close_app()
         elif activated:
             self.status.set('Cloud license approval applied successfully')
+    def _consume_startup_update_notice(self):
+        try:
+            self._workers._pool.run(app_updater.cleanup_stale_staging)
+            notice=app_updater.consume_last_update_result()
+            if not isinstance(notice,dict): return
+            if notice.get('status')=='completed':
+                self.status.set(f'Updated to Café Desk v{APP_BUILD}  •  License, PIN, prices & sales history preserved')
+            elif notice.get('status')=='failed':
+                detail=str(notice.get('detail') or 'Installer could not finish.')
+                self.status.set(f'Previous in-app update did not finish ({detail}) • still running v{APP_BUILD}')
+        except Exception:
+            self._log_exception('_consume_startup_update_notice')
+    def remote_update_tick(self):
+        # Quietly check for signed in-app updates after launch and every 4 hours.
+        self.after(14400000,self.remote_update_tick)
+        try:
+            cfg=settings_store.load_settings()
+            if self._update_check_running or not cloud_sync.is_supabase_configured(cfg): return
+            self._update_check_running=True
+        except Exception:
+            self._log_exception('remote_update_tick')
+            self._update_check_running=False
+            return
+        self._workers.run_app_update_badge(
+            lambda: cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD),
+            lambda res: self.events.put(('ok',self._finish_silent_update_check,res,None)),
+        )
+    def _finish_silent_update_check(self,res):
+        self._update_check_running=False
+        if not isinstance(res,dict) or not res.get('ok'): return
+        if app_updater.can_apply_in_app(res):
+            was_known=bool(self._available_update and self._available_update.get('latest_version')==res.get('latest_version'))
+            self._set_available_update(res,notify_status=not was_known)
+            if self.current=='Home' and not was_known and not self.busy:
+                try: self.show('Home')
+                except Exception: pass
+        else:
+            self._set_available_update(None)
+    def _set_available_update(self,res,notify_status=False):
+        self._available_update=res if app_updater.can_apply_in_app(res) else None
+        btn=getattr(self,'topbar_update_btn',None)
+        if btn is not None and btn.winfo_exists():
+            if self._available_update:
+                ver=str(self._available_update.get('latest_version') or '').strip()
+                btn.configure(text=f'↑ Update v{ver}' if ver else '↑ Update now')
+                btn.pack(side='right',padx=(0,8),pady=15)
+            else:
+                btn.pack_forget()
+        if notify_status and self._available_update and not self.busy:
+            ver=str(self._available_update.get('latest_version') or '').strip()
+            self.status.set(f'Update ready: Café Desk v{ver} — click “↑ Update v{ver}” in the top bar to update in-app')
+    def _confirm_ready_for_update_restart(self,latest_version):
+        if self.busy:
+            messagebox.showinfo('Please wait','Wait for the current task to finish before restarting for the update.',parent=self)
+            return False
+        if saved_services.unprotected_sales(self.receipt_items) and not messagebox.askyesno(
+            'Saved sales are not protected',
+            'Some saved work has neither a sales record nor a durable retry copy. Retry Record sale from Receipts first, or restart anyway?',
+            parent=self,
+        ):
+            return False
+        if self.has_unsaved_work() and not messagebox.askyesno(
+            f'Restart into Café Desk v{latest_version}?',
+            f'Save any open customer drafts, scans, OCR text, PDF queues, cards or forms before Café Desk restarts into v{latest_version}.\n\nRestart and apply the update now?',
+            parent=self,
+        ):
+            self.status.set(f'Update v{latest_version} verified & ready — save your work, then click “↑ Update v{latest_version}” to restart')
+            return False
+        return True
+    def _apply_prepared_update_and_restart(self,prepared):
+        if not self._confirm_ready_for_update_restart(prepared.version):
+            return False
+        # Clean up session temp BEFORE spawning the external updater and never block
+        # exit with a modal warning dialog once the child PID-waiter has started.
+        self._recovery_store.invalidate()
+        try: self.session_temp.cleanup()
+        except OSError: pass
+        try:
+            app_updater.apply_prepared_update(prepared)
+        except Exception as exc:
+            messagebox.showerror('Could not apply update',str(exc),parent=self)
+            return False
+        self._prepared_update=None
+        self.destroy()
+        return True
+    def check_and_update_in_app(self):
+        if self.busy:
+            return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
+        cfg=settings_store.load_settings()
+        if not cloud_sync.is_supabase_configured(cfg):
+            return messagebox.showinfo(
+                'Configure Cloud Updates',
+                'Add your Supabase Project URL and Public Anon Key in Business Settings → Multi-PC Shop & Supabase Cloud Sync to enable 1-click in-app updates.',
+                parent=self,
+            )
+        def _run_chk():
+            return {
+                'update': cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD),
+                'announcements': cloud_sync.fetch_app_announcements(cfg),
+            }
+        def _done_chk(result):
+            res=result['update']
+            announcements=result.get('announcements') or []
+            if announcements:
+                notice_text='\n\n'.join(f"{str(a.get('title') or 'Café Desk notice')}\n{str(a.get('message') or '')}" for a in announcements[:5])
+                messagebox.showinfo('Café Desk news & offers',notice_text,parent=self)
+            if not res.get('ok'):
+                return messagebox.showerror('Update Check Failed',str(res.get('error') or 'Could not check updates.'),parent=self)
+            if not res.get('update_available'):
+                self._set_available_update(None)
+                self.status.set(f'Up to date • Café Desk v{APP_BUILD}')
+                if self.current=='About & contact':
+                    try: self.show('About & contact')
+                    except Exception: pass
+                return messagebox.showinfo('Up to Date',f'You already have the latest Café Desk version (v{APP_BUILD}).',parent=self)
+            self._set_available_update(res)
+            if self.current=='About & contact':
+                try: self.show('About & contact')
+                except Exception: pass
+            self.start_in_app_update(res)
+        self.job('Checking for Café Desk updates…',_run_chk,_done_chk)
+    def start_in_app_update(self,res=None):
+        if self.busy:
+            return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
+        target_res=res if isinstance(res,dict) else self._available_update
+        if not isinstance(target_res,dict) or not target_res.get('update_available'):
+            return self.check_and_update_in_app()
+        ver=str(target_res.get('latest_version') or '').strip()
+        notes=target_res.get('release_notes') or 'Bug fixes and improvements.'
+        mode=app_updater.detect_install_mode()
+        if not str(target_res.get('signature') or '').strip() and not str(target_res.get('portable_signature') or '').strip():
+            return messagebox.showwarning(
+                'Update Not Signed',
+                f'Version {ver} is published but is NOT signed by the owner.\n\n'
+                'For safety Café Desk will not apply an unverified update. '
+                'Ask the owner to publish a signed release, then check again.',
+                parent=self,
+            )
+        if mode=='source':
+            return messagebox.showinfo(
+                f'Update v{ver} Available (Source Mode)',
+                f'Café Desk v{ver} is available (you are running v{APP_BUILD} from a Python source checkout).\n\n'
+                'Run `git pull` to update source files. Packaged Windows and USB portable builds apply updates in-place automatically.',
+                parent=self,
+            )
+        try:
+            app_updater.select_release_package(target_res,mode)
+        except app_updater.UnsignedUpdateError:
+            return messagebox.showwarning(
+                'Update Not Signed',
+                f'Version {ver} is published without an owner signature for this edition.\n\n'
+                'Ask the owner to publish a signed release, then check again.',
+                parent=self,
+            )
+        except Exception as exc:
+            return messagebox.showerror('Update Unavailable',str(exc),parent=self)
+
+        # If this exact update was already staged & verified earlier in the session, re-verify
+        # its SHA-256 and extracted payload (closes TOCTOU in %TEMP%) and apply immediately.
+        prep=self._prepared_update
+        if prep is not None and prep.version==ver.lstrip('vV'):
+            if app_updater.is_prepared_update_intact(prep):
+                self._apply_prepared_update_and_restart(prep)
+                return
+            self._prepared_update=None
+
+        ask_msg=(
+            f'Café Desk v{ver} is ready to install inside the app (you have v{APP_BUILD}).\n\n'
+            f"What's new:\n{notes}\n\n"
+            'Update in-place now and restart Café Desk automatically?\n'
+            '(No separate download or setup wizard needed — your computer license, PIN, prices, and sales history stay untouched.)'
+        )
+        if not messagebox.askyesno('Update Café Desk In-App',ask_msg,parent=self):
+            return
+
+        progress_gate={'last':0.0}
+        def _progress(done_bytes,total_bytes):
+            now_t=time.monotonic()
+            if total_bytes and done_bytes<total_bytes and (now_t-progress_gate['last'])<0.15:
+                return
+            progress_gate['last']=now_t
+            if total_bytes>0:
+                pct=min(100,int((done_bytes*100)/total_bytes))
+                mb_done=done_bytes/1048576
+                mb_tot=total_bytes/1048576
+                msg=f'Updating Café Desk to v{ver} in-app… {pct}% ({mb_done:.1f} / {mb_tot:.1f} MB)'
+            else:
+                mb_done=done_bytes/1048576
+                msg=f'Updating Café Desk to v{ver} in-app… {mb_done:.1f} MB'
+            self.events.put(('ok',lambda m=msg:self.status.set(m),None,None))
+
+        def _run_stage():
+            return app_updater.prepare_in_app_update(target_res,install_mode=mode,progress_cb=_progress)
+        def _done_stage(prepared):
+            self._prepared_update=prepared
+            self.status.set(f'Owner signature & SHA-256 verified for v{prepared.version} • restarting Café Desk…')
+            self._apply_prepared_update_and_restart(prepared)
+        self.job(f'Updating Café Desk to v{ver} in-app…',_run_stage,_done_stage,timeout=600)
     def projects_screen(self):
         self.heading(self.body,'Projects & recovery','Save your work to reopen and keep working later.')
         box=card(self.body);box.pack(fill='x',pady=(0,12));label(box,'Save or open a project',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,4))
@@ -642,7 +869,9 @@ class CafeDesk(ctk.CTk):
             if toggle.get():
                 if not messagebox.askyesno('Enable recovery?', 'Recovery saves customer text and photos to this computer about every 60 seconds, including after a crash or normal exit. The copies are not encrypted. Get customer permission and use Next customer when finished. Enable?',parent=self):toggle.set(False);return
                 self.recovery_enabled=True;self.after(1200,self.perform_recovery)
-            else:self.recovery_enabled=False
+            else:
+                self.recovery_enabled=False
+                self._recovery_store.invalidate()
         ctk.CTkSwitch(box,text='Save recovery copies during this session',variable=toggle,command=change).pack(anchor='w',padx=20,pady=(0,14))
         recovery_row=action_row(box,
                    secondary=(('Recover career',lambda:self.recover_project('career')),
@@ -683,9 +912,15 @@ class CafeDesk(ctk.CTk):
                 return messagebox.showerror('Could not save preference',str(exc),parent=self)
             self._telemetry_enabled=enabled
             self._telemetry_consent_asked=True
-            if not enabled:
-                with self._telemetry_lock:
+            with self._telemetry_lock:
+                if not enabled:
                     self._telemetry_counts.clear()
+                    self._pending_online_seconds=0
+                    self._telemetry_online_anchor=0.0
+                else:
+                    # Start a fresh online-duration window; never bank pre-consent time.
+                    self._pending_online_seconds=0
+                    self._telemetry_online_anchor=time.monotonic()
             self.status.set('Anonymous usage statistics ' + ('enabled • thank you' if enabled else 'disabled • nothing is uploaded'))
         ctk.CTkSwitch(box,text='Share anonymous usage statistics',variable=var,command=toggle).pack(anchor='w',padx=18,pady=(0,10))
         label(box,'Turning this off also stops the online station heartbeat. Licences, updates and key sync still work.',
@@ -733,11 +968,11 @@ class CafeDesk(ctk.CTk):
             'Career documents':'Add your details, create and edit a draft, then choose the Document type and Template right beside the live A4 preview (click the enlarge icon to inspect full size).',
             'Cards & invitations':'Design Business cards or Invitation cards across all 13 templates, preview a single card or A4 sheet live, and save printable A4 PDFs with optional trim marks.',
             'Forms creator':'Build printable or digitally fillable AcroForm A4 PDFs — general applications, affidavits, consent forms, customer intake sheets, or custom fields.',
-            'Receipts':'Choose services and quantity. Save a receipt PDF; staff must separately confirm Record sale to add it to history.',
+            'Receipts':'Saved customer exports automatically add priced services to receipts and sales history. Saving a receipt also records any manual lines, without duplicating saved work.',
             'Sales reports':'Choose a date range to view locally recorded totals, export a CSV or save a selected sale record. Simple internal service log — payment status, cash/card drawer reconciliation and tax/VAT are NOT calculated.',
             'Price settings':'Enter each business service and price on its own line as service | price. Include units in the service name.',
             'Business settings':'Change the business name, icon, logo or staff PIN. Settings are local to this computer user.',
-            'AI settings':'Enter your session API key — Google Gemini (AIza... from aistudio.google.com/api-keys), OpenRouter, OpenAI, Groq, DeepSeek or custom URL. Confirm before sending any draft.\n\nShortcuts: F1 = Quick help  •  Ctrl+L = Lock staff  •  Ctrl+Shift+N = Next customer'}
+            'AI settings':'Enter your API key (optionally save it encrypted with the staff PIN) — Google Gemini (AIza... from aistudio.google.com/api-keys), OpenRouter, OpenAI, Groq, DeepSeek or custom URL. Confirm before sending any draft.\n\nShortcuts: F1 = Quick help  •  Ctrl+L = Lock staff  •  Ctrl+Shift+N = Next customer'}
         messagebox.showinfo('Quick help • '+self.current,messages.get(self.current,'Open Help & privacy for the full guide.'),parent=self)
     def open_user_manual(self):
         root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent)); path=root/'cafe-desk-manual.html'
@@ -768,7 +1003,7 @@ class CafeDesk(ctk.CTk):
         label(manual_banner,'Open the complete formatted HTML handbook (all 17 sidebar tools, 5-minute shop setup, 30-second pitch & printable A4 handout) locally in your browser.',size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,10))
         button(manual_banner,'Open Full Manual & Sales Guide (HTML)  ↗',self.open_user_manual,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(anchor='w',padx=18,pady=(0,15))
         self._build_notice_card()
-        sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Add services in Receipts. Saving a receipt PDF does not record a sale. Staff choose Record sale; staff-only Sales reports show recorded totals. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
+        sections=[('1  Set prices','A staff member opens Price settings, enters each service and price (include units such as per page), and saves. Everyone can view the read-only Price list.'),('2  Create a CV','Open Career documents, choose a template, add details and optionally a photo. Create the draft, edit it, then save a PDF or a project to continue later.'),('3  Merge PDFs','In the CV screen, add the draft to PDF merge, or open PDF tools and add existing PDFs. Arrange them and save the merged file.'),('4  Scan and extract text','Open Scan & images. On Windows, find and select a WIA scanner, scan each page and save a PDF. Alternatively use your scanner app. Preview selected images and extract English text with Tesseract OCR (direct download link below).'),('5  Print photos','Open A4 picture sheets, add pictures and choose a layout or custom dimensions. Save the PDF, then print from your PDF viewer at actual size.'),('6  Receipts and reports','Successfully saved customer exports automatically appear in Receipts and sales totals. Saving a receipt records manual lines too. Unsaved drafts and temporary files never count. Sales reports offer Today and This month. Payment and tax are not tracked.'),('7  Finish with a customer','Use Next customer to clear the current workspace, temporary merge files and recovery copies and lock staff. Saved files and originals stay on the computer.')]
         for title,description in sections:
             box=card(self.body);box.pack(fill='x',pady=(0,8));label(box,title,size=14,bold=True).pack(anchor='w',padx=18,pady=(14,4));label(box,description,size=12,color=MUTED,wraplength=740,justify='left').pack(anchor='w',padx=18,pady=(0,14))
         ocr_box=card(self.body);ocr_box.pack(fill='x',pady=(0,10))
@@ -830,98 +1065,35 @@ class CafeDesk(ctk.CTk):
 
         contact_box=card(self.body);contact_box.pack(fill='x',pady=(0,12))
 
-        # --- Remote Over-the-Internet App Updater Card ---
+        # --- Seamless In-App Self-Updater Card ---
         upd_box=card(self.body); upd_box.pack(fill='x',pady=(0,12),before=contact_box)
-        label(upd_box,'Remote App Updates & Online Key Sync (Over the Internet)',size=16,bold=True,color=LIME).pack(anchor='w',padx=20,pady=(18,4))
+        label(upd_box,'In-App Updates & Online Key Sync',size=16,bold=True,color=LIME).pack(anchor='w',padx=20,pady=(18,4))
         label(
             upd_box,
-            f'Current installed version: v{APP_BUILD}. Check for newer Café Desk releases over the internet (owner-signed, SHA-256 verified installer; your license, PIN, price list, and sales history stay untouched).',
+            f'Current installed version: v{APP_BUILD}. Updates download in the background, verify the owner Ed25519 signature and SHA-256 checksum, apply in-place, and reopen Café Desk automatically — no separate app download or reinstall needed. Your license, PIN, price list, and sales history stay untouched.',
             size=12,color=MUTED,wraplength=740,justify='left',
         ).pack(anchor='w',padx=20,pady=(0,12))
 
-
-        def update_dot_state(available):
+        def update_dot_state(res_obj):
             if not update_dot.winfo_exists(): return
-            if available:
-                update_dot.pack(side='left',before=check_updates_button,padx=(0,8))
+            available=bool(isinstance(res_obj,dict) and res_obj.get('update_available'))
+            ver=str((res_obj or {}).get('latest_version') or '').strip()
+            if available and app_updater.can_apply_in_app(res_obj):
+                update_dot.configure(text=f'● v{ver} ready to install in-app' if ver else '● Update ready')
+                update_dot.pack(side='left',before=check_updates_button,padx=(0,10))
+                if check_updates_button.winfo_exists():
+                    check_updates_button.configure(text=f'Update to v{ver} Now' if ver else 'Update In-App Now')
+            elif available:
+                cur_mode=app_updater.detect_install_mode()
+                sub='source checkout' if cur_mode=='source' else 'awaiting owner signature'
+                update_dot.configure(text=f'● v{ver} available ({sub})' if ver else f'● Update available ({sub})')
+                update_dot.pack(side='left',before=check_updates_button,padx=(0,10))
+                if check_updates_button.winfo_exists():
+                    check_updates_button.configure(text='Check & Update In-App')
             else:
                 update_dot.pack_forget()
-
-        def check_updates_click():
-            cfg=settings_store.load_settings()
-            if not cloud_sync.is_supabase_configured(cfg):
-                return messagebox.showinfo(
-                    'Configure Cloud Updates',
-                    'Add your Supabase Project URL and Public Anon Key in Business Settings → Multi-PC Shop & Supabase Cloud Sync to enable 1-click over-the-internet updates.',
-                    parent=self,
-                )
-            def _run_chk():
-                return {
-                    'update': cloud_sync.check_for_app_update(cfg,current_version=APP_BUILD),
-                    'announcements': cloud_sync.fetch_app_announcements(cfg),
-                }
-            def _done_chk(result):
-                res=result['update']
-                announcements=result.get('announcements') or []
-                if announcements:
-                    notice_text='\n\n'.join(f"{str(a.get('title') or 'Café Desk notice')}\n{str(a.get('message') or '')}" for a in announcements[:5])
-                    messagebox.showinfo('Café Desk news & offers',notice_text,parent=self)
-                if not res.get('ok'):
-                    return messagebox.showerror('Update Check Failed',str(res.get('error') or 'Could not check updates.'),parent=self)
-                update_dot_state(bool(res.get('update_available')))
-                if not res.get('update_available'):
-                    self.status.set(f'Up to date • Café Desk v{APP_BUILD}')
-                    return messagebox.showinfo('Up to Date',f"You already have the latest Café Desk version (v{APP_BUILD}).",parent=self)
-                notes=res.get('release_notes') or 'Bug fixes and improvements.'
-                # Fail closed: this build refuses unsigned installers, so say so plainly
-                # instead of downloading something that will be rejected afterwards.
-                if not str(res.get('signature') or '').strip():
-                    return messagebox.showwarning(
-                        'Update Not Signed',
-                        f"Version {res['latest_version']} is published but is NOT signed by the owner.\n\n"
-                        'For safety this build will not download or install an unverified installer. '
-                        'Ask the owner to publish a signed release, then check again.',
-                        parent=self,
-                    )
-                ask_msg=(
-                    f"New version available: Café Desk v{res['latest_version']} (you have v{APP_BUILD})\n\n"
-                    f"What's new:\n{notes}\n\n"
-                    f"Download & verify the owner-signed update (SHA-256 + Ed25519 signature)?\n"
-                    f"(Your computer license, PIN, prices, and sales history are preserved.)"
-                )
-                if not messagebox.askyesno('Update Available!',ask_msg,parent=self):
-                    return
-                dl_dir=Path.home()/'Downloads'
-                if not dl_dir.is_dir(): dl_dir=Path(self.session_temp.name)
-                def _run_dl():
-                    return cloud_sync.download_and_verify_update(
-                        res['download_url'],
-                        res['sha256'],
-                        dl_dir,
-                        version_label=res['latest_version'],
-                        expected_signature=res.get('signature',''),
-                    )
-                def _done_dl(saved_installer):
-                    self.status.set(f'Verified update downloaded: {saved_installer.name}')
-                    if sys.platform.startswith('win') and str(saved_installer).lower().endswith('.exe'):
-                        if messagebox.askyesno(
-                            'Update Verified — Launch Installer?',
-                            f'Owner signature & SHA-256 verification passed!\nSaved to:\n{saved_installer}\n\nClose Café Desk and launch the v{res["latest_version"]} installer now?',
-                            parent=self,
-                        ):
-                            try:
-                                os.startfile(str(saved_installer))
-                                self.close_app()
-                            except Exception as exc:
-                                messagebox.showerror('Could not start installer',str(exc),parent=self)
-                    else:
-                        messagebox.showinfo(
-                            'Update Downloaded & Verified',
-                            f'Owner signature & SHA-256 checksum verified!\nSaved update package to:\n{saved_installer}',
-                            parent=self,
-                        )
-                self.job(f"Downloading & verifying Café Desk v{res['latest_version']}…",_run_dl,_done_dl)
-            self.job('Checking for remote Café Desk updates…',_run_chk,_done_chk)
+                if check_updates_button.winfo_exists():
+                    check_updates_button.configure(text='Check & Update In-App')
 
         def sync_keys_online_click():
             cfg=settings_store.load_settings()
@@ -945,17 +1117,31 @@ class CafeDesk(ctk.CTk):
             self.job('Syncing Machine ID approvals from cloud…',_do_k,_done_k)
 
         urow=ctk.CTkFrame(upd_box,fg_color='transparent'); urow.pack(fill='x',padx=20,pady=(0,18))
-        update_dot=ctk.CTkLabel(urow,text='● Update available',text_color='#FFCC66',font=('Segoe UI',11,'bold'))
-        check_updates_button=button(urow,'Check for App Updates',check_updates_click,fg_color=LIME,hover_color='#A9EB65',text_color='#142018')
+        known_ver=str((self._available_update or {}).get('latest_version') or '').strip() if self._available_update else ''
+        update_dot=ctk.CTkLabel(urow,text=f'● v{known_ver} ready to install in-app' if known_ver else '● Update available',text_color='#FFCC66',font=('Segoe UI',11,'bold'))
+        check_updates_button=button(
+            urow,
+            f'Update to v{known_ver} Now' if known_ver else 'Check & Update In-App',
+            lambda:self.start_in_app_update(self._available_update) if self._available_update else self.check_and_update_in_app(),
+            fg_color=LIME,hover_color='#A9EB65',text_color='#142018',
+        )
         check_updates_button.pack(side='left',padx=(0,BTN_PADX))
+        if known_ver:
+            update_dot.pack(side='left',before=check_updates_button,padx=(0,10))
+            button(urow,'Check Again',self.check_and_update_in_app,ghost=True).pack(side='left',padx=(0,BTN_PADX))
         button(urow,'Sync Approved Keys Online',sync_keys_online_click,secondary=True).pack(side='left')
         if cloud_sync.is_supabase_configured(settings_store.load_settings()):
             self._workers.run_app_update_badge(
                 lambda: cloud_sync.check_for_app_update(settings_store.load_settings(), current_version=APP_BUILD),
-                lambda res: (
-                    self.after(0, lambda: update_dot_state(bool(res.get('update_available'))))
-                    if res.get('ok') else None
-                ),
+                lambda res: self.events.put((
+                    'ok',
+                    lambda r: (
+                        self._set_available_update(r if r.get('update_available') else None),
+                        update_dot_state(r),
+                    ) if isinstance(r, dict) and r.get('ok') else None,
+                    res,
+                    None,
+                )),
             )
         lic_status=license_guard.current_license_status()
         lic_box=card(self.body);lic_box.pack(fill='x',pady=(0,12),before=contact_box)
@@ -1191,73 +1377,144 @@ class CafeDesk(ctk.CTk):
         def save():
             try:
                 if self.busy: return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
+                if not self.can_clear_receipt():return
                 if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Discard unrecorded receipt?','Saving new prices clears the current unrecorded receipt. Continue?',parent=self): return
                 settings_store.save_prices(currency.get(),rates.get('1.0','end-1c')); self.reset_receipt()
-                messagebox.showinfo('Price list saved','Your rates were saved. The current unsaved receipt has been cleared.',parent=self)
+                messagebox.showinfo('Price list saved','Your rates were saved. The current receipt view has been cleared; recorded sales remain in history.',parent=self)
+                self.show('Price settings')
             except (ValueError,OSError) as exc: messagebox.showerror('Could not save rates',str(exc),parent=self)
         action_row(box,primary=(('Save price list',save),),pady=(0,20))
+        links_box=card(self.body);links_box.pack(fill='x',pady=(12,0))
+        label(links_box,'Automatic receipt rates',size=16,bold=True).pack(anchor='w',padx=20,pady=(16,5))
+        label(links_box,'Each successful customer export adds one job to Receipts and sales totals.\nChoose per-job rates, not per-page rates. Drafts, previews, temporary merge files and recovery copies never count.\nUnlinked tools ask staff to choose a rate before saving. Save your price list before linking rates.',size=12,color=MUTED,justify='left').pack(anchor='w',padx=20,pady=(0,12))
+        link_vars={};names=[p['name'] for p in data['prices']];unset='— Choose on first save —'
+        saved_links=data.get('receipt_service_links',{})
+        if not isinstance(saved_links,dict):saved_links={}
+        for key,title in saved_services.SERVICES.items():
+            row=ctk.CTkFrame(links_box,fg_color='transparent');row.pack(fill='x',padx=20,pady=4)
+            label(row,title,size=12).pack(side='left')
+            value=saved_links.get(key,unset)
+            var=ctk.StringVar(value=value if value in names else unset);link_vars[key]=var
+            ctk.CTkOptionMenu(row,values=[unset]+names,variable=var,width=260).pack(side='right')
+        def save_links():
+            try:
+                settings_store.save_receipt_service_links({k:v.get() for k,v in link_vars.items() if v.get()!=unset})
+                messagebox.showinfo('Automatic rates saved','Future saved jobs will use these price-list rates. Existing sales stay unchanged.',parent=self)
+            except (ValueError,OSError) as exc:messagebox.showerror('Could not save automatic rates',str(exc),parent=self)
+        action_row(links_box,primary=(('Save automatic rates',save_links),),pady=(12,20))
+    def _notify_pending_sales(self):
+        try:
+            count=sales_outbox.pending_count()
+            if count:
+                self.status.set(f'{count} saved sale(s) await recording • open Sales reports → Retry pending saved sales')
+                messagebox.showwarning('Saved sales need attention',f'{count} saved-sale retry file(s) need checking. Sales totals may be incomplete. Open Sales reports → Retry pending saved sales. These may be from an earlier session; any unreadable files will be reported for staff attention.',parent=self)
+        except (ValueError,OSError) as exc:
+            self.status.set('Could not inspect pending saved sales: '+str(exc))
+    def can_clear_receipt(self):
+        if saved_services.unprotected_sales(getattr(self,'receipt_items',[])):
+            messagebox.showerror('Record saved work first','Some saved work has neither a confirmed sales record nor a durable retry copy. Use Record sale in Receipts before clearing it. Check available disk space and permissions.',parent=self)
+            return False
+        return True
     def reset_receipt(self):
+        if not self.can_clear_receipt():return False
         self.receipt_items=[];self.receipt_currency=None;self.receipt_token=uuid.uuid4().hex;self.receipt_timestamp=None;self.receipt_business=None;self.receipt_recorded=False
+        return True
     def receipt_screen(self):
-        self.heading(self.body,'Receipts','Create a simple receipt from your business’s own price list.')
+        self.heading(self.body,'Receipts','Saved customer work appears here automatically. Unsaved drafts never count toward sales.')
         data=settings_store.load_settings();prices=data['prices'];currency=data.get('currency','R');box=card(self.body);box.pack(fill='x')
         label(box,'Add a service',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
         if not prices:
             label(box,'No prices have been set. A staff member can add services under Price settings.',size=12,color=MUTED).pack(anchor='w',padx=20,pady=(0,16))
-            button(box,'Open price settings',lambda:self.show('Price settings'),secondary=True,width=150).pack(anchor='w',padx=20,pady=(0,20));return
+            button(box,'Open price settings',lambda:self.show('Price settings'),secondary=True,width=150).pack(anchor='w',padx=20,pady=(0,20))
         lookup={x['name']:x['price'] for x in prices};row=ctk.CTkFrame(box,fg_color='transparent');row.pack(fill='x',padx=20,pady=(4,12))
-        choice=ctk.StringVar(value=prices[0]['name']);ctk.CTkOptionMenu(row,values=list(lookup),variable=choice,fg_color=GREEN,button_color=GREEN_HOVER,width=220).pack(side='left',padx=(0,8))
+        choice=ctk.StringVar(value=prices[0]['name'] if prices else 'No services');ctk.CTkOptionMenu(row,values=list(lookup) or ['No services'],variable=choice,fg_color=GREEN,button_color=GREEN_HOVER,width=220).pack(side='left',padx=(0,8))
         qty=entry(row,'Qty');qty.insert(0,'1');qty.configure(width=75);qty.pack(side='left',padx=(0,8))
         receipt=ctk.CTkTextbox(box,height=225,fg_color='#121A29',border_color=BORDER,border_width=1,text_color=INK);receipt.pack(fill='x',padx=20,pady=(0,10))
         status=label(box,'',size=11,bold=True,color='#B9FF70');status.pack(anchor='w',padx=20,pady=(0,8))
         def draft_text():
-            return services.receipt_text(self.receipt_business,self.receipt_currency,self.receipt_items,timestamp=self.receipt_timestamp,reference=self.receipt_token)
+            return saved_services.receipt_text(self.receipt_business,self.receipt_currency,self.receipt_items,timestamp=self.receipt_timestamp,reference=self.receipt_token)
         def refresh():
+            try:
+                saved_services.reconcile_receipt(self.receipt_items)
+                self.receipt_recorded=bool(self.receipt_items) and all(x.get('_recorded') for x in self.receipt_items)
+                note='Recorded in sales history' if self.receipt_recorded else 'Unrecorded lines remain • save receipt or record sale to retry'
+            except Exception as exc:
+                note='Sales status could not be verified: '+str(exc)
             if not receipt.winfo_exists():return
             receipt.configure(state='normal');receipt.delete('1.0','end')
             if self.receipt_items:receipt.insert('1.0',draft_text())
-            receipt.configure(state='disabled');status.configure(text='Recorded in sales history' if self.receipt_recorded else 'Not yet recorded in sales history')
+            receipt.configure(state='disabled');status.configure(text=note)
         def add():
+            if choice.get() not in lookup:return
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
-            if self.receipt_recorded:return messagebox.showinfo('Recorded sale','Start a new receipt before adding services.',parent=self)
+            if self.receipt_currency and (self.receipt_currency!=currency or self.receipt_business!=self.business_name.get()):
+                return messagebox.showinfo('New receipt needed','Start a new receipt before changing business or currency.',parent=self)
             try:
                 n=int(qty.get());assert 1<=n<=999
             except (ValueError,AssertionError):return messagebox.showerror('Quantity','Enter a quantity from 1 to 999.',parent=self)
             if not self.receipt_items:
                 self.receipt_timestamp=datetime.now().astimezone().isoformat(timespec='seconds');self.receipt_business=self.business_name.get();self.receipt_currency=currency
+            if self.receipt_recorded or any(x.get('_reference')==self.receipt_token for x in self.receipt_items):self.receipt_token=uuid.uuid4().hex
+            self.receipt_recorded=False
             self.receipt_items.append({'name':choice.get(),'price':lookup[choice.get()],'qty':n});refresh()
         button(row,'Add service',add).pack(side='left')
         buttons=button_row(box,pady=(0,10))
+        def sync_recorded(items):
+            for current,snapshot in zip(self.receipt_items,items):
+                current.update(snapshot)
+            self.receipt_recorded=all(x.get('_recorded') for x in self.receipt_items)
+            refresh()
         def save_receipt():
+            if self.busy:return
             if not self.receipt_items:return messagebox.showinfo('Receipt','Add a service first.',parent=self)
+            try:saved_services.reconcile_receipt(self.receipt_items)
+            except Exception as exc:return messagebox.showerror('Could not verify sales status',str(exc),parent=self)
+            if not any(not x.get('_voided') for x in self.receipt_items):return messagebox.showinfo('Receipt','All services on this receipt have been voided. There is nothing to bill.',parent=self)
+            if any(not x.get('_recorded') and not x.get('_saved_work') for x in self.receipt_items) and not self.require_staff():return
             out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF','*.pdf')],initialfile='receipt.pdf')
-            if out:
-                text=draft_text();recorded=self.receipt_recorded;self.job('Saving receipt…',lambda:services.export_document_pdf(text,out,'Receipt',0),lambda _:messagebox.showinfo('Receipt saved',f'Saved to:\n{out}\n\n'+('This sale is already recorded.' if recorded else 'Saving a PDF does not record a sale. Use Record sale for that.'),parent=self))
+            if not out:return
+            text=draft_text();items=[dict(x) for x in self.receipt_items]
+            business=self.receipt_business;curr=self.receipt_currency;token=self.receipt_token;station=data.get('station_name','')
+            def work():
+                services.export_document_pdf(text,out,'Receipt',0)
+                when=datetime.now().astimezone().isoformat(timespec='seconds')
+                for item in items:
+                    if not item.get('_recorded'):
+                        item['_saved_work']=True;item.setdefault('_created_at',when);item.setdefault('_station',station)
+                try:saved_services.record_pending(items,business,curr,token)
+                except Exception as exc:
+                    raise ValueError('Receipt PDF saved, but sales recording failed. Retry saving the receipt or use Record sale. '+str(exc)) from exc
+            def done(_):
+                sync_recorded(items)
+                messagebox.showinfo('Receipt saved',f'Saved to:\n{out}\n\nAll services are in sales history. Previously recorded lines were not counted twice.',parent=self)
+            self.job('Saving receipt and sales…',work,done,error_cb=lambda _:sync_recorded(items))
         def record():
-            if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
+            if self.busy:return
             if not self.receipt_items:return messagebox.showinfo('Receipt','Add a service first.',parent=self)
-            if self.receipt_recorded:return messagebox.showinfo('Already recorded','This receipt has already been recorded. Start a new receipt for another sale.',parent=self)
+            if self.receipt_recorded:return messagebox.showinfo('Already recorded','All these services are already in sales history.',parent=self)
             if not self.require_staff():return
-            if not messagebox.askyesno('Record sale','Record this sale in local sales history? Payment status is not tracked. Once recorded, start a new receipt to make changes.',parent=self):return
-            token=self.receipt_token;business=self.receipt_business;curr=self.receipt_currency;items=[dict(x) for x in self.receipt_items];when=datetime.now().astimezone().isoformat(timespec='seconds')
-            def complete(created):
-                if self.receipt_token==token:self.receipt_recorded=True;refresh()
-                messagebox.showinfo('Sale recorded' if created else 'Already recorded','The sale is in local sales history. This does not confirm payment.',parent=self)
-            self.job('Recording sale…',lambda:sales_store.record_sale(token,business,curr,items,when),complete)
+            items=[dict(x) for x in self.receipt_items];business=self.receipt_business;curr=self.receipt_currency;token=self.receipt_token
+            def complete(_):
+                sync_recorded(items)
+                messagebox.showinfo('Sale recorded','Only unrecorded services were added. This does not confirm payment.',parent=self)
+            self.job('Recording sale…',lambda:saved_services.record_pending(items,business,curr,token),complete,error_cb=lambda _:sync_recorded(items))
         def remove_line():
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
-            if self.receipt_recorded:return messagebox.showinfo('Recorded sale','Start a new receipt before making changes.',parent=self)
-            if self.receipt_items:
-                self.receipt_items.pop();refresh()
+            removable=[i for i,item in enumerate(self.receipt_items) if not item.get('_recorded') and not item.get('_saved_work')]
+            if not removable:
+                return messagebox.showinfo('Saved services','Only unsaved manual lines can be undone. Staff can void mistaken saved services in Sales reports.',parent=self)
+            self.receipt_items.pop(removable[-1])
+            self.receipt_recorded=bool(self.receipt_items) and all(x.get('_recorded') for x in self.receipt_items)
+            refresh()
         def new_receipt():
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
-            if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Start a new receipt?','The current receipt has not been recorded. Discard it?',parent=self):return
-            self.reset_receipt();refresh()
+            if self.receipt_items and not self.receipt_recorded and not messagebox.askyesno('Start a new receipt?','Clear this receipt view? Unsaved manual lines will be discarded. Saved work and queued sales remain in sales history or the retry queue.',parent=self):return
+            if self.reset_receipt():refresh()
         button(buttons,'Record sale',record).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'Save receipt PDF',save_receipt,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'Undo last item',remove_line,ghost=True).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'New receipt',new_receipt,ghost=True).pack(side='left')
-        label(box,'Record sale is staff-only. No payment status, payment method or tax is tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
+        label(box,'Saved work is already recorded. Saving this receipt records only new manual lines.\nSaved work cannot be undone here; staff can void mistakes in Sales reports. Payment and tax are not tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
     def ocr_screen_part(self):
         show_ocr(self,self.body,card,label,button)
     def create_shell(self):
@@ -1282,6 +1539,7 @@ class CafeDesk(ctk.CTk):
         self.lock_staff_btn.bind('<Enter>',lambda _e:self.status.set('Click to lock staff access & clear AI key' if self.staff_unlocked else 'Staff access is locked'))
         button(bar,'? Help',self.quick_help,secondary=True,width=80,height=34).pack(side='right',padx=(0,8),pady=15)
         button(bar,'Online Templates',self.open_online_templates,secondary=True,width=138,height=34).pack(side='right',padx=(0,8),pady=15)
+        self.topbar_update_btn=button(bar,'↑ Update now',self.start_in_app_update,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=144,height=34)
         ctk.CTkLabel(bar,textvariable=self.clock,text_color='#C4D0E5',font=ctk.CTkFont(family=FONT,size=12,weight='bold')).pack(side='right',padx=(0,20))
         self.container=ctk.CTkFrame(main,fg_color='transparent'); self.container.grid(row=1,column=0,sticky='nsew',padx=28,pady=(0,8))
         footer=ctk.CTkFrame(main,fg_color='transparent',height=25); footer.grid(row=2,column=0,sticky='ew',padx=30,pady=(0,10)); label(footer,'●',size=10,color='#B9FF70').pack(side='left',padx=(0,5)); ctk.CTkLabel(footer,textvariable=self.status,text_color=MUTED,font=ctk.CTkFont(family=FONT,size=11)).pack(side='left')
@@ -1325,7 +1583,16 @@ class CafeDesk(ctk.CTk):
     def _flush_telemetry_async(self, force=False):
         if not self._telemetry_enabled:
             return
+        now_m=time.monotonic()
         with self._telemetry_lock:
+            # Bank whole seconds online since the last accounting point so the owner
+            # dashboard can rank "PC online longest". Cap each gap so a sleeping
+            # machine cannot invent multi-hour online streaks in one flush.
+            if self._telemetry_online_anchor:
+                gap=int(now_m-self._telemetry_online_anchor)
+                if gap>0:
+                    self._pending_online_seconds=min(self._pending_online_seconds+min(gap,900),86400)
+            self._telemetry_online_anchor=now_m
             if self._telemetry_inflight:
                 return
             # Keep snapshot + clear atomic under the shared lock. SessionState.snapshot()
@@ -1335,12 +1602,16 @@ class CafeDesk(ctk.CTk):
                 return
             self._telemetry_counts.clear()
             self._telemetry_inflight=True
-            self._last_telemetry_flush=time.monotonic()
+            self._last_telemetry_flush=now_m
+            online_secs=self._pending_online_seconds
         cur_screen=self.current or 'Home'
-        def _done():
+        def _done(res=None):
             with self._telemetry_lock:
                 self._telemetry_inflight=False
-        self._workers.run_telemetry_flush(snapshot,cur_screen,APP_BUILD,self._telemetry_counts,self._telemetry_lock,_done)
+                # Only drop banked online time after the server accepted it.
+                if isinstance(res,dict) and res.get('ok') and online_secs:
+                    self._pending_online_seconds=max(0,self._pending_online_seconds-online_secs)
+        self._workers.run_telemetry_flush(snapshot,cur_screen,APP_BUILD,self._telemetry_counts,self._telemetry_lock,_done,online_secs)
 
     def _telemetry_tick(self):
         try: self._flush_telemetry_async(force=True)
@@ -1349,6 +1620,15 @@ class CafeDesk(ctk.CTk):
     def heading(self,parent,title,subtitle):
         label(parent,title,size=24,bold=True).pack(anchor='w',pady=(2,3)); label(parent,subtitle,size=13,color=MUTED,wraplength=740,justify='left').pack(anchor='w',pady=(0,18))
     def home(self):
+        if self._available_update and self._available_update.get('update_available'):
+            uver=str(self._available_update.get('latest_version') or '').strip()
+            unotes=str(self._available_update.get('release_notes') or 'Improvements and bug fixes.').strip().splitlines()[0][:120]
+            ubanner=ctk.CTkFrame(self.body,fg_color='#1C2B22',corner_radius=14,border_width=1,border_color='#3D5E44')
+            ubanner.pack(fill='x',pady=(0,14))
+            uleft=ctk.CTkFrame(ubanner,fg_color='transparent'); uleft.pack(side='left',fill='x',expand=True,padx=18,pady=12)
+            label(uleft,f'New update ready: Café Desk v{uver}',size=14,bold=True,color=LIME).pack(anchor='w')
+            label(uleft,f'{unotes}  •  Updates inside the app and reopens automatically.',size=12,color='#D4E5D8',wraplength=560,justify='left').pack(anchor='w',pady=(2,0))
+            button(ubanner,f'Update & Restart (v{uver})',lambda:self.start_in_app_update(self._available_update),fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=196,height=36).pack(side='right',padx=18,pady=12)
         hero=ctk.CTkFrame(self.body,fg_color='#202B43',corner_radius=18); hero.pack(fill='x',pady=(0,20)); hero.grid_columnconfigure(0,weight=1)
         label(hero,'YOUR ALL-IN-ONE WORKSPACE',size=10,bold=True,color='#B9FF70').pack(anchor='w',padx=26,pady=(25,6))
         label(hero,'Big help for life’s little paperwork.',size=27,bold=True,color='white').pack(anchor='w',padx=26)
@@ -1365,6 +1645,62 @@ class CafeDesk(ctk.CTk):
             if icon is None: ctk.CTkLabel(box,text='',image=self.icon_images['bluetooth_card']).pack(anchor='w',padx=18,pady=(14,4))
             else: label(box,icon,size=24,bold=True,color='#B9FF70').pack(anchor='w',padx=18,pady=(14,2))
             label(box,title,size=15,bold=True).pack(anchor='w',padx=18); label(box,desc,size=12,color=MUTED).pack(anchor='w',padx=18,pady=(4,10)); button(box,'Open  →',lambda n=dest:self.show(n),ghost=True).pack(anchor='w',padx=18,pady=(0,14))
+    def saved_job(self,description,fn,success,service):
+        """Customer-visible saves only. Temporary and recovery writes use job()."""
+        if self.busy:return messagebox.showinfo('Please wait','Another task is still running.',parent=self)
+        try:
+            data=settings_store.load_settings(strict=True)
+            currency,item=saved_services.linked_price(data,service)
+            if item is None:
+                messagebox.showinfo('Choose a saved-work rate',
+                    'Before saving, staff must link this tool to a price-list service. '
+                    'Rates are per completed save/job. Use an explicit zero-price service for free work.',parent=self)
+                if not self.require_staff():return
+                _,prices=price_list.read_prices(data)
+                if not prices:
+                    messagebox.showinfo('Set prices first','Add your services in Price settings, then retry the save.',parent=self)
+                    return
+                choices='\n'.join(f"{i+1}. {p['name']} — {currency} {p['price']}" for i,p in enumerate(prices))
+                selected=simpledialog.askinteger('Saved-work rate',
+                    f"Choose the rate for {saved_services.SERVICES[service]} (per save/job):\n\n{choices}\n\nEnter the service number:",
+                    minvalue=1,maxvalue=len(prices),parent=self)
+                if selected is None:return
+                links=data.get('receipt_service_links',{})
+                links=dict(links) if isinstance(links,dict) else {}
+                # Drop stale links to deleted/renamed prices.
+                names={p['name'] for p in prices}
+                links={k:v for k,v in links.items() if k in saved_services.SERVICES and v in names}
+                links[service]=prices[selected-1]['name']
+                settings_store.save_receipt_service_links(links)
+                item=dict(prices[selected-1],qty=1)
+            business=self.business_name.get()
+            if self.receipt_items and (self.receipt_currency!=currency or self.receipt_business!=business):
+                if not self.receipt_recorded:
+                    messagebox.showinfo('Finish current receipt','Save or clear the current receipt before using a different business or currency.',parent=self)
+                    return
+                if not self.reset_receipt():return
+            reference=uuid.uuid4().hex
+            def work():
+                return saved_services.save_and_record(fn,reference,business,currency,item,
+                                                     station=data.get('station_name',''))
+            def done(payload):
+                result,when,error=payload
+                if not self.receipt_items:
+                    self.receipt_business=business;self.receipt_currency=currency;self.receipt_timestamp=when
+                if self.receipt_recorded:self.receipt_token=uuid.uuid4().hex
+                self.receipt_items.append(dict(item,_reference=reference,_recorded=not error,_saved_work=True,_created_at=when,_station=data.get('station_name','')))
+                self.receipt_recorded=all(x.get('_recorded') for x in self.receipt_items)
+                if getattr(self,'current',None)=='Receipts':self.show('Receipts')
+                if error:
+                    messagebox.showerror('File saved — sales recording needs attention',
+                        'Your file was saved, but its service could not be added to sales totals. '
+                        'The line is kept in Receipts. Completed sales are queued locally when storage permits; use Record sale here or Retry pending saved sales in Sales reports.\n\n'+error,parent=self)
+                success(result)
+                self.status.set('File saved • added to Receipts' + (' • sales recording needs retry' if error else ' and sales totals'))
+            self.job(description,work,done)
+        except (ValueError,OSError) as exc:
+            messagebox.showerror('Could not prepare saved-work receipt',str(exc),parent=self)
+
     def job(self,description,fn,success,error_cb=None,timeout=180):
         """Run `fn` on a worker thread and deliver the result on the Tk main thread.
 
@@ -1384,6 +1720,7 @@ class CafeDesk(ctk.CTk):
         def _watchdog():
             if self.busy and self._active_job_id==job_id:
                 self.busy=False; self._active_job_id=None
+                self._recovery_store.invalidate()
                 self.status.set(f'“{description}” took too long and was abandoned • the tool is free again')
         try: self.after(int(max(30,timeout))*1000,_watchdog)
         except tk.TclError: pass
@@ -1407,15 +1744,15 @@ class CafeDesk(ctk.CTk):
         # that ctk_safety no longer patches library internals.
         if isinstance(val, tk.TclError) or isinstance(exc, tk.TclError):
             logger.debug('Suppressed widget-lifecycle error in callback: %s', val)
-            try: self.busy=False
-            except Exception: pass
             return
         logger.error('Unhandled exception in widget callback: %s', val, exc_info=(exc, val, tb))
         try: self._last_gui_error=datetime.now().strftime('%H:%M:%S')+' — '+str(val)
         except Exception: pass
-        # Never let a broken background result wedge the whole desk: clear the busy flag.
-        try: self.busy=False
-        except Exception: pass
+        # An unrelated widget failure is not evidence that a tracked worker stopped.
+        # Only its result/watchdog may release it, otherwise another task could
+        # overlap its side effects (including recovery publication).
+        if getattr(self,'_active_job_id',None) is None:
+            self.busy=False
 
     def poll_events(self):
         """Pump worker-thread results on the Tk main thread.
@@ -1469,6 +1806,7 @@ class CafeDesk(ctk.CTk):
         return any(tag in str(message) for tag in _QUIET_JOB_ERROR_TAGS)
     def clear_customer(self):
         if self.busy: return messagebox.showinfo('Please wait','Please wait until the current task finishes.',parent=self)
+        if not self.can_clear_receipt():return
         if not messagebox.askyesno('Next customer','Clear the current customer’s draft, project photos, picture sheet, cards, forms, OCR text/images, scanned pages, receipt, temporary merge copies, recovery copies and AI key? Staff will be locked. Saved PDFs, saved projects, Downloads and Bluetooth-received files on disk will NOT be deleted.',parent=self): return
         for var in self.values.values(): var.set('')
         if self.current=='Career documents':
@@ -1567,6 +1905,8 @@ class CafeDesk(ctk.CTk):
                 if 0<=j<len(files): files[i],files[j]=files[j],files[i]; refresh(j)
         actions=button_row(box,pady=(0,18))
         button(actions,'Merge & save' if kind=='pdf' else 'Convert to PDF',lambda:self.save_files(kind),width=150).pack(side='left',padx=(0,BTN_PADX))
+        if kind=='image':
+            button(box,'Unlock more pages',lambda:license_ui.open_addon_modal(self,feature=license_guard.FEATURE_SCAN_PAGES,feature_title='More scan pages'),secondary=True,width=160).pack(anchor='w',padx=20,pady=(0,12))
         button(actions,'＋ Add files',add,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(actions,'Remove',remove,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(actions,'Clear all',clear_all,ghost=True).pack(side='left',padx=(0,BTN_PADX))
@@ -1579,7 +1919,7 @@ class CafeDesk(ctk.CTk):
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='merged.pdf' if kind=='pdf' else 'images.pdf')
         if not out: return
         task=services.merge_pdf if kind=='pdf' else services.images_to_pdf
-        self.job('Working on your PDF…',lambda:task(paths,out),lambda _:messagebox.showinfo('All done',f'Your PDF was saved:\n{out}',parent=self))
+        self.saved_job('Working on your PDF…',lambda:task(paths,out),lambda _:messagebox.showinfo('All done',f'Your PDF was saved:\n{out}',parent=self),'merge' if kind=='pdf' else 'images')
     def pdf_screen(self):
         self.heading(self.body,'PDF tools','Simple, reliable tools for the documents you use every day.')
         self.filebox(self.body,'pdf')
@@ -1653,7 +1993,8 @@ class CafeDesk(ctk.CTk):
                     else:
                         note='Password removed!' if was_enc else 'Note: this PDF had no password encryption; saved a clean copy.'
                         messagebox.showinfo('PDF unlocked',f'{note}\n{pages_n} page(s) saved to:\n{dest}',parent=self)
-                self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
+                if add_merge:self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
+                else:self.saved_job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done,'unlock')
 
             button(urow2,'Unlock & save PDF',lambda:run_unlock(False),fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
             button(urow2,'＋ Unlock to merge',lambda:run_unlock(True),secondary=True).pack(side='left')
@@ -1679,12 +2020,12 @@ class CafeDesk(ctk.CTk):
                 if pdf_preview.fingerprint(src)!=self.split_preview_fingerprint: return messagebox.showerror('PDF changed','The PDF changed since it was previewed. Choose it again and reselect the pages.',parent=self)
             except (OSError,ValueError) as exc:return messagebox.showerror('Cannot read PDF',str(exc),parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='extracted-pages.pdf')
-        if out: self.job('Extracting pages…',lambda:services.extract_pdf(src,spec,out),lambda count:messagebox.showinfo('All done',f'{count} page(s) saved to:\n{out}',parent=self))
+        if out: self.saved_job('Extracting pages…',lambda:services.extract_pdf(src,spec,out),lambda count:messagebox.showinfo('All done',f'{count} page(s) saved to:\n{out}',parent=self),'extract')
     def split_all(self):
         src=self.split_source
         if not src: return messagebox.showinfo('Select a PDF','Choose a PDF first.',parent=self)
         folder=filedialog.askdirectory(parent=self,title='Choose output folder (existing files will not be overwritten)')
-        if folder: self.job('Splitting pages…',lambda:services.split_each_page(src,folder),lambda count:messagebox.showinfo('All done',f'{count} PDF file(s) saved in:\n{folder}',parent=self))
+        if folder: self.saved_job('Splitting pages…',lambda:services.split_each_page(src,folder),lambda count:messagebox.showinfo('All done',f'{count} PDF file(s) saved in:\n{folder}',parent=self),'split')
     def scan_screen(self):
         self.heading(self.body,'Scan & convert','Bring paper documents and images into your digital workspace.')
         show_scanner(self,self.body,card,label,button)
@@ -1992,7 +2333,7 @@ class CafeDesk(ctk.CTk):
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='career-document.pdf')
         if out:
-            category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None; self.job('Saving document…',lambda:services.export_document_pdf(text,out,category,index,photo),lambda _:messagebox.showinfo('All done',f'PDF saved:\n{out}',parent=self))
+            category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None; self.saved_job('Saving document…',lambda:services.export_document_pdf(text,out,category,index,photo),lambda _:messagebox.showinfo('All done',f'PDF saved:\n{out}',parent=self),'career')
     def add_document_to_merge(self):
         text=self.current_text()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
@@ -2006,30 +2347,12 @@ class CafeDesk(ctk.CTk):
         text=self.current_text()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.txt',filetypes=[('Text file','*.txt')],initialfile='career-document.txt')
-        if out: self.job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self))
+        if out: self.saved_job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self),'career')
     def settings_screen(self):
         self.heading(self.body,'AI settings','Optional writing help — supports Google Gemini (AI Studio), OpenRouter, OpenAI, Groq, DeepSeek & compatible APIs.')
         box=card(self.body); box.pack(fill='x')
         label(box,'Connect an AI provider',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,5))
         label(box,'Paste a Google Gemini key (AIza... from aistudio.google.com/api-keys), OpenRouter (sk-or-v1-...), OpenAI (sk-...), Groq (gsk_...), or DeepSeek key. Auto-detect routes AIza... keys to Gemini, sk-or-... keys to OpenRouter, and gsk_... keys to Groq with a compatible default model.',size=12,color=MUTED,justify='left',wraplength=740).pack(anchor='w',padx=20,pady=(0,12))
-
-        gem_card=ctk.CTkFrame(box,fg_color='#141C2B',corner_radius=12,border_width=1,border_color=BORDER)
-        gem_card.pack(fill='x',padx=20,pady=(0,14))
-        label(gem_card,'GOOGLE AI STUDIO — GET A GEMINI API KEY (FREE TIER AVAILABLE)',size=10,bold=True,color=LIME).pack(anchor='w',padx=14,pady=(10,3))
-        gem_row=ctk.CTkFrame(gem_card,fg_color='transparent'); gem_row.pack(fill='x',padx=14,pady=(0,10))
-        gem_url_entry=entry(gem_row); gem_url_entry.insert(0,services.GOOGLE_AI_STUDIO_KEYS_URL); gem_url_entry.configure(state='readonly'); gem_url_entry.pack(side='left',fill='x',expand=True,padx=(0,8))
-        def open_gemini_keys():
-            try:
-                services.open_external_url(services.GOOGLE_AI_STUDIO_KEYS_URL)
-                self.status.set('Opened Google AI Studio API keys page in your browser')
-            except ValueError as exc:
-                messagebox.showerror('Could not open link',str(exc),parent=self)
-        def copy_gemini_keys():
-            self.clipboard_clear(); self.clipboard_append(services.GOOGLE_AI_STUDIO_KEYS_URL); self.update_idletasks()
-            self.status.set('Copied Google AI Studio link to clipboard')
-            messagebox.showinfo('Copied',f'Copied link:\n{services.GOOGLE_AI_STUDIO_KEYS_URL}',parent=self)
-        button(gem_row,'↗ Get Gemini API key',open_gemini_keys,fg_color=LIME,hover_color='#A9EB65',text_color='#142018').pack(side='left',padx=(0,BTN_PADX))
-        button(gem_row,'Copy link',copy_gemini_keys,ghost=True).pack(side='left')
 
         label(box,'Provider',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         custom_wrap=ctk.CTkFrame(box,fg_color='transparent')
@@ -2051,10 +2374,10 @@ class CafeDesk(ctk.CTk):
         ctk.CTkEntry(custom_wrap,textvariable=self.ai_custom_url,placeholder_text='https://openrouter.ai/api/v1/chat/completions',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x')
         on_provider_change()
 
-        label(box,'API key • kept in memory only for this session (cleared when staff locks)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        label(box,'API key • hidden from screen; cleared from memory when staff lock (reloaded at unlock if saved below)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         ctk.CTkEntry(box,textvariable=self.key,show='•',height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
 
-        label(box,'Model (e.g. gemini-2.5-flash, gemini-2.5-pro, gpt-4o-mini, openrouter/auto, deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
+        label(box,'Model (e.g. gemini-2.5-flash, openai/gpt-oss-120b for Groq, gpt-4o-mini, openrouter/auto, deepseek-chat)',size=11,bold=True,color=MUTED).pack(anchor='w',padx=20,pady=(0,4))
         ctk.CTkEntry(box,textvariable=self.model,height=38,border_color=BORDER,fg_color='#121A29').pack(fill='x',padx=20,pady=(0,12))
 
         def test_ai():
@@ -2069,12 +2392,56 @@ class CafeDesk(ctk.CTk):
             self.job('Testing AI connection…',run_check,done)
 
         def clear_key():
-            self.key.set(''); self.ai_generation+=1; self.status.set('Session AI key cleared')
+            self.key.set(''); self.ai_generation+=1
+            self.status.set('Session AI key cleared' + (' • the saved copy stays on this computer (use “Forget saved key” to delete it)' if ai_key_store.saved_key_info() else ''))
         btn_row=ctk.CTkFrame(box,fg_color='transparent'); btn_row.pack(fill='x',padx=20,pady=(0,15))
         button(btn_row,'Test AI connection',test_ai,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=195).pack(side='left',padx=(0,10))
         button(btn_row,'Clear key now',clear_key,secondary=True,width=130).pack(side='left')
 
-        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy & data minimization',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'AI sends the entire current draft to your selected AI provider after confirmation. Get the customer’s explicit consent, avoid sending unnecessary ID numbers/private identifiers when polishing wording, and never leave your API key unlocked on a shared computer.',size=12,color='#F1D1A5',justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,12))
+        # Remember the key on this computer (encrypted; unlocks only with the staff PIN).
+        saved_box=ctk.CTkFrame(box,fg_color='#1A2536',corner_radius=10); saved_box.pack(fill='x',padx=20,pady=(0,15))
+        label(saved_box,'Remember key on this computer',size=13,bold=True).pack(anchor='w',padx=14,pady=(11,2))
+        protect_text='encrypted with your staff PIN and locked to this Windows account' if ai_key_store.os_protection_available() else 'encrypted with your staff PIN'
+        label(saved_box,f'Saves the key {protect_text}. It loads automatically when staff unlock with the PIN, so you do not need to paste it after restarting. A copied file is useless on another computer or without the PIN. Tip: use a free-tier key (e.g. Groq) or set a spending limit with your provider.',size=11,color=MUTED,justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,6))
+        saved_status=ctk.StringVar()
+        def refresh_saved():
+            info=ai_key_store.saved_key_info()
+            if not info: saved_status.set('No key saved on this computer.')
+            elif info.get('damaged'): saved_status.set('⚠ Saved key file is damaged — use “Forget saved key”.')
+            else:
+                prov_name=(info.get('provider') or 'Auto-detect').split(' (')[0]
+                saved_status.set(f"🔒 Saved: {info.get('hint','')}  •  {prov_name}  •  {info.get('model') or 'default model'}  •  {info.get('saved_at','')}")
+        label(saved_box,'',size=12,color='#CFE8D4',textvariable=saved_status,justify='left').pack(anchor='w',padx=14,pady=(0,6))
+        def save_key_now():
+            key=self.key.get().strip()
+            if not key: return messagebox.showinfo('Paste API key','Paste your API key above first (and test the connection).',parent=self)
+            try:
+                rem=settings_store.lockout_remaining()
+                if rem>0: return messagebox.showwarning('Try again later',f'Too many incorrect PIN attempts. Wait {int(rem)+1} seconds.',parent=self)
+                pin=simpledialog.askstring('Confirm staff PIN','Enter your staff PIN to encrypt and save the key on this computer:',show='*',parent=self)
+                if pin is None: return
+                if not settings_store.verify_pin(pin):
+                    rem_after=settings_store.lockout_remaining()
+                    if rem_after>0: self.lockout_until=time.monotonic()+rem_after
+                    return messagebox.showerror('Staff access','Incorrect PIN. The key was not saved.',parent=self)
+                if len(pin)<8 and not messagebox.askyesno('Short PIN',f'Your staff PIN has only {len(pin)} digits. The saved key is only as strong as this PIN: a short PIN can be guessed by someone who copies files from this computer.\n\nRecommended: change to a 10–12 digit PIN first (Business settings → Change staff PIN).\n\nSave the key anyway?',parent=self): return
+                ai_key_store.save_key(key,pin,provider=self.ai_provider.get(),model=self.model.get().strip(),custom_url=self.ai_custom_url.get().strip())
+            except (ValueError,OSError,settings_store.CorruptedSettingsError) as exc:
+                return messagebox.showerror('Could not save key',str(exc),parent=self)
+            refresh_saved(); self.status.set('AI key saved (encrypted) on this computer')
+            messagebox.showinfo('Key saved','The API key is saved, encrypted, on this computer.\n\nNext time, just unlock staff access with your PIN and AI is ready.',parent=self)
+        def forget_key_now():
+            if not ai_key_store.saved_key_info(): return messagebox.showinfo('Nothing saved','No AI key is saved on this computer.',parent=self)
+            if not messagebox.askyesno('Forget saved key','Delete the saved AI key from this computer?\n\nThe key typed above for this session is also cleared.',parent=self): return
+            try: ai_key_store.forget_key()
+            except OSError as exc: return messagebox.showerror('Could not delete',str(exc),parent=self)
+            self.key.set(''); self.ai_generation+=1; refresh_saved(); self.status.set('Saved AI key deleted from this computer')
+        saved_btns=ctk.CTkFrame(saved_box,fg_color='transparent'); saved_btns.pack(fill='x',padx=14,pady=(0,12))
+        button(saved_btns,'💾 Save key on this computer',save_key_now,width=230).pack(side='left',padx=(0,10))
+        button(saved_btns,'Forget saved key',forget_key_now,secondary=True,width=150).pack(side='left')
+        refresh_saved()
+
+        note=ctk.CTkFrame(box,fg_color='#382F27',corner_radius=10); note.pack(fill='x',padx=20,pady=(0,20)); label(note,'Privacy & data minimization',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(11,3)); label(note,'Before sending, Café Desk keeps the name/contact lines on this computer and replaces names, e-mails, phone numbers, ID numbers, links and account numbers with placeholders; the real values are put back locally. The rest of the wording is sent to your AI provider, so get the customer’s consent first. Formatting symbols (*, #) in the reply are removed automatically. The API key is cleared from memory when staff lock; if you saved it, it is stored encrypted and only reloads with the staff PIN.',size=12,color='#F1D1A5',justify='left',wraplength=700).pack(anchor='w',padx=14,pady=(0,12))
     def improve(self):
         if not self.require_staff(): return
         text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
@@ -2084,23 +2451,27 @@ class CafeDesk(ctk.CTk):
             _,prov_label=services.detect_ai_provider(key,prov,curl)
         except ValueError as exc:
             return messagebox.showerror('AI settings',str(exc),parent=self)
-        if not messagebox.askyesno('Customer consent & privacy',f'Send the complete draft ({len(text):,} characters) to {prov_label} ({model})?\n\n• Get the customer’s explicit permission first.\n• Tip: remove ID numbers or sensitive personal details you do not want transmitted.\n• Standard API charges may apply.\n\nSend draft now?',parent=self): return
+        if len(text)>ai_safety.MAX_AI_INPUT_CHARS:
+            return messagebox.showerror('Draft too long',f'This draft has {len(text):,} characters. The AI limit is {ai_safety.MAX_AI_INPUT_CHARS:,}. Improve it in smaller parts.',parent=self)
+        hidden=ai_safety.protect_personal_details(text).summary()
+        training_note='\n• Free AI tiers (e.g. Google Gemini free, OpenRouter free models) may use the text to improve their models.' if prov_label in ('Google Gemini','OpenRouter') else ''
+        if not messagebox.askyesno('Customer consent & privacy',f'Send this draft to {prov_label} ({model}) for proof-reading?\n\n🔒 Kept on this computer (replaced with placeholders, never sent):\n{hidden}.\n\n• Get the customer’s explicit permission first.\n• Other wording in the draft (job history, schools, skills) IS sent.{training_note}\n• Standard API charges may apply.\n\nSend draft now?',parent=self): return
         req_gen=self.ai_generation
         def request():
-            reply,used_prov,used_model=services.call_ai_chat(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)
-            return reply,used_prov,used_model
+            return services.improve_document_with_ai(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)
         def complete(res):
             if self.ai_generation!=req_gen:
                 self.status.set('Discarded AI reply from a locked or cleared session')
                 return
-            result,used_prov,used_model=res
+            result,used_prov,used_model,missing=res['text'],res['provider'],res['model'],res['missing']
             current=self.current_text()
             if current!=text and not messagebox.askyesno('Draft changed','The draft changed while the request was running. Replace it with the AI result?',parent=self): return
+            if missing and not messagebox.askyesno('Check personal details',f'The AI left out {len(missing)} protected detail(s) (for example a phone number, e-mail or name). They may be missing from the improved draft.\n\nUse the AI result anyway? (Choose No to keep the original draft.)',parent=self): return
             self.doc_text=result
             if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end'); self.doc_editor.insert('1.0',result)
             self.refresh_doc_preview()
-            self.status.set(f'Draft improved via {used_prov} ({used_model})')
-            messagebox.showinfo('Draft improved',f'Improved via {used_prov} ({used_model}).\nReview the AI result and check all facts before saving.',parent=self)
+            self.status.set(f'Draft improved via {used_prov} ({used_model}) • personal details kept private')
+            messagebox.showinfo('Draft improved',f'Improved via {used_prov} ({used_model}).\nPersonal details were kept on this computer and formatting symbols (*, #) were removed.\nReview the result and check all facts before saving.',parent=self)
         self.job(f'Improving draft with {prov_label}…',request,complete)
 
 if __name__=='__main__':

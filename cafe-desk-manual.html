@@ -1056,7 +1056,11 @@ A4 Photo Sheet | 25.00</pre>
             <p>Fast service calculator and PDF receipt generator powered by your saved Price list.</p>
             <ul>
               <li>Pick services &amp; quantities (1–999) and click <strong>Save receipt PDF</strong> to print for the customer.</li>
-              <li>Staff click <strong>Record sale</strong> (PIN required) to log the total into Sales reports without double-recording.</li>
+              <li>Successful customer-file saves automatically add linked services to Receipts and Sales reports. Unsaved drafts, previews, cancelled/failed saves and temporary merge/recovery files never count.</li>
+              <li>Saving a receipt records only new manual lines (staff PIN required); saved services are not counted twice. <strong>Record sale</strong> also records manual services without exporting a PDF.</li>
+              <li>In Price settings, configure <strong>Automatic receipt rates</strong>: one service price per completed save/job, not per inferred page. Unlinked tools ask staff to choose a rate before saving.</li>
+              <li>If a saved sale cannot reach the database, a local retry copy is kept when storage permits. Open <strong>Sales reports → Retry pending saved sales</strong> after fixing the storage problem. The queue survives restarting and clearing the customer. Totals may be incomplete until retry succeeds.</li>
+              <li>Voided services are excluded from the current receipt amount as well as report totals. Back up the full local Café Desk folder if you need to include pending retry files; a database-only backup contains confirmed sales only.</li>
             </ul>
           </article>
         </div>
@@ -1068,7 +1072,7 @@ A4 Photo Sheet | 25.00</pre>
               <div class="menu-title-wrap"><span class="menu-icon">▧</span><h3>11. Sales reports</h3></div>
               <span class="badge badge-pin">Staff PIN</span>
             </div>
-            <p>View recorded daily, weekly, or monthly desk totals grouped by currency.</p>
+            <p>Use <strong>Today</strong>, <strong>This month</strong>, or a custom date range to view recorded gross desk earnings grouped by currency. Voided entries are excluded.</p>
             <ul>
               <li>Filter by start &amp; end date, inspect itemized rows, <strong>Void mistaken entries</strong> with audit trail, <strong>Backup DB</strong>, <strong>Export CSV</strong> (formula-injection safe) for Excel, or save a Sale Record PDF.</li>
             </ul>
@@ -1104,7 +1108,7 @@ A4 Photo Sheet | 25.00</pre>
             <p>Connect optional AI writing assistance for polishing customer CVs and cover letters.</p>
             <ul>
               <li>Auto-detects <strong>Google Gemini</strong> (<code>AIza...</code> from <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener noreferrer">aistudio.google.com/api-keys</a>), <strong>OpenRouter</strong> (<code>sk-or-v1-...</code>), <strong>OpenAI</strong> (<code>sk-...</code>), <strong>Groq</strong> (<code>gsk_...</code>), <strong>DeepSeek</strong>, or custom URLs.</li>
-              <li>Includes direct <strong>Get Gemini API key</strong> link &amp; <strong>⚡ Test AI connection</strong> button; key stays in RAM only and clears on staff lock.</li>
+              <li>Includes direct <strong>Get Gemini API key</strong> link &amp; <strong>⚡ Test AI connection</strong> button; key clears from memory on staff lock; optional <strong>💾 Save key on this computer</strong> stores it encrypted with the staff PIN (and Windows DPAPI) so it reloads after unlocking.</li>
             </ul>
           </article>
         </div>
@@ -1166,7 +1170,7 @@ A4 Photo Sheet | 25.00</pre>
           <div class="wf-box">
             <div class="wf-step-tag">Step 4 • Receipts &amp; Reset</div>
             <h4>Bill, Record Sale &amp; Reset</h4>
-            <p>Open <strong>Receipts</strong>, add <em>CV Typing</em> + <em>Scanning</em> + <em>Printing</em>, save receipt PDF, click <strong>Record sale</strong> (PIN), then click <strong>Next customer</strong> in the top bar!</p>
+            <p>Open <strong>Receipts</strong> to see the saved jobs already added automatically. Add only extra manual services, such as printing, then save the receipt PDF (staff PIN for new manual lines). Previously recorded services are not counted twice. Click <strong>Next customer</strong> to clear the workspace; recorded earnings remain in Sales reports.</p>
           </div>
         </div>
 

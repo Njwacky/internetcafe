@@ -37,18 +37,24 @@ create extension if not exists pgcrypto;
 -- 1. REMOTE OVER-THE-INTERNET APP RELEASES (Public Read-Only, Owner Write-Only)
 -- -----------------------------------------------------------------------------
 create table if not exists public.app_releases (
-    version         text primary key,
-    download_url    text not null,
-    sha256          text not null,
-    signature       text not null default '', -- Ed25519 sig over CAFE-DESK-RELEASE-V1:{version}:{sha256}
-    release_notes   text not null default '',
-    mandatory       boolean not null default false,
-    min_os          text not null default 'Windows 10+',
-    published_at    timestamptz not null default now()
+    version                 text primary key,
+    download_url            text not null,
+    sha256                  text not null,
+    signature               text not null default '', -- Ed25519 sig over CAFE-DESK-RELEASE-V1:{version}:{sha256}
+    portable_download_url   text not null default '',
+    portable_sha256         text not null default '',
+    portable_signature      text not null default '', -- Ed25519 sig over CAFE-DESK-RELEASE-V1:{version}:{portable_sha256}
+    release_notes           text not null default '',
+    mandatory               boolean not null default false,
+    min_os                  text not null default 'Windows 10+',
+    published_at            timestamptz not null default now()
 );
 
--- Migration for projects created before release signing (safe to re-run):
+-- Migration for projects created before release signing / portable in-app updates (safe to re-run):
 alter table public.app_releases add column if not exists signature text not null default '';
+alter table public.app_releases add column if not exists portable_download_url text not null default '';
+alter table public.app_releases add column if not exists portable_sha256 text not null default '';
+alter table public.app_releases add column if not exists portable_signature text not null default '';
 
 alter table public.app_releases enable row level security;
 
@@ -641,18 +647,43 @@ create table if not exists public.station_heartbeats (
     os_platform     text not null default '',
     current_screen  text not null default 'Home',
     total_visits    bigint not null default 0,
+    online_seconds  bigint not null default 0,
     first_seen_at   timestamptz not null default now(),
     last_seen_at    timestamptz not null default now()
 );
 
 create index if not exists idx_station_heartbeats_seen on public.station_heartbeats (last_seen_at desc);
 create index if not exists idx_station_heartbeats_city on public.station_heartbeats (city_label);
+create index if not exists idx_station_heartbeats_online on public.station_heartbeats (online_seconds desc);
 
 alter table public.station_heartbeats enable row level security;
 
 drop policy if exists "Owner full access to station_heartbeats" on public.station_heartbeats;
 create policy "Owner full access to station_heartbeats"
     on public.station_heartbeats for all to authenticated
+    using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
+
+-- Per-day online duration per PC (answers "which PC stays online too much?").
+create table if not exists public.station_online_daily (
+    visit_date      date not null default current_date,
+    machine_id      text not null,
+    shop_id         text not null default '',
+    shop_name       text not null default '',
+    city_label      text not null default '',
+    station_name    text not null default '',
+    online_seconds  bigint not null default 0 check (online_seconds >= 0),
+    last_online_at  timestamptz not null default now(),
+    primary key (visit_date, machine_id)
+);
+
+create index if not exists idx_station_online_daily_date on public.station_online_daily (visit_date desc);
+create index if not exists idx_station_online_daily_seconds on public.station_online_daily (online_seconds desc);
+
+alter table public.station_online_daily enable row level security;
+
+drop policy if exists "Owner full access to station_online_daily" on public.station_online_daily;
+create policy "Owner full access to station_online_daily"
+    on public.station_online_daily for all to authenticated
     using (public.is_cafedesk_owner()) with check (public.is_cafedesk_owner());
 
 create table if not exists public.workspace_tool_visits (
@@ -696,7 +727,8 @@ create or replace function public.record_workspace_telemetry(
     p_app_version text default '',
     p_os_platform text default '',
     p_current_screen text default 'Home',
-    p_screen_counts jsonb default '{}'::jsonb
+    p_screen_counts jsonb default '{}'::jsonb,
+    p_online_seconds integer default 0
 )
 returns jsonb
 language plpgsql
@@ -712,6 +744,7 @@ declare
     v_ver text := left(trim(coalesce(p_app_version, '')), 24);
     v_os text := left(trim(coalesce(p_os_platform, '')), 32);
     v_cur text := left(trim(coalesce(p_current_screen, 'Home')), 48);
+    v_online integer := least(greatest(coalesce(p_online_seconds, 0), 0), 86400);
     v_key text;
     v_val integer;
     v_added bigint := 0;
@@ -754,10 +787,11 @@ begin
 
     insert into public.station_heartbeats (
         machine_id, shop_id, shop_name, station_name, city_label,
-        app_version, os_platform, current_screen, total_visits, first_seen_at, last_seen_at
+        app_version, os_platform, current_screen, total_visits,
+        online_seconds, first_seen_at, last_seen_at
     ) values (
         v_mid, v_shop, v_bname, v_stat, v_city,
-        v_ver, v_os, v_cur, greatest(v_added, 1), now(), now()
+        v_ver, v_os, v_cur, greatest(v_added, 1), v_online, now(), now()
     )
     on conflict (machine_id) do update set
         shop_id = case when excluded.shop_id <> '' then excluded.shop_id else public.station_heartbeats.shop_id end,
@@ -768,13 +802,29 @@ begin
         os_platform = excluded.os_platform,
         current_screen = excluded.current_screen,
         total_visits = public.station_heartbeats.total_visits + greatest(v_added, 0),
+        online_seconds = public.station_heartbeats.online_seconds + excluded.online_seconds,
         last_seen_at = now();
 
-    return jsonb_build_object('ok', true, 'recorded_visits', v_added);
+    if v_online > 0 then
+        insert into public.station_online_daily (
+            visit_date, machine_id, shop_id, shop_name, city_label, station_name, online_seconds, last_online_at
+        ) values (
+            current_date, v_mid, v_shop, v_bname, v_city, v_stat, v_online, now()
+        )
+        on conflict (visit_date, machine_id) do update set
+            online_seconds = public.station_online_daily.online_seconds + excluded.online_seconds,
+            shop_id = case when excluded.shop_id <> '' then excluded.shop_id else public.station_online_daily.shop_id end,
+            shop_name = case when excluded.shop_name <> '' then excluded.shop_name else public.station_online_daily.shop_name end,
+            city_label = case when excluded.city_label <> '' then excluded.city_label else public.station_online_daily.city_label end,
+            station_name = case when excluded.station_name <> '' then excluded.station_name else public.station_online_daily.station_name end,
+            last_online_at = now();
+    end if;
+
+    return jsonb_build_object('ok', true, 'recorded_visits', v_added, 'online_seconds', v_online);
 end;
 $$;
 
-grant execute on function public.record_workspace_telemetry(text, text, text, text, text, text, text, text, jsonb) to anon, authenticated;
+grant execute on function public.record_workspace_telemetry(text, text, text, text, text, text, text, text, jsonb, integer) to anon, authenticated;
 -- Owner-only, atomic deletion of every Café Desk cloud record keyed directly to
 -- one Machine ID. Shop-level sales and other shared shop records are intentionally
 -- preserved because they are not reliably attributable to one PC.
@@ -790,6 +840,7 @@ declare
     v_requests integer := 0;
     v_heartbeats integer := 0;
     v_visits integer := 0;
+    v_online_rows integer := 0;
 begin
     if not public.is_cafedesk_owner() then
         raise exception 'Only the Café Desk owner may delete machine records.' using errcode = '42501';
@@ -811,6 +862,9 @@ begin
     delete from public.station_heartbeats where upper(trim(machine_id)) = v_mid;
     get diagnostics v_heartbeats = row_count;
 
+    delete from public.station_online_daily where upper(trim(machine_id)) = v_mid;
+    get diagnostics v_online_rows = row_count;
+
     return jsonb_build_object(
         'ok', true,
         'machine_id', v_mid,
@@ -818,7 +872,8 @@ begin
             'issued_machine_keys', v_keys,
             'activation_requests', v_requests,
             'workspace_tool_visits', v_visits,
-            'station_heartbeats', v_heartbeats
+            'station_heartbeats', v_heartbeats,
+            'station_online_daily', v_online_rows
         )
     );
 end;
@@ -1100,7 +1155,8 @@ create or replace function public.record_workspace_telemetry(
     p_app_version text default '',
     p_os_platform text default '',
     p_current_screen text default 'Home',
-    p_screen_counts jsonb default '{}'::jsonb
+    p_screen_counts jsonb default '{}'::jsonb,
+    p_online_seconds integer default 0
 ) returns jsonb
 language plpgsql
 security definer
@@ -1115,6 +1171,7 @@ declare
     v_ver text := left(trim(coalesce(p_app_version, '')), 24);
     v_os text := left(trim(coalesce(p_os_platform, '')), 32);
     v_cur text := left(trim(coalesce(p_current_screen, 'Home')), 48);
+    v_online integer := least(greatest(coalesce(p_online_seconds, 0), 0), 86400);
     v_key text;
     v_val integer;
     v_added bigint := 0;
@@ -1152,16 +1209,29 @@ begin
             end if;
         end loop;
     end if;
-    insert into public.station_heartbeats(machine_id,shop_id,shop_name,station_name,city_label,app_version,os_platform,current_screen,total_visits,first_seen_at,last_seen_at)
-    values(v_mid,v_shop,v_bname,v_stat,v_city,v_ver,v_os,v_cur,greatest(v_added,1),now(),now())
+    insert into public.station_heartbeats(machine_id,shop_id,shop_name,station_name,city_label,app_version,os_platform,current_screen,total_visits,online_seconds,first_seen_at,last_seen_at)
+    values(v_mid,v_shop,v_bname,v_stat,v_city,v_ver,v_os,v_cur,greatest(v_added,1),v_online,now(),now())
     on conflict (machine_id) do update set
         shop_id=case when excluded.shop_id<>'' then excluded.shop_id else public.station_heartbeats.shop_id end,
         shop_name=case when excluded.shop_name<>'' then excluded.shop_name else public.station_heartbeats.shop_name end,
         station_name=case when excluded.station_name<>'' then excluded.station_name else public.station_heartbeats.station_name end,
         city_label=case when excluded.city_label<>'' then excluded.city_label else public.station_heartbeats.city_label end,
         app_version=excluded.app_version, os_platform=excluded.os_platform, current_screen=excluded.current_screen,
-        total_visits=public.station_heartbeats.total_visits+greatest(v_added,0), last_seen_at=now();
-    return jsonb_build_object('ok', true, 'recorded_visits', v_added);
+        total_visits=public.station_heartbeats.total_visits+greatest(v_added,0),
+        online_seconds=public.station_heartbeats.online_seconds+excluded.online_seconds,
+        last_seen_at=now();
+    if v_online > 0 then
+        insert into public.station_online_daily(visit_date,machine_id,shop_id,shop_name,city_label,station_name,online_seconds,last_online_at)
+        values(current_date,v_mid,v_shop,v_bname,v_city,v_stat,v_online,now())
+        on conflict (visit_date,machine_id) do update set
+            online_seconds=public.station_online_daily.online_seconds+excluded.online_seconds,
+            shop_id=case when excluded.shop_id<>'' then excluded.shop_id else public.station_online_daily.shop_id end,
+            shop_name=case when excluded.shop_name<>'' then excluded.shop_name else public.station_online_daily.shop_name end,
+            city_label=case when excluded.city_label<>'' then excluded.city_label else public.station_online_daily.city_label end,
+            station_name=case when excluded.station_name<>'' then excluded.station_name else public.station_online_daily.station_name end,
+            last_online_at=now();
+    end if;
+    return jsonb_build_object('ok', true, 'recorded_visits', v_added, 'online_seconds', v_online);
 end;
 $$;
 
@@ -1180,6 +1250,7 @@ declare
     v_requests integer := 0;
     v_heartbeats integer := 0;
     v_visits integer := 0;
+    v_online_rows integer := 0;
     v_rate_hashes integer := 0;
 begin
     if not public.is_cafedesk_owner() then
@@ -1197,6 +1268,8 @@ begin
     get diagnostics v_visits = row_count;
     delete from public.station_heartbeats where upper(trim(machine_id)) = v_mid;
     get diagnostics v_heartbeats = row_count;
+    delete from public.station_online_daily where upper(trim(machine_id)) = v_mid;
+    get diagnostics v_online_rows = row_count;
     delete from public.machine_rpc_rate_limits
     where machine_hash = encode(digest(v_mid, 'sha256'), 'hex');
     get diagnostics v_rate_hashes = row_count;
@@ -1209,6 +1282,7 @@ begin
             'activation_requests', v_requests,
             'workspace_tool_visits', v_visits,
             'station_heartbeats', v_heartbeats,
+            'station_online_daily', v_online_rows,
             'machine_rpc_rate_limits', v_rate_hashes
         )
     );
@@ -1217,3 +1291,163 @@ $$;
 revoke all on function public.owner_purge_machine_records(text) from public, anon;
 grant execute on function public.owner_purge_machine_records(text) to authenticated;
 notify pgrst, 'reload schema';
+
+
+-- Complete, keyset-paginated full-history reconciliation, including old voids.
+-- Re-scan every run deliberately: a creation-date watermark loses later voids.
+-- No live migration is applied by the desktop app.
+create index if not exists idx_shop_sync_sales_cursor
+    on public.shop_sync_sales(shop_id, sale_id collate "C");
+
+-- The local ledger supports up to 500 lines x 999 units x 10,000,000 currency.
+-- Integer cents overflow at ordinary valid values; bigint covers the same range.
+alter table public.shop_sync_sales alter column total_cents type bigint;
+
+-- Canonical semantic identity, shared by uploads and comparisons with legacy rows.
+-- Formatting differences ("1" vs 1 units; 1 vs "1.00" price) are not new sales.
+create or replace function public.normalize_shop_sale_items(p_items jsonb)
+returns jsonb language plpgsql immutable set search_path = public as $$
+declare
+    v_line jsonb;
+    v_qty numeric;
+    v_price numeric;
+    v_items jsonb := '[]'::jsonb;
+    v_name text;
+begin
+    if jsonb_typeof(p_items) is distinct from 'array' then
+        raise exception 'Service lines must be an array.';
+    end if;
+    if jsonb_array_length(p_items) not between 1 and 500 then
+        raise exception 'A sale must contain between 1 and 500 service lines.';
+    end if;
+    for v_line in select value from jsonb_array_elements(p_items) loop
+        v_name := regexp_replace(v_line->>'name', '^[[:space:]]+|[[:space:]]+$', '', 'g');
+        if jsonb_typeof(v_line) is distinct from 'object'
+           or jsonb_typeof(v_line->'name') is distinct from 'string'
+           or length(v_name) not between 1 and 80
+           or coalesce(v_line->>'qty', '') !~ '^[0-9]+$'
+           or coalesce(v_line->>'price', '') !~ '^-?[0-9]+([.][0-9]{1,2})?$' then
+            raise exception 'Invalid service name, integer quantity or price.';
+        end if;
+        v_qty := (v_line->>'qty')::numeric;
+        v_price := (v_line->>'price')::numeric;
+        if v_qty not between 1 and 999 or v_price not between 0 and 10000000 then
+            raise exception 'Service quantity or price is out of range.';
+        end if;
+        v_items := v_items || jsonb_build_array(jsonb_build_object(
+            'name',v_name,'qty',v_qty::integer,
+            'price',to_char(v_price,'FM999999990.00')));
+    end loop;
+    return v_items;
+end;
+$$;
+revoke all on function public.normalize_shop_sale_items(jsonb) from public,anon,authenticated;
+
+create or replace function public.sync_shop_sales_v2(
+    p_shop_id text,
+    p_sync_key_sha256 text,
+    p_sales jsonb default '[]'::jsonb,
+    p_after text default '',
+    p_read boolean default true
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_shop text := left(regexp_replace(upper(coalesce(p_shop_id, '')), '[^A-Z0-9_-]', '', 'g'), 40);
+    v_hash text;
+    v_item jsonb;
+    v_old public.shop_sync_sales%rowtype;
+    v_total numeric;
+    v_items jsonb;
+    v_pushed integer := 0;
+    v_rows jsonb;
+    v_after text;
+begin
+    select sync_key_sha256 into v_hash from public.shop_sync_profiles where shop_id = v_shop;
+    if v_hash is null or v_hash <> coalesce(p_sync_key_sha256, '') then
+        return jsonb_build_object('ok', false, 'error', 'Shop ID or Sync Passcode is incorrect. Initialize the shop price list first.');
+    end if;
+    if jsonb_typeof(p_sales) is distinct from 'array' or jsonb_array_length(p_sales) > 250 then
+        raise exception 'Supply an array of at most 250 sales per upload.';
+    end if;
+    -- Serialize uploads per shop so conflict checking and insert/void are atomic.
+    if jsonb_array_length(p_sales) > 0 then
+        perform pg_advisory_xact_lock(hashtextextended('sales-sync|' || v_shop, 0));
+    end if;
+    for v_item in select value from jsonb_array_elements(p_sales) loop
+        if jsonb_typeof(v_item) is distinct from 'object'
+           or jsonb_typeof(v_item->'sale_id') is distinct from 'string'
+           or length(trim(v_item->>'sale_id')) not between 1 and 64
+           or length(coalesce(v_item->>'station', '')) > 40
+           or length(coalesce(v_item->>'business', '')) not between 1 and 80
+           or length(coalesce(v_item->>'currency', '')) not between 1 and 8
+           or (v_item->>'currency') ~ E'[\\n\\r|]'
+           or length(coalesce(v_item->>'created_at', '')) not between 10 and 40
+           or (v_item->>'created_at') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}($|[T ])'
+           or jsonb_typeof(v_item->'items') is distinct from 'array' then
+            raise exception 'Invalid sale identity, metadata or service lines.';
+        end if;
+        perform (v_item->>'created_at')::timestamp with time zone;
+        if nullif(v_item->>'voided_at', '') is not null then
+            if length(v_item->>'voided_at') not between 10 and 40
+               or (v_item->>'voided_at') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}($|[T ])' then
+                raise exception 'Invalid void timestamp.';
+            end if;
+            perform (v_item->>'voided_at')::timestamp with time zone;
+        end if;
+        v_items := public.normalize_shop_sale_items(v_item->'items');
+        select sum((line->>'qty')::numeric * (line->>'price')::numeric * 100)
+            into v_total from jsonb_array_elements(v_items) line;
+        if jsonb_typeof(v_item->'total_cents') is distinct from 'number'
+           or v_total <> (v_item->>'total_cents')::numeric
+           or v_total > 499500000000000 then
+            raise exception 'Sale total does not match service lines or exceeds the cloud ledger limit.';
+        end if;
+        select * into v_old from public.shop_sync_sales
+            where shop_id = v_shop and sale_id = v_item->>'sale_id';
+        if found then
+            if row(v_old.created_at, v_old.station, v_old.business, v_old.currency, v_old.total_cents, public.normalize_shop_sale_items(v_old.items_json))
+               is distinct from row(v_item->>'created_at', coalesce(v_item->>'station', ''),
+                   v_item->>'business', v_item->>'currency', v_total::bigint, v_items) then
+                raise exception 'Sale reference conflicts with immutable recorded details: %', v_item->>'sale_id';
+            end if;
+            if v_old.voided_at is null and nullif(v_item->>'voided_at', '') is not null then
+                update public.shop_sync_sales set voided_at = v_item->>'voided_at',
+                    void_reason = left(coalesce(v_item->>'void_reason', 'Voided on shop PC'), 160), synced_at = now()
+                    where shop_id = v_shop and sale_id = v_old.sale_id;
+            end if;
+        else
+            insert into public.shop_sync_sales(shop_id,sale_id,created_at,station,business,currency,total_cents,items_json,voided_at,void_reason)
+            values(v_shop,v_item->>'sale_id',v_item->>'created_at',coalesce(v_item->>'station',''),
+                   v_item->>'business',v_item->>'currency',v_total::bigint,v_items,
+                   nullif(v_item->>'voided_at',''),left(v_item->>'void_reason',160));
+        end if;
+        v_pushed := v_pushed + 1;
+    end loop;
+    select coalesce(jsonb_agg(jsonb_build_object(
+        'sale_id',s.sale_id,'created_at',s.created_at,'station',s.station,'business',s.business,
+        'currency',s.currency,'total_cents',s.total_cents,'items',s.items_json,
+        'voided_at',s.voided_at,'void_reason',s.void_reason
+    ) order by s.sale_id collate "C"), '[]'::jsonb), max(s.sale_id collate "C") into v_rows,v_after
+    from (select * from public.shop_sync_sales
+          where p_read and shop_id=v_shop and sale_id collate "C" > coalesce(p_after,'') collate "C"
+          order by sale_id collate "C" limit 250) s;
+    return jsonb_build_object('ok',true,'protocol',2,'shop_id',v_shop,
+        'pushed_count',v_pushed,'sales',v_rows,'next_after',v_after);
+end;
+$$;
+revoke all on function public.sync_shop_sales_v2(text,text,jsonb,text,boolean) from public;
+grant execute on function public.sync_shop_sales_v2(text,text,jsonb,text,boolean) to anon,authenticated;
+
+-- Fail explicitly for older clients rather than silently returning only 2,000 rows.
+create or replace function public.sync_shop_sales(
+    p_shop_id text, p_sync_key_sha256 text, p_sales jsonb default '[]'::jsonb, p_since text default ''
+) returns jsonb language sql security definer set search_path = public as $$
+    select jsonb_build_object('ok',false,'error','Upgrade Cafe Desk on every shop PC for complete sales synchronization (protocol 2).');
+$$;
+
+revoke all on function public.sync_shop_sales(text,text,jsonb,text) from public;
+grant execute on function public.sync_shop_sales(text,text,jsonb,text) to anon,authenticated;

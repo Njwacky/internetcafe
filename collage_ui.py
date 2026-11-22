@@ -355,4 +355,4 @@ class PictureSheet:
                     elif sys.platform=='darwin':subprocess.Popen(['open',path])
                     else:subprocess.Popen(['xdg-open',path])
                 except Exception:messagebox.showinfo('Open your PDF',f'Open this file in a PDF viewer to print:\n{path}',parent=self.app)
-        self.app.job('Creating A4 picture sheets…',lambda:collage.render_pdf(items,path,mode,brightness,gray),complete)
+        self.app.saved_job('Creating A4 picture sheets…',lambda:collage.render_pdf(items,path,mode,brightness,gray),complete,'pictures')

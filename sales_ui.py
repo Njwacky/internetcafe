@@ -7,16 +7,18 @@ from tkinter import filedialog,messagebox,simpledialog
 import customtkinter as ctk
 import cloud_sync
 import sales_store
+import sales_outbox
 import services
 import settings_store
 
 
 def show_reports(app,parent,card,label,button,entry):
-    app.heading(parent,'Sales reports','Internal service log grouped by currency. Not a fiscal POS or tax register — payment status, cash drawer reconciliation and VAT/tax are not tracked.')
+    app.heading(parent,'Sales reports','Saved-work earnings grouped by currency. Not a fiscal POS or tax register — payment status, cash drawer reconciliation and VAT/tax are not tracked.')
     notice=ctk.CTkFrame(parent,fg_color='#382F27',corner_radius=10)
     notice.pack(fill='x',pady=(0,12))
     label(notice,'Accounting & POS notice',size=12,bold=True,color='#FFDBA2').pack(anchor='w',padx=14,pady=(10,2))
-    label(notice,'Use these totals for internal desk tracking only. Issue official tax invoices or fiscal receipts from your registered POS or accounting software where required by law. Voiding a mistaken entry keeps a permanent audit line.',size=11,color='#F1D1A5',wraplength=760,justify='left').pack(anchor='w',padx=14,pady=(0,10))
+    label(notice,'Only recorded services count: successful customer saves are added automatically; unsaved drafts, cancelled saves and temporary files are excluded. Use these gross totals for internal desk tracking only. Issue official tax invoices or fiscal receipts from your registered POS or accounting software where required by law. Voiding a mistaken entry keeps a permanent audit line.',size=11,color='#F1D1A5',wraplength=760,justify='left').pack(anchor='w',padx=14,pady=(0,10))
+    pending_notice=label(notice,'',size=12,bold=True,color='#FFDBA2');pending_notice.pack(anchor='w',padx=14,pady=(0,10))
     box=card(parent);box.pack(fill='x',pady=(0,12));label(box,'Choose a date range',size=16,bold=True).pack(anchor='w',padx=20,pady=(17,5))
     label(box,'Dates use the computer’s local date at the time each sale was recorded.',size=12,color='#A2ACC5').pack(anchor='w',padx=20)
     row=ctk.CTkFrame(box,fg_color='transparent');row.pack(fill='x',padx=20,pady=(12,18))
@@ -30,6 +32,8 @@ def show_reports(app,parent,card,label,button,entry):
 
     def load():
         try:
+            count=sales_outbox.pending_count()
+            pending_notice.configure(text=f'{count} saved sale(s) await retry. Totals may be incomplete; use Retry pending saved sales.' if count else 'No pending saved sales on this computer.')
             data=sales_store.report(start.get().strip(),end.get().strip());state['rows']=data['rows'];state['range']=(start.get().strip(),end.get().strip())
             count=sum(x['count'] for x in data['totals']);parts=[f"{x['currency']} {Decimal(x['cents'])/100:.2f}" for x in data['totals']]
             void_note=f"  •  {data.get('voided_count',0)} voided" if data.get('voided_count') else ''
@@ -94,6 +98,9 @@ def show_reports(app,parent,card,label,button,entry):
             messagebox.showerror('Could not void sale',str(exc),parent=app)
 
     def backup_db():
+        try:pending=sales_outbox.pending_count()
+        except OSError as exc:return messagebox.showerror('Could not check pending sales',str(exc),parent=app)
+        if pending and not messagebox.askyesno('Pending sales are not included',f'{pending} saved-sale retry file(s) are not part of a database-only backup. Retry them first, or also back up the full local Café Desk folder. Continue with confirmed sales only?',parent=app):return
         path=filedialog.asksaveasfilename(parent=app,defaultextension='.sqlite3',filetypes=[('SQLite backup','*.sqlite3 *.db')],initialfile=f'sales-backup-{date.today().isoformat()}.sqlite3')
         if path:
             app.job('Backing up sales database…',lambda:sales_store.backup_database(path),lambda _:messagebox.showinfo('Backup saved',f'Sales database backup saved to:\n{path}',parent=app))
@@ -109,9 +116,9 @@ def show_reports(app,parent,card,label,button,entry):
             return sales_store.merge_from_file(src)
         def _done(res):
             load()
-            messagebox.showinfo(
-                'Multi-PC Sales Merged',
-                f"Imported {res['inserted']} new sale(s) from the other computer ({res['updated_voids']} void update(s), {res['skipped']} duplicate(s) safely skipped).",
+            (messagebox.showinfo if not res['rejected'] else messagebox.showwarning)(
+                'Multi-PC Sales Merged' if not res['rejected'] else 'Partial import — rejected sales need attention',
+                f"Imported {res['inserted']} new sale(s) from the other computer ({res['updated_voids']} void update(s), {res['skipped']} duplicate(s) safely skipped).\nRejected rows: {res['rejected']}\n"+'\n'.join(res['errors'][:5]),
                 parent=app,
             )
         app.job('Merging sales from other PC…',_do,_done)
@@ -133,10 +140,10 @@ def show_reports(app,parent,card,label,button,entry):
             return sales_store.sync_lan_folder(folder,station_name=cfg.get('station_name',''))
         def _done(res):
             load()
-            messagebox.showinfo(
-                'LAN / Folder Sync Complete',
+            (messagebox.showinfo if res['complete'] else messagebox.showwarning)(
+                'LAN / Folder Sync Complete' if res['complete'] else 'Partial LAN sync — totals may be incomplete',
                 f"Synced with {res['peer_files']} other PC file(s) in:\n{folder}\n\n"
-                f"New sales merged: {res['inserted']}  •  Void updates: {res['updated_voids']}",
+                f"New sales merged: {res['inserted']}  •  Void updates: {res['updated_voids']}\n"+'\n'.join(res['errors'][:5]),
                 parent=app,
             )
         app.job('Syncing Multi-PC LAN folder…',_do,_done)
@@ -157,20 +164,38 @@ def show_reports(app,parent,card,label,button,entry):
         )
         if not secret:return
         def _do():
-            local_rows=sales_store.export_sales_records(limit=1500)
+            local_rows=sales_store.export_sales_records()
             cloud_res=cloud_sync.sync_multi_pc_sales(cfg,secret,local_rows)
             merged=sales_store.merge_external_sales(cloud_res.get('sales',[]))
             return {'pushed':cloud_res.get('pushed_count',0),**merged}
         def _done(res):
             load()
-            messagebox.showinfo(
-                'Supabase Multi-PC Sync Complete',
-                f"Uploaded {res['pushed']} sale(s) from this PC and merged {res['inserted']} new sale(s) from your other shop PCs.",
+            (messagebox.showinfo if not res['rejected'] else messagebox.showwarning)(
+                'Supabase Multi-PC Sync Complete' if not res['rejected'] else 'Partial cloud merge — rejected rows need attention',
+                f"Uploaded {res['pushed']} sale(s) from this PC and merged {res['inserted']} new sale(s) from your other shop PCs.\nVoid updates: {res['updated_voids']} • Rejected rows: {res['rejected']}\n"+'\n'.join(res['errors'][:5]),
                 parent=app,
             )
         app.job('Syncing Multi-PC sales with Supabase…',_do,_done)
 
     button(row,'View report',load,width=120,height=34).pack(side='left')
+    def quick_range(month=False):
+        today=date.today();first=today.replace(day=1) if month else today
+        start.delete(0,'end');start.insert(0,first.isoformat())
+        end.delete(0,'end');end.insert(0,today.isoformat())
+        load()
+    quick=ctk.CTkFrame(box,fg_color='transparent');quick.pack(fill='x',padx=20,pady=(0,14))
+    button(quick,'Today',quick_range,secondary=True,width=110,height=32).pack(side='left',padx=(0,8))
+    button(quick,'This month',lambda:quick_range(True),secondary=True,width=130,height=32).pack(side='left')
+    def retry_pending():
+        def done(result):
+            load()
+            text=f"Recorded {result['recorded']} new sale(s). Pending retry files remaining: {result['remaining']}."
+            if result['errors']:
+                messagebox.showerror('Some saved sales still need attention',text+'\n\n'+'\n'.join(result['errors'][:5]),parent=app)
+            else:messagebox.showinfo('Pending sales checked',text+'\nExisting or voided references were not counted twice.',parent=app)
+        app.job('Retrying saved sales…',sales_outbox.retry_pending,done)
+    button(quick,'Retry pending saved sales',retry_pending,secondary=True,width=220,height=32).pack(side='left',padx=(12,0))
+
     actions=ctk.CTkFrame(result,fg_color='transparent');actions.pack(fill='x',padx=20,pady=(0,8))
     button(actions,'Export CSV',export,secondary=True,width=130).pack(side='left',padx=(0,8))
     button(actions,'Save record PDF',export_record,secondary=True,width=165).pack(side='left',padx=(0,8))

@@ -35,10 +35,8 @@ def _text(value,name,limit):
     if not isinstance(value,str) or len(value)>limit:raise ValueError(f'Invalid or oversized {name}.')
     return value
 
-def save(kind,data,destination,allow_internal=False):
+def _archive_parts(kind,data,allow_internal=False):
     if kind not in ('career','sheet'):raise ValueError('Unknown project type.')
-    if not allow_internal:
-        services.assert_safe_user_output(destination)
     assets={};paths=[];features=[]
     if kind=='career':
         category=data.get('category');template=data.get('template')
@@ -59,16 +57,29 @@ def save(kind,data,destination,allow_internal=False):
         if sheet.get('preset')=='Custom size (mm)':features.append('custom_mm')
         payload={'items':saved,'preset':sheet.get('preset'),'page':sheet.get('page',0),'mode':sheet.get('mode'),'brightness':sheet.get('brightness'),'gray':sheet.get('gray'),'width_mm':str(sheet.get('width_mm','')),'height_mm':str(sheet.get('height_mm',''))}
         _validate_sheet(payload)
-    services._different([p for p in paths if p],destination)
     version=2 if features else VERSION
     manifest={'format':FORMAT,'version':version,'features':features,'kind':kind,'data':payload}
     encoded=json.dumps(manifest,ensure_ascii=False,separators=(',',':')).encode('utf-8')
     if len(encoded)>MAX_MANIFEST:raise ValueError('The project contains too much text.')
-    def write(tmp):
-        with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
-            z.writestr('manifest.json',encoded)
-            for key,value in assets.items():z.writestr('assets/'+key,value)
-    services._atomic_write(destination,write,allow_internal=allow_internal)
+    return encoded,assets,paths
+
+def _write_archive(target,encoded,assets):
+    with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+        z.writestr('manifest.json',encoded)
+        for key,value in assets.items():z.writestr('assets/'+key,value)
+
+def project_bytes(kind,data,allow_internal=False):
+    """Serialize without touching disk, for generation-checked recovery publication."""
+    encoded,assets,_=_archive_parts(kind,data,allow_internal=allow_internal)
+    target=io.BytesIO()
+    _write_archive(target,encoded,assets)
+    return target.getvalue()
+
+def save(kind,data,destination,allow_internal=False):
+    if not allow_internal:services.assert_safe_user_output(destination)
+    encoded,assets,paths=_archive_parts(kind,data,allow_internal=allow_internal)
+    services._different([p for p in paths if p],destination)
+    services._atomic_write(destination,lambda tmp:_write_archive(tmp,encoded,assets),allow_internal=allow_internal)
 
 def _valid_asset(key):return key is None or (isinstance(key,str) and HEX.fullmatch(key) is not None)
 

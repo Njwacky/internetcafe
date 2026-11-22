@@ -485,6 +485,7 @@
     </header>
 
     <div class="content">
+      <div id="dataWarning" class="card hidden" role="status" style="padding:14px;color:#fbbf24;margin-bottom:16px"></div>
       <section class="view" id="view-overview">
         <div class="grid g-kpi" id="kpiGrid"></div>
 
@@ -527,12 +528,35 @@
           <div class="card">
             <div class="card-h">
               <div>
-                <h3>Most visited tools</h3>
-                <div class="sub">Last 14 days</div>
+                <h3>Most used page</h3>
+                <div class="sub" id="topToolsSub">Pages &amp; tools ranked by opens</div>
               </div>
               <button class="btn btn-ghost btn-sm" onclick="switchView('analytics')">Explore</button>
             </div>
             <div id="topTools"></div>
+          </div>
+        </div>
+
+        <div class="grid g-2 mt16">
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Most active PCs</h3>
+                <div class="sub">Which computer uses the app the most</div>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="switchView('analytics')">All PCs</button>
+            </div>
+            <div id="activePcLeaders"></div>
+          </div>
+          <div class="card">
+            <div class="card-h">
+              <div>
+                <h3>Longest online</h3>
+                <div class="sub">Which PC stays online too much</div>
+              </div>
+              <span class="badge b-mute" id="onlineRangeBadge">range</span>
+            </div>
+            <div id="onlinePcLeaders"></div>
           </div>
         </div>
 
@@ -618,12 +642,12 @@
             <div class="card-h">
               <div>
                 <h3>Active computers</h3>
-                <div class="sub">Ranked by visits in range</div>
+                <div class="sub">Most used PCs · opens + online time in range</div>
               </div>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Station</th><th>Shop / area</th><th>Top tool</th><th style="text-align:right">Visits</th><th>Last seen</th><th>Action</th></tr></thead>
+                <thead><tr><th>Station</th><th>Shop / area</th><th>Top page</th><th style="text-align:right">Opens</th><th style="text-align:right">Online</th><th>Last seen</th><th>Action</th></tr></thead>
                 <tbody id="machineTable"></tbody>
               </table>
             </div>
@@ -980,9 +1004,9 @@ const DL_PAGE = `https://github.com/${REPO}/releases/latest`;
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const state = {
-  keys: [], reqs: [], releases: [], announcements: [], visits: [], stations: [], sales: [],
+  keys: [], reqs: [], releases: [], announcements: [], visits: [], stations: [], sales: [], onlineDaily: [],
   gh: null, sums: null, days: 14, view: "overview", email: "",
-  lastSync: null, telemetryError: false, loading: false,
+  lastSync: null, telemetryError: false, loading: false, dataErrors: [], salesReady: false,
 };
 
 const TOOL_GROUPS = {
@@ -1017,9 +1041,40 @@ function money(cents, cur = "R") {
   const val = (Number(cents) || 0) / 100;
   return cur + val.toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+function currencyTotals(rows) {
+  const totals = new Map();
+  for (const sale of rows) {
+    const currency = String(sale.currency || "R");
+    const row = totals.get(currency) || { cents: 0, count: 0 };
+    row.cents += Number(sale.total_cents) || 0;
+    row.count += 1;
+    totals.set(currency, row);
+  }
+  return totals;
+}
+function currencyTotalsHTML(totals, average = false) {
+  if (!totals.size) return "No sales";
+  return [...totals.entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, row]) => esc(money(average ? row.cents / row.count : row.cents, currency)))
+    .join(" · ");
+}
 function isoDay(d) {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
   return z.toISOString().slice(0, 10);
+}
+function fmtDur(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? h + "h " + rm + "m" : h + "h";
+}
+function stationLabel(mid, fallback) {
+  const st = state.stations.find((s) => s.machine_id === mid);
+  if (st && st.station_name) return st.station_name;
+  return fallback || shortId(mid, 10);
 }
 function relTime(iso) {
   if (!iso) return "never";
@@ -1166,6 +1221,11 @@ function toggleSidebar(open) {
 $$("[data-nav]").forEach((btn) => btn.addEventListener("click", () => switchView(btn.dataset.nav)));
 
 function renderCurrentView() {
+  const warning = $("#dataWarning");
+  warning.textContent = state.dataErrors.length
+    ? "Incomplete refresh: " + state.dataErrors.join(", ") + ". Last successful data is retained where available; totals may be stale or unavailable."
+    : "";
+  warning.classList.toggle("hidden", !state.dataErrors.length);
   if (state.view === "overview") renderOverview();
   else if (state.view === "analytics") renderAnalytics();
   else if (state.view === "keys") renderKeysTable();
@@ -1243,13 +1303,21 @@ async function callOwnerResign(payload) {
 async function fetchPaged(build, maxPages = 12) {
   const size = 1000;
   const out = [];
+  let offset = 0;
   for (let p = 0; p < maxPages; p++) {
-    const { data, error } = await build().range(p * size, p * size + size - 1);
+    const { data, error } = await build().range(offset, offset + size - 1);
     if (error) throw error;
-    if (!data || !data.length) break;
+    if (!Array.isArray(data)) throw new Error("Invalid dashboard page.");
+    if (!data.length) return out;
     out.push(...data);
-    if (data.length < size) break;
+    // PostgREST may enforce a smaller server-side cap than our requested size.
+    // A short page is NOT proof of end-of-data. Advance by rows actually read.
+    offset += data.length;
   }
+  const { data, error } = await build().range(offset, offset);
+  if (error) throw error;
+  if (!Array.isArray(data)) throw new Error("Invalid dashboard page.");
+  if (data.length) throw new Error("Dataset exceeds dashboard page limit; refusing a partial total.");
   return out;
 }
 
@@ -1281,33 +1349,46 @@ async function refreshAll(manual = false) {
   const since = new Date(Date.now() - 120 * 86400000);
   const sinceIso = since.toISOString();
 
-  const [keysRes, reqRes, relRes, annRes, visitsRes, stationsRes, salesRes] = await Promise.all([
-    sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).limit(1000),
+  const [keysRes, reqRes, relRes, annRes, visitsRes, stationsRes, salesRes, onlineRes] = await Promise.all([
+    fetchPaged(() => sb.from("issued_machine_keys").select("*").order("created_at", { ascending: false }).order("license_id")).catch(() => null),
     sb.from("activation_requests").select("*").eq("status", "pending").order("created_at", { ascending: false }).limit(200),
     sb.from("app_releases").select("*").order("published_at", { ascending: false }).limit(30),
     sb.from("app_announcements").select("*").order("published_at", { ascending: false }).limit(50),
     fetchPaged(() => sb.from("workspace_tool_visits")
       .select("visit_date,machine_id,shop_id,shop_name,city_label,screen_name,visit_count,last_visited_at")
-      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true })).catch(() => null),
-    fetchPaged(() => sb.from("station_heartbeats").select("*").order("last_seen_at", { ascending: false }), 3).catch(() => null),
+      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true }).order("machine_id").order("screen_name")).catch(() => null),
+    fetchPaged(() => sb.from("station_heartbeats").select("*").order("last_seen_at", { ascending: false }).order("machine_id"), 3).catch(() => null),
     fetchPaged(() => sb.from("shop_sync_sales")
-      .select("shop_id,created_at,station,total_cents,currency,voided_at")
-      .gte("created_at", sinceIso).order("created_at", { ascending: false })).catch(() => null),
-  ]);
+      .select("shop_id,sale_id,created_at,station,total_cents,currency,voided_at")
+      .gte("created_at", sinceIso).order("created_at", { ascending: false }).order("shop_id").order("sale_id")).catch(() => null),
+    // Online-duration table (v0.8.3+); older projects without the migration just get [].
+    fetchPaged(() => sb.from("station_online_daily")
+      .select("visit_date,machine_id,shop_id,shop_name,city_label,station_name,online_seconds,last_online_at")
+      .gte("visit_date", isoDay(since)).order("visit_date", { ascending: true }).order("machine_id")).catch(() => null),
+  ].map(query => Promise.resolve(query).catch(() => null)));
 
-  if (keysRes.error) toast(keysRes.error.message, "err");
-  state.keys = keysRes.data || [];
-  state.reqs = reqRes.data || [];
-  state.releases = relRes.data || [];
-  state.announcements = annRes.error ? [] : (annRes.data || []);
+  state.dataErrors = [];
+  if (keysRes === null) state.dataErrors.push("license records");
+  else state.keys = keysRes;
+  for (const [key, result, label] of [
+    ["reqs", reqRes, "activation requests"], ["releases", relRes, "releases"],
+    ["announcements", annRes, "announcements"],
+  ]) {
+    if (!result || result.error) state.dataErrors.push(label);
+    else state[key] = result.data || [];
+  }
 
   state.telemetryError = visitsRes === null;
-  state.visits = visitsRes || [];
-  state.stations = stationsRes || [];
-  state.sales = salesRes || [];
-
+  for (const [key, result, label] of [
+    ["visits", visitsRes, "tool usage"], ["stations", stationsRes, "station status"],
+    ["sales", salesRes, "sales"], ["onlineDaily", onlineRes, "period online time"],
+  ]) {
+    if (result === null) state.dataErrors.push(label);
+    else state[key] = result;
+  }
+  if (salesRes !== null) state.salesReady = true;
   await loadGithubRelease();
-  state.lastSync = new Date();
+  if (!state.dataErrors.length) state.lastSync = new Date();
 
   $("#navReqCount").textContent = state.reqs.length;
   $("#navReqCount").classList.toggle("hidden", !state.reqs.length);
@@ -1315,7 +1396,7 @@ async function refreshAll(manual = false) {
   state.loading = false;
   if (btn) btn.style.opacity = "1";
   renderCurrentView();
-  if (manual) toast("Dashboard refreshed.", "info");
+  if (manual) toast(state.dataErrors.length ? "Refresh incomplete — see warning. Last successful data retained." : "Dashboard refreshed.", state.dataErrors.length ? "err" : "info");
 }
 
 function setRange(days) {
@@ -1336,8 +1417,8 @@ function daysAgoKey(n) {
 function buildAnalytics() {
   const days = state.days;
   const fromKey = daysAgoKey(days);
-  const inRange = state.visits.filter((v) => String(v.visit_date) >= fromKey);
   const todayKey = isoDay(new Date());
+  const inRange = state.visits.filter((v) => String(v.visit_date) >= fromKey && String(v.visit_date) <= todayKey);
 
   const byTool = new Map();
   const byCity = new Map();
@@ -1395,16 +1476,17 @@ function buildAnalytics() {
 
   // sales
   const fromIso = fromKey;
-  const salesInRange = state.sales.filter((s) => String(s.created_at || "").slice(0, 10) >= fromIso && !s.voided_at);
+  const salesInRange = state.sales.filter((s) => String(s.created_at || "").slice(0, 10) >= fromIso && String(s.created_at || "").slice(0, 10) <= todayKey && !s.voided_at);
   const todaySales = salesInRange.filter((s) => String(s.created_at || "").slice(0, 10) === todayKey);
-  const revenueToday = todaySales.reduce((a, s) => a + (Number(s.total_cents) || 0), 0);
-  const revenueRange = salesInRange.reduce((a, s) => a + (Number(s.total_cents) || 0), 0);
+  const revenueToday = currencyTotals(todaySales);
+  const revenueRange = currencyTotals(salesInRange);
   const salesByShop = new Map();
   for (const s of salesInRange) {
-    const row = salesByShop.get(s.shop_id) || { cents: 0, count: 0, currency: s.currency || "R" };
+    const key = JSON.stringify([s.shop_id, s.currency || "R"]);
+    const row = salesByShop.get(key) || { shopId: s.shop_id, cents: 0, count: 0, currency: s.currency || "R" };
     row.cents += Number(s.total_cents) || 0;
     row.count += 1;
-    salesByShop.set(s.shop_id, row);
+    salesByShop.set(key, row);
   }
 
   const online = state.stations.filter((s) => Date.now() - new Date(s.last_seen_at).getTime() < 5 * 60000);
@@ -1412,8 +1494,66 @@ function buildAnalytics() {
   const activeShops = new Set(state.keys.filter((k) => !k.revoked && k.shop_id && daysLeft(k.expires_at) >= 0).map((k) => k.shop_id));
   const expiring = state.keys.filter((k) => !k.revoked && daysLeft(k.expires_at) >= 0 && daysLeft(k.expires_at) <= 30).length;
 
+  // Online duration per PC in range (station_online_daily, v0.8.3+).
+  const byOnline = new Map();
+  for (const row of state.onlineDaily) {
+    if (String(row.visit_date) < fromKey || String(row.visit_date) > todayKey) continue;
+    const mid = row.machine_id;
+    const cur = byOnline.get(mid) || {
+      seconds: 0, shopName: (row.shop_name || "").trim(), city: (row.city_label || "").trim(),
+      station: (row.station_name || "").trim(), days: new Set(),
+    };
+    cur.seconds += Number(row.online_seconds) || 0;
+    if (row.shop_name) cur.shopName = row.shop_name;
+    if (row.city_label) cur.city = row.city_label;
+    if (row.station_name) cur.station = row.station_name;
+    cur.days.add(String(row.visit_date));
+    byOnline.set(mid, cur);
+  }
+  // Lifetime heartbeat counters are deliberately NOT substituted for period data.
+  // Missing daily rows mean unknown/no period observation, not lifetime usage.
+
+  const topToolEntry = [...byTool.entries()].sort((x, y) => y[1] - x[1])[0] || null;
+  const mostUsedPage = topToolEntry ? topToolEntry[0] : null;
+  const mostUsedPageOpens = topToolEntry ? topToolEntry[1] : 0;
+
+  const machineRows = [...byMachine.entries()].map(([mid, row]) => {
+    const on = byOnline.get(mid);
+    const top = [...row.tools.entries()].sort((x, y) => y[1] - x[1])[0];
+    const st = state.stations.find((s) => s.machine_id === mid);
+    return {
+      mid,
+      visits: row.visits,
+      onlineSeconds: on ? on.seconds : 0,
+      topPage: top ? top[0] : null,
+      shopName: row.shopName || (on && on.shopName) || "",
+      city: row.city || (on && on.city) || "",
+      station: (st && st.station_name) || (on && on.station) || "",
+      last: row.last || (st ? st.last_seen_at : ""),
+      tools: row.tools,
+    };
+  });
+  // PCs with online time but zero tool opens in range still belong on the board.
+  for (const [mid, on] of byOnline.entries()) {
+    if (machineRows.some((r) => r.mid === mid)) continue;
+    const st = state.stations.find((s) => s.machine_id === mid);
+    machineRows.push({
+      mid, visits: 0, onlineSeconds: on.seconds, topPage: (st && st.current_screen) || null,
+      shopName: on.shopName || "", city: on.city || "",
+      station: on.station || (st && st.station_name) || "",
+      last: (st && st.last_seen_at) || "", tools: new Map(),
+    });
+  }
+
+  const byVisits = [...machineRows].sort((x, y) => y.visits - x.visits || y.onlineSeconds - x.onlineSeconds);
+  const byOnlineSorted = [...machineRows].sort((x, y) => y.onlineSeconds - x.onlineSeconds || y.visits - x.visits);
+  const mostActivePc = byVisits[0] || null;
+  const longestOnlinePc = byOnlineSorted[0] || null;
+
   return {
     days, inRange, total, today, series, byTool, byGroup, byCity, byShop, byMachine,
+    byOnline, machineRows, byVisits, byOnlineSorted,
+    mostUsedPage, mostUsedPageOpens, mostActivePc, longestOnlinePc,
     online, activeComputers, activeShops, expiring,
     revenueToday, revenueRange, salesInRange, salesByShop,
     todaySalesCount: todaySales.length,
@@ -1554,6 +1694,43 @@ function liveRow(st) {
   </div>`;
 }
 
+/* ---------------- PC leaderboards (most used / longest online) ---------------- */
+function renderPcLeaders(a) {
+  const activeHost = document.getElementById("activePcLeaders");
+  const onlineHost = document.getElementById("onlinePcLeaders");
+  const badge = document.getElementById("onlineRangeBadge");
+  if (badge) badge.textContent = `last ${a.days}d`;
+
+  const active = (a.byVisits || []).filter((r) => r.visits > 0).slice(0, 5);
+  if (activeHost) {
+    activeHost.innerHTML = active.length
+      ? active.map((r, i) => rankRow(
+          i + 1,
+          r.station || shortId(r.mid, 10),
+          `${r.shopName || "Unassigned"} · top: ${r.topPage || "—"}`,
+          r.visits,
+          "opens"
+        )).join("")
+      : `<div class="empty">No PC usage yet. Stations opt in from Help &amp; privacy → usage statistics.</div>`;
+  }
+
+  const online = (a.byOnlineSorted || []).filter((r) => r.onlineSeconds > 0).slice(0, 5);
+  if (onlineHost) {
+    // Custom rows: rankRow() runs values through num(), which would zero out "12h 30m".
+    onlineHost.innerHTML = online.length
+      ? online.map((r, i) => `
+        <div class="rank-row">
+          <div class="rank-no">${i + 1}</div>
+          <div class="rank-main">
+            <div class="t">${esc(r.station || shortId(r.mid, 10))}</div>
+            <div class="s">${esc(r.shopName || "Unassigned")} · ${num(r.visits)} opens</div>
+          </div>
+          <div class="rank-val"><div class="n">${esc(fmtDur(r.onlineSeconds))}</div><div class="u">online</div></div>
+        </div>`).join("")
+      : `<div class="empty">No online-time data yet.<br><span style="font-size:11.5px">Appears after PCs on v0.8.3+ send usage statistics.</span></div>`;
+  }
+}
+
 /* ---------------- render: overview ---------------- */
 function renderOverview() {
   const a = buildAnalytics();
@@ -1564,7 +1741,7 @@ function renderOverview() {
     { cls: "lime", ico: "monitor", label: "Active computers", value: num(a.activeComputers.size), sub: `<b>${num(onlineNow)}</b> online right now` },
     { cls: "blue", ico: "shop", label: "Active shops", value: num(a.activeShops.size), sub: `${num(a.cities)} cities / areas` },
     { cls: "violet", ico: "pulse", label: "Tool opens today", value: num(a.today), sub: `${num(a.total)} in last ${a.days} days` },
-    { cls: "teal", ico: "cash", label: "Sales today", value: money(a.revenueToday), sub: `${num(a.todaySalesCount)} recorded sales` },
+    { cls: "teal", ico: "cash", label: "Sales today", value: state.salesReady ? currencyTotalsHTML(a.revenueToday) : "Unavailable", sub: `${num(a.todaySalesCount)} recorded sales · separate currencies` },
     { cls: "amber", ico: "inbox", label: "Pending requests", value: num(pending), sub: pending ? "Needs your approval" : "All clear" },
     { cls: "red", ico: "clock", label: "Expiring soon", value: num(a.expiring), sub: "Within 30 days" },
   ];
@@ -1584,9 +1761,15 @@ function renderOverview() {
 
   const tools = [...a.byTool.entries()].sort((x, y) => y[1] - x[1]).slice(0, 7);
   const maxTool = tools.length ? tools[0][1] : 1;
+  const topToolsSub = document.getElementById("topToolsSub");
+  if (topToolsSub) topToolsSub.textContent = a.mostUsedPage
+    ? `Top: ${a.mostUsedPage} · last ${a.days} days`
+    : `Pages & tools ranked by opens · last ${a.days} days`;
   $("#topTools").innerHTML = tools.length
     ? tools.map(([name, v]) => barRow(name, TOOL_TO_GROUP[name] || "", v, maxTool, a.total ? ((v / a.total) * 100).toFixed(0) + "%" : "")).join("")
     : `<div class="empty">No tool usage recorded yet.<br><span style="font-size:11.5px">Stations running Café Desk v0.8.2+ report anonymised tool counts automatically.</span></div>`;
+
+  renderPcLeaders(a);
 
   $("#stationCount").textContent = `${state.stations.length} station${state.stations.length === 1 ? "" : "s"}`;
   $("#liveStations").innerHTML = state.stations.length
@@ -1614,15 +1797,13 @@ function renderAnalytics() {
   const a = buildAnalytics();
 
   const onlineNow = a.online.length;
-  const topCity = [...a.byCity.entries()].sort((x, y) => y[1].visits - x[1].visits)[0];
-  const topTool = [...a.byTool.entries()].sort((x, y) => y[1] - x[1])[0];
-  const avgPerPc = a.byMachine.size ? Math.round(a.total / a.byMachine.size) : 0;
-
+  const longest = a.longestOnlinePc;
+  const activePc = a.mostActivePc;
   const kpis = [
     { cls: "lime", ico: "pulse", label: "Total tool opens", value: num(a.total), sub: `Last ${a.days} days` },
-    { cls: "blue", ico: "pin", label: "Busiest place", value: topCity ? esc(topCity[0]) : "—", sub: topCity ? `${num(topCity[1].visits)} visits · ${num(topCity[1].machines.size)} PCs` : "No data yet", small: true },
-    { cls: "violet", ico: "sparkle", label: "Most used tool", value: topTool ? esc(topTool[0]) : "—", sub: topTool ? `${num(topTool[1])} opens` : "No data yet", small: true },
-    { cls: "teal", ico: "monitor", label: "Avg per computer", value: num(avgPerPc), sub: `${num(a.byMachine.size)} reporting PCs` },
+    { cls: "blue", ico: "pin", label: "Most used page", value: a.mostUsedPage ? esc(a.mostUsedPage) : "—", sub: a.mostUsedPage ? `${num(a.mostUsedPageOpens)} opens · last ${a.days} days` : "No data yet", small: true },
+    { cls: "violet", ico: "monitor", label: "Most active PC", value: activePc ? esc(activePc.station || shortId(activePc.mid, 10)) : "—", sub: activePc ? `${num(activePc.visits)} opens · ${esc(activePc.shopName || "unassigned")}` : "No data yet", small: true },
+    { cls: "teal", ico: "clock", label: "Longest online", value: longest ? esc(longest.station || shortId(longest.mid, 10)) : "—", sub: longest ? `${fmtDur(longest.onlineSeconds)} online · ${num(longest.visits)} opens` : "No online data yet", small: true },
   ];
   $("#analyticsKpis").innerHTML = kpis.map((k) => `
     <div class="kpi ${k.cls}">
@@ -1632,7 +1813,10 @@ function renderAnalytics() {
       <div class="s">${k.sub}</div>
     </div>`).join("");
 
-  $("#placesSub").textContent = `Every Café Desk tool ranked by opens · last ${a.days} days`;
+  $("#placesSub").textContent = `Most used pages ranked by opens · last ${a.days} days`;
+
+  // Overview leaderboards (also refreshed when Analytics re-renders).
+  renderPcLeaders(a);
   $$("#rangeTabs2 button").forEach((b) => b.classList.toggle("active", Number(b.dataset.days) === a.days));
 
   const toolRows = [...a.byTool.entries()].sort((x, y) => y[1] - x[1]);
@@ -1664,39 +1848,42 @@ function renderAnalytics() {
     ? a.online.slice(0, 8).map(liveRow).join("")
     : `<div class="empty">No PC has checked in during the last 5 minutes.</div>`;
 
-  const machines = [...a.byMachine.entries()].sort((x, y) => y[1].visits - x[1].visits).slice(0, 12);
+  const machines = a.byVisits.slice(0, 12);
   const stByMid = new Map(state.stations.map((s) => [s.machine_id, s]));
   $("#machineTable").innerHTML = machines.length
-    ? machines.map(([mid, row]) => {
+    ? machines.map((row) => {
+        const mid = row.mid;
         const st = stByMid.get(mid);
-        const top = [...row.tools.entries()].sort((x, y) => y[1] - x[1])[0];
+        const station = row.station || (st ? st.station_name : "") || shortId(mid, 10);
         return `<tr>
-          <td><div class="mono" style="color:var(--lime);font-size:11.2px">${esc(mid)}</div><div class="cell-sub">${esc(st ? st.station_name : "—")}</div></td>
+          <td><div class="mono" style="color:var(--lime);font-size:11.2px">${esc(mid)}</div><div class="cell-sub">${esc(station)}</div></td>
           <td>${esc(row.shopName || "—")}<div class="cell-sub">${esc(row.city || "No city")}</div></td>
-          <td><span class="badge b-blue">${esc(top ? top[0] : "—")}</span></td>
+          <td><span class="badge b-blue">${esc(row.topPage || "—")}</span></td>
           <td style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${num(row.visits)}</td>
+          <td style="text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${row.onlineSeconds ? esc(fmtDur(row.onlineSeconds)) : "—"}</td>
           <td style="color:var(--dim);font-size:11.5px">${st ? relTime(st.last_seen_at) : relTime(row.last)}</td>
           <td><button class="btn btn-danger btn-sm" data-delete-machine="${attr(mid)}">Delete PC data</button></td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="6" class="empty">No machines reporting yet.</td></tr>`;
+    : `<tr><td colspan="7" class="empty">No machines reporting yet.</td></tr>`;
 
-  const shops = [...a.salesByShop.entries()].sort((x, y) => y[1].cents - x[1].cents).slice(0, 8);
-  const maxSales = shops.length ? shops[0][1].cents : 1;
+  const shops = [...a.salesByShop.entries()].sort((x, y) => x[1].currency.localeCompare(y[1].currency) || y[1].cents - x[1].cents);
+  const currencyMax = new Map();
+  for (const [, row] of shops) currencyMax.set(row.currency, Math.max(currencyMax.get(row.currency) || 1, row.cents));
   $("#salesOverview").innerHTML = (shops.length
     ? `<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px">
-         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Range revenue</div><div style="font-size:21px;font-weight:800">${money(a.revenueRange)}</div></div>
+         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Range revenue</div><div style="font-size:21px;font-weight:800">${currencyTotalsHTML(a.revenueRange)}</div></div>
          <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Sales</div><div style="font-size:21px;font-weight:800">${num(a.salesInRange.length)}</div></div>
-         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Avg ticket</div><div style="font-size:21px;font-weight:800">${money(a.salesInRange.length ? a.revenueRange / a.salesInRange.length : 0)}</div></div>
+         <div><div style="font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Avg ticket</div><div style="font-size:21px;font-weight:800">${currencyTotalsHTML(a.revenueRange, true)}</div></div>
        </div>` : "") +
     (shops.length
       ? shops.map(([sid, row]) => `
           <div class="rank-row">
-            <div class="rank-main"><div class="t">${esc(sid)}</div><div class="s">${num(row.count)} sales</div></div>
-            <div style="width:34%;min-width:70px"><div class="bar-track"><div class="bar-fill" style="width:${Math.max(3, (row.cents / maxSales) * 100).toFixed(1)}%"></div></div></div>
-            <div class="rank-val"><div class="n">${money(row.cents, row.currency || "R")}</div></div>
+            <div class="rank-main"><div class="t">${esc(row.shopId)}</div><div class="s">${num(row.count)} sales · ${esc(row.currency)}</div></div>
+            <div style="width:34%;min-width:70px"><div class="bar-track"><div class="bar-fill" style="width:${Math.max(3, (row.cents / currencyMax.get(row.currency)) * 100).toFixed(1)}%"></div></div></div>
+            <div class="rank-val"><div class="n">${esc(money(row.cents, row.currency || "R"))}</div></div>
           </div>`).join("")
-      : `<div class="empty">No shop sales synced yet.<br><span style="font-size:11.5px">Shops appear here once a station uses “Sync sales” in the desktop app.</span></div>`);
+      : `<div class="empty">${state.salesReady ? "No shop sales synced yet." : "Sales data unavailable."}<br><span style="font-size:11.5px">Shops appear here once a station uses “Sync sales” in the desktop app.</span></div>`);
 }
 
 /* ---------------- render: keys ---------------- */
@@ -1778,17 +1965,99 @@ function renderReqsTable() {
 }
 
 /* ---------------- render: fleet ---------------- */
+function parseReleaseBodyHashes(body) {
+  const text = String(body || "");
+  const hashAfter = (label) => {
+    const lines = text.split(/\r?\n/);
+    const needle = label.toLowerCase();
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].toLowerCase().includes(needle)) continue;
+      const here = lines[i].match(/\b([0-9a-f]{64})\b/i);
+      if (here) return here[1].toLowerCase();
+      const next = i + 1 < lines.length ? lines[i + 1].match(/\b([0-9a-f]{64})\b/i) : null;
+      if (next) return next[1].toLowerCase();
+    }
+    return "";
+  };
+  let exeSha = hashAfter("CafeDesk-Setup.exe");
+  let zipSha = hashAfter("CafeDesk-Windows-USB-Portable.zip");
+  if (!exeSha || !zipSha) {
+    const all = Array.from(text.matchAll(/\b([0-9a-f]{64})\b/gi), (m) => m[1].toLowerCase());
+    if (!exeSha && all[0]) exeSha = all[0];
+    if (!zipSha && all[1]) zipSha = all[1];
+  }
+  return { exeSha, zipSha };
+}
+
+function githubReleaseHashes() {
+  const sums = state.sums || {};
+  let exeSha = String(sums?.setup_exe?.sha256 || "").toLowerCase().trim();
+  let zipSha = String(sums?.usb_zip?.sha256 || "").toLowerCase().trim();
+  if (!exeSha || !zipSha) {
+    const parsed = parseReleaseBodyHashes(state.gh && state.gh.body ? String(state.gh.body) : "");
+    if (!exeSha) exeSha = parsed.exeSha;
+    if (!zipSha) zipSha = parsed.zipSha;
+  }
+  if (!exeSha || !zipSha) {
+    const assets = state.gh && Array.isArray(state.gh.assets) ? state.gh.assets : [];
+    const exeAsset = assets.find((a) => String(a.name || "").toLowerCase().endsWith(".exe"));
+    const zipAsset = assets.find((a) => String(a.name || "").toLowerCase().endsWith(".zip"));
+    if (!exeSha && exeAsset && typeof exeAsset.digest === "string") {
+      const dm = exeAsset.digest.match(/^sha256:([0-9a-f]{64})$/i);
+      if (dm) exeSha = dm[1].toLowerCase();
+    }
+    if (!zipSha && zipAsset && typeof zipAsset.digest === "string") {
+      const dm = zipAsset.digest.match(/^sha256:([0-9a-f]{64})$/i);
+      if (dm) zipSha = dm[1].toLowerCase();
+    }
+  }
+  return { exeSha, zipSha };
+}
+
 function renderFleet() {
   const tb = $("#releasesTbody");
-  tb.innerHTML = state.releases.length
-    ? state.releases.map((r) => `<tr>
-        <td><strong style="color:var(--lime)">v${esc(r.version)}</strong>${r.mandatory ? ' <span class="badge b-warn">Mandatory</span>' : ""}</td>
+  const ghVer = state.gh && state.gh.tag_name ? String(state.gh.tag_name).replace(/^v/i, "").trim() : "";
+  const ghSynced = !ghVer || state.releases.some((r) => String(r.version) === ghVer && r.signature && String(r.signature).trim());
+  const unsyncedBanner = !ghSynced
+    ? `<tr style="background:rgba(185,255,112,.06)">
+        <td colspan="4"><strong style="color:var(--lime)">GitHub Release v${esc(ghVer)}</strong> <span class="badge b-warn">Not synced to in-app updates</span>
+          <span style="color:var(--muted);font-size:11.8px;margin-left:6px">Sign &amp; sync so every shop PC receives v${esc(ghVer)} inside the app.</span></td>
+        <td><button class="btn btn-primary btn-sm" onclick="syncGithubRelease()">Sync &amp; sign v${esc(ghVer)}</button></td>
+      </tr>`
+    : "";
+  // Stale-record guard: if the signed Supabase SHA no longer matches the GitHub
+  // file, every in-app update fails with "downloaded SHA-256 did not match owner
+  // signature". Surface it here so the owner re-syncs before customers hit it.
+  const ghRow = ghVer ? state.releases.find((r) => String(r.version) === ghVer) : null;
+  const ghHashes = githubReleaseHashes();
+  const exeMismatch = Boolean(ghRow && ghHashes.exeSha && String(ghRow.sha256 || "").toLowerCase() !== ghHashes.exeSha);
+  const zipMismatch = Boolean(ghRow && ghHashes.zipSha && String(ghRow.portable_sha256 || "").toLowerCase() && String(ghRow.portable_sha256 || "").toLowerCase() !== ghHashes.zipSha);
+  const mismatchBanner = (exeMismatch || zipMismatch)
+    ? `<tr style="background:rgba(255,107,107,.08)">
+        <td colspan="4"><strong style="color:#FF8A8A">GitHub Release v${esc(ghVer)}</strong> <span class="badge b-exp">Checksum mismatch</span>
+          <span style="color:var(--muted);font-size:11.8px;margin-left:6px">The signed record does not match the GitHub file — in-app updates will fail until re-synced.</span></td>
+        <td><button class="btn btn-primary btn-sm" onclick="syncGithubRelease()">Re-sync &amp; sign v${esc(ghVer)}</button></td>
+      </tr>`
+    : "";
+  tb.innerHTML = mismatchBanner + unsyncedBanner + (state.releases.length
+    ? state.releases.map((r) => {
+        const signed = Boolean(r.signature && String(r.signature).trim());
+        const hasPortable = Boolean(r.portable_signature && String(r.portable_signature).trim());
+        const sigBadge = signed
+          ? `<span class="badge b-ok">Signed</span>${hasPortable ? ' <span class="badge b-blue">+ USB ZIP</span>' : ""}`
+          : '<span class="badge b-warn">Unsigned</span>';
+        const signAction = signed
+          ? ""
+          : ` <button class="btn btn-ghost btn-sm" data-sign-release="${attr(r.version)}">Sign</button>`;
+        return `<tr>
+        <td><strong style="color:var(--lime)">v${esc(r.version)}</strong> ${sigBadge}${r.mandatory ? ' <span class="badge b-warn">Mandatory</span>' : ""}</td>
         <td class="mono" style="font-size:11.4px">${esc(String(r.published_at || "").slice(0, 10))}</td>
         <td class="mono" style="font-size:10.6px;color:var(--dim)">${esc(shortId(r.sha256 || "", 14))}</td>
         <td style="max-width:340px;font-size:11.8px;color:var(--muted)">${esc(r.release_notes || "—")}</td>
-        <td><a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${attr(r.download_url)}">Download</a></td>
-      </tr>`).join("")
-    : `<tr><td colspan="5" class="empty">No remote updates published yet. Builds from GitHub Actions publish automatically once synced.</td></tr>`;
+        <td><div class="row-actions"><a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="${attr(r.download_url)}">Download</a>${signAction}</div></td>
+      </tr>`;
+      }).join("")
+    : `<tr><td colspan="5" class="empty">No remote updates published yet. Builds from GitHub Actions publish automatically once synced.</td></tr>`);
 
   const at = $("#announcementsTbody");
   if (at) at.innerHTML = state.announcements.length ? state.announcements.map((a) => `
@@ -1822,6 +2091,33 @@ document.addEventListener("click", async (e) => {
       await navigator.clipboard.writeText(copyBtn.dataset.copy);
       toast("License key copied.");
     } catch (_) { toast("Copy failed — long-press the key instead.", "err"); }
+    return;
+  }
+
+  const signRelBtn = e.target.closest("[data-sign-release]");
+  if (signRelBtn) {
+    const ver = signRelBtn.dataset.signRelease;
+    const rel = state.releases.find((r) => String(r.version) === String(ver));
+    if (!rel) return;
+    signRelBtn.disabled = true;
+    try {
+      await callOwnerAdmin({
+        action: "publish_release",
+        version: rel.version,
+        download_url: rel.download_url,
+        sha256: rel.sha256,
+        portable_download_url: rel.portable_download_url || "",
+        portable_sha256: rel.portable_sha256 || "",
+        release_notes: rel.release_notes || "",
+        mandatory: Boolean(rel.mandatory),
+        published_at: rel.published_at || undefined,
+      });
+      toast(`Signed Café Desk v${rel.version} for seamless in-app updates.`);
+      await refreshAll();
+    } catch (err) {
+      toast(err.message || "Could not sign release.", "err");
+      signRelBtn.disabled = false;
+    }
     return;
   }
 
@@ -2068,12 +2364,16 @@ async function publishReleaseNow() {
       $("#relUrl").value = download_url;
     }
     if (!download_url.startsWith("https://")) throw new Error("Download URL must start with https://");
-    btn.textContent = "Publishing…";
-    const { error } = await sb.from("app_releases").upsert({
-      version, download_url, sha256, signature: "", release_notes, mandatory: false, published_at: new Date().toISOString(),
+    btn.textContent = "Signing & publishing…";
+    await callOwnerAdmin({
+      action: "publish_release",
+      version,
+      download_url,
+      sha256,
+      release_notes,
+      mandatory: false,
     });
-    if (error) throw new Error(error.message);
-    toast(`Published Café Desk v${version} — every shop can update remotely.`);
+    toast(`Published owner-signed Café Desk v${version} — every shop can update directly inside the app.`);
     await refreshAll();
   } catch (err) {
     toast(err.message, "err");
@@ -2099,10 +2399,14 @@ async function publishAnnouncement() {
 }
 
 async function syncGithubRelease() {
-  toast("Reading latest GitHub build…", "info");
+  toast("Signing & syncing latest GitHub build…", "info");
   try {
-    const res = await callOwnerAdmin({ action: "sync_github_release", repo: REPO });
-    toast(`Synced v${res.release.version} into auto-update.`);
+    const notesEl = $("#relNotes");
+    const release_notes = notesEl ? notesEl.value.trim() : "";
+    const payload = { action: "sync_github_release", repo: REPO };
+    if (release_notes) payload.release_notes = release_notes;
+    const res = await callOwnerAdmin(payload);
+    toast(`Signed & synced Café Desk v${res.release.version} (Installer + USB ZIP) for in-app updates.`);
     await refreshAll();
   } catch (err) {
     toast(err.message, "err");
@@ -2425,32 +2729,50 @@ function requestedView() {
 })();
 </script>
   <script>
+    function templateMessage(tbody, text) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 6;
+      cell.textContent = String(text);
+      row.append(cell);
+      tbody.replaceChildren(row);
+    }
+
     async function loadTemplates() {
       const tbody = document.getElementById("templatesTbody");
       if (!tbody || typeof sb === "undefined" || !sb) return;
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">Loading…</td></tr>';
-      const { data, error } = await sb.from("templates").select("*").order("category").order("name");
-      if (error) {
-        tbody.innerHTML = `<tr><td colspan="6" style="color:#f87171;">${error.message}</td></tr>`;
-        return;
+      templateMessage(tbody, "Loading…");
+      try {
+        const { data, error } = await sb.from("templates").select("*").order("category").order("name");
+        if (error) throw error;
+        if (!data || !data.length) return templateMessage(tbody, "No templates published yet.");
+        tbody.replaceChildren();
+        for (const t of data) {
+          const row = document.createElement("tr");
+          for (const value of [String(t.category || "").toUpperCase(), t.name, t.slug, "v" + t.version, t.is_active ? "Active" : "Hidden"]) {
+            const cell = document.createElement("td");
+            cell.textContent = String(value ?? "");
+            row.append(cell);
+          }
+          const actions = document.createElement("td");
+          // IDs are captured as values by listeners, never parsed as HTML/JavaScript.
+          for (const [text, handler] of [
+            [t.is_active ? "Hide" : "Show", () => toggleTemplateActive(t.id, !t.is_active)],
+            ["Delete", () => deleteTemplate(t.id)],
+          ]) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-ghost btn-sm";
+            button.textContent = text;
+            button.addEventListener("click", handler);
+            actions.append(button);
+          }
+          row.append(actions);
+          tbody.append(row);
+        }
+      } catch (error) {
+        templateMessage(tbody, error.message || "Could not load templates.");
       }
-      if (!data || !data.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No templates published yet.</td></tr>';
-        return;
-      }
-      tbody.innerHTML = data.map((t) => `
-        <tr>
-          <td><span class="badge">${t.category.toUpperCase()}</span></td>
-          <td>${t.name}</td>
-          <td><code>${t.slug}</code></td>
-          <td>v${t.version}</td>
-          <td>${t.is_active ? "Active" : "Hidden"}</td>
-          <td style="display:flex;gap:6px;">
-            <button class="btn btn-ghost btn-sm" onclick="toggleTemplateActive('${t.id}', ${!t.is_active})">${t.is_active ? "Hide" : "Show"}</button>
-            <button class="btn btn-ghost btn-sm" style="color:#f87171;" onclick="deleteTemplate('${t.id}')">Delete</button>
-          </td>
-        </tr>
-      `).join("");
     }
 
     async function publishTemplate() {
@@ -2488,14 +2810,16 @@ function requestedView() {
 
     async function toggleTemplateActive(id, nextActive) {
       if (typeof sb === "undefined" || !sb) return;
-      await sb.from("templates").update({ is_active: nextActive, updated_at: new Date().toISOString() }).eq("id", id);
+      const { error } = await sb.from("templates").update({ is_active: nextActive, updated_at: new Date().toISOString() }).eq("id", id);
+      if (error) return toast(error.message, "err");
       loadTemplates();
     }
 
     async function deleteTemplate(id) {
       if (typeof sb === "undefined" || !sb) return;
       if (!confirm("Delete this template?")) return;
-      await sb.from("templates").delete().eq("id", id);
+      const { error } = await sb.from("templates").delete().eq("id", id);
+      if (error) return toast(error.message, "err");
       loadTemplates();
     }
 

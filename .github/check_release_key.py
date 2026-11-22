@@ -17,8 +17,9 @@ failure) on pull requests, so contributors can still build and test freely.
 
 Usage
 -----
-    python .github/check_release_key.py            # enforce (release builds)
+    python .github/check_release_key.py              # enforce (release builds)
     python .github/check_release_key.py --warn-only  # pull-request builds
+    python .github/check_release_key.py --dist-dir dist/CafeDesk
 
 Exit codes: 0 = ok / warned, 1 = enforcement failed.
 """
@@ -26,10 +27,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dis
+import io
+import marshal
 import os
 import re
-import subprocess
+import struct
 import sys
+import zlib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -37,9 +42,25 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import admin_keygen  # noqa: E402
+import license_guard  # noqa: E402
 
 
 _B64U_RE = re.compile(r'^[A-Za-z0-9_-]+={0,2}$')
+RELEASE_KEY_META_PREFIX = 'CAFEDESK-EMBEDDED-PUBLIC-KEY-V1:'
+RELEASE_KEY_META_REL = Path('_internal') / 'release-key.meta'
+
+_PKG_COOKIE_MAGIC = b'MEI\x0c\x0b\x0a\x0b\x0e'
+_PKG_COOKIE_FORMAT = '!8sIIII64s'
+_PKG_COOKIE_LEN = struct.calcsize(_PKG_COOKIE_FORMAT)
+_PKG_TOC_ENTRY_FORMAT = '!IIIIBc'
+_PKG_TOC_ENTRY_LEN = struct.calcsize(_PKG_TOC_ENTRY_FORMAT)
+_PYZ_MAGIC = b'PYZ\x00'
+_SHORT_ASCII_43_RE = re.compile(rb'[\x5a\xda\x7a\xfa]\x2b([A-Za-z0-9_-]{43})')
+_LONG_ASCII_43_RE = re.compile(rb'[\x41\xc1\x61\xe1\x73\xf3\x75\xf5]\x2b\x00\x00\x00([A-Za-z0-9_-]{43})')
+_PYZ_TOC_FALLBACK_RE = re.compile(
+    rb'[\x5a\xda\x7a\xfa]\x0dlicense_guard[\x29\xa9]\x03[\x69\xe9](.{4})[\x69\xe9](.{4})[\x69\xe9](.{4})',
+    re.DOTALL,
+)
 
 
 def validate_public_key_material(value: str) -> str:
@@ -99,6 +120,172 @@ def _emit(level: str, title: str, message: str) -> None:
         print(f'::{level} title={title}::{message}')
     else:
         print(f'{level.upper()}: {title}: {message}')
+
+
+def _is_keyish_str(candidate: str) -> bool:
+    if len(candidate) != 43 or not _B64U_RE.match(candidate):
+        return False
+    try:
+        return len(base64.urlsafe_b64decode(candidate + '=')) == 32
+    except Exception:
+        return False
+
+
+def _extract_keys_from_marshalled_guard(raw_code: bytes, demo_key: str) -> list[str]:
+    """Extract `DEFAULT_OWNER_PUBLIC_KEY_B64` from marshalled `license_guard` code bytes."""
+    for candidate_blob in (raw_code, raw_code[16:] if len(raw_code) > 16 else b''):
+        if not candidate_blob:
+            continue
+        try:
+            code_obj = marshal.loads(candidate_blob)
+        except Exception:
+            code_obj = None
+        if code_obj is not None and hasattr(code_obj, 'co_code'):
+            last_const = None
+            try:
+                for instr in dis.get_instructions(code_obj):
+                    if instr.opname == 'LOAD_CONST':
+                        last_const = instr.argval
+                    elif instr.opname in ('STORE_NAME', 'STORE_GLOBAL') and instr.argval == 'DEFAULT_OWNER_PUBLIC_KEY_B64':
+                        if isinstance(last_const, str) and last_const:
+                            return [last_const.strip()]
+                        last_const = None
+                    else:
+                        last_const = None
+            except Exception:
+                pass
+
+    # Cross-Python-version fallback (when the verifier runs on a different Python minor
+    # version than the build environment, `marshal.loads` rejects `TYPE_CODE`).
+    ordered: list[str] = []
+    for regex in (_SHORT_ASCII_43_RE, _LONG_ASCII_43_RE):
+        for match in regex.finditer(raw_code):
+            val = match.group(1).decode('ascii')
+            if _is_keyish_str(val) and val not in ordered:
+                ordered.append(val)
+    if len(ordered) == 2 and ordered[0] == demo_key and ordered[1] != demo_key:
+        return [ordered[1]]
+    return ordered
+
+
+def _extract_guard_keys_from_pyz_bytes(pyz_blob: bytes, demo_key: str) -> list[str]:
+    if len(pyz_blob) < 17 or pyz_blob[:4] != _PYZ_MAGIC:
+        return []
+    toc_offset = struct.unpack('!i', pyz_blob[8:12])[0]
+    if toc_offset <= 0 or toc_offset >= len(pyz_blob):
+        return []
+    toc_bytes = pyz_blob[toc_offset:]
+    entry_loc: tuple[int, int] | None = None
+    try:
+        toc_obj = marshal.loads(toc_bytes)
+        if isinstance(toc_obj, dict) and 'license_guard' in toc_obj:
+            _, pos, length = toc_obj['license_guard']
+            entry_loc = (int(pos), int(length))
+        elif isinstance(toc_obj, list):
+            for item in toc_obj:
+                if isinstance(item, tuple) and len(item) == 2 and item[0] == 'license_guard':
+                    _, pos, length = item[1]
+                    entry_loc = (int(pos), int(length))
+                    break
+    except Exception:
+        entry_loc = None
+
+    if entry_loc is None:
+        m = _PYZ_TOC_FALLBACK_RE.search(toc_bytes)
+        if m:
+            _, pos, length = (struct.unpack('<i', m.group(i))[0] for i in (1, 2, 3))
+            entry_loc = (pos, length)
+
+    if entry_loc is None:
+        return []
+    pos, length = entry_loc
+    if pos < 0 or length <= 0 or pos + length > len(pyz_blob):
+        return []
+    try:
+        raw_code = zlib.decompress(pyz_blob[pos:pos + length])
+    except zlib.error:
+        return []
+    return _extract_keys_from_marshalled_guard(raw_code, demo_key)
+
+
+def _find_pkg_cookie(fh: io.BufferedReader | io.BytesIO, max_tail: int = 16 * 1024 * 1024) -> int:
+    fh.seek(0, os.SEEK_END)
+    end_pos = fh.tell()
+    min_pos = max(0, end_pos - max_tail)
+    chunk_size = 65536
+    while end_pos - min_pos >= len(_PKG_COOKIE_MAGIC):
+        start_pos = max(min_pos, end_pos - chunk_size)
+        fh.seek(start_pos, os.SEEK_SET)
+        buf = fh.read(end_pos - start_pos)
+        pos = buf.rfind(_PKG_COOKIE_MAGIC)
+        if pos != -1:
+            return start_pos + pos
+        if start_pos == min_pos:
+            break
+        end_pos = start_pos + len(_PKG_COOKIE_MAGIC) - 1
+    return -1
+
+
+def extract_pyinstaller_guard_keys(path: Path, demo_key: str) -> list[str]:
+    """Extract `DEFAULT_OWNER_PUBLIC_KEY_B64` from a PyInstaller EXE/PKG/PYZ if present."""
+    found: list[str] = []
+    try:
+        with path.open('rb') as fh:
+            head4 = fh.read(4)
+            if head4 == _PYZ_MAGIC:
+                fh.seek(0, os.SEEK_SET)
+                return _extract_guard_keys_from_pyz_bytes(fh.read(), demo_key)
+
+            cookie_pos = _find_pkg_cookie(fh)
+            if cookie_pos < 0:
+                return []
+            fh.seek(cookie_pos, os.SEEK_SET)
+            cookie_buf = fh.read(_PKG_COOKIE_LEN)
+            if len(cookie_buf) != _PKG_COOKIE_LEN:
+                return []
+            _, archive_len, toc_off, toc_len, _, _ = struct.unpack(_PKG_COOKIE_FORMAT, cookie_buf)
+            end_offset = cookie_pos + _PKG_COOKIE_LEN
+            if archive_len <= 0 or toc_len <= 0 or archive_len > end_offset or toc_off + toc_len > archive_len:
+                return []
+            pkg_start = end_offset - archive_len
+            fh.seek(pkg_start + toc_off, os.SEEK_SET)
+            toc_data = fh.read(toc_len)
+            cur = 0
+            while cur + _PKG_TOC_ENTRY_LEN <= len(toc_data):
+                entry_len, entry_off, data_len, _, comp_flag, typecode = struct.unpack(
+                    _PKG_TOC_ENTRY_FORMAT, toc_data[cur:cur + _PKG_TOC_ENTRY_LEN]
+                )
+                if entry_len < _PKG_TOC_ENTRY_LEN or cur + entry_len > len(toc_data):
+                    break
+                raw_name = toc_data[cur + _PKG_TOC_ENTRY_LEN:cur + entry_len]
+                cur += entry_len
+                name = raw_name.rstrip(b'\x00').decode('utf-8', errors='replace')
+                tc = typecode.decode('ascii', errors='replace')
+                if tc == 'z':
+                    fh.seek(pkg_start + entry_off, os.SEEK_SET)
+                    pyz_blob = fh.read(data_len)
+                    if comp_flag:
+                        try:
+                            pyz_blob = zlib.decompress(pyz_blob)
+                        except zlib.error:
+                            continue
+                    for k in _extract_guard_keys_from_pyz_bytes(pyz_blob, demo_key):
+                        if k not in found:
+                            found.append(k)
+                elif tc in ('m', 'M', 's') and name in ('license_guard', 'license_guard.py', 'license_guard.pyc'):
+                    fh.seek(pkg_start + entry_off, os.SEEK_SET)
+                    mod_blob = fh.read(data_len)
+                    if comp_flag:
+                        try:
+                            mod_blob = zlib.decompress(mod_blob)
+                        except zlib.error:
+                            continue
+                    for k in _extract_keys_from_marshalled_guard(mod_blob, demo_key):
+                        if k not in found:
+                            found.append(k)
+    except OSError:
+        return []
+    return found
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,34 +381,50 @@ def _check_dist_dir(dist_dir: Path) -> int:
 
     A folder build is fine for contributors, but the installer that wraps it is not: this is
     the last gate before `iscc` turns that folder into a double-clickable Setup.exe.
-    PyInstaller keeps the 43-character base64url literal verbatim in the bundled bytecode,
-    so scanning raw bytes is enough and needs no disassembly. Documentation/data files
-    (see `_DATA_FILE_EXTENSIONS`) are skipped: they may quote the demo key as an example
-    without making the app verify licences against it.
+    PyInstaller compresses pure-Python modules with zlib inside `PYZ-00.pyz` embedded in
+    `CafeDesk.exe`'s CArchive, so we inspect BOTH PyInstaller CArchive/PYZ bytecode AND raw
+    file bytes. Documentation/data files (see `_DATA_FILE_EXTENSIONS`) are skipped: they may
+    quote the demo key as an example without making the app verify licences against it.
     """
     if not dist_dir.is_dir():
         _emit('error', 'Build folder missing', f'{dist_dir} does not exist, so the demo-key check cannot run.')
         return 1
     demo = _pristine_demo_key()
     needle = demo.encode('ascii')
+    expected_env = os.environ.get('CAFE_DESK_PUBLIC_KEY', '').strip()
+    if expected_env:
+        try:
+            expected_env = validate_public_key_material(expected_env)
+        except ValueError:
+            expected_env = ''
+
     found_demo = False
+    verified_pyz_keys: list[str] = []
     scanned = 0
-    # Onedir builds hide the app code in .pyc files inside the PYZ/EXE; still, the literal
-    # appears in the archive bytes, so plain binary searching covers it.
     for path in dist_dir.rglob('*'):
         if not path.is_file():
             continue
         if path.suffix.lower() in _DATA_FILE_EXTENSIONS:
             continue
         try:
-            if path.stat().st_size > 400 * 1024 * 1024:
+            size = path.stat().st_size
+            if size > 400 * 1024 * 1024:
                 continue
             scanned += 1
+            if path.suffix.lower() in ('', '.exe', '.pkg', '.pyz') and size >= 17:
+                pyz_keys = extract_pyinstaller_guard_keys(path, demo)
+                for key in pyz_keys:
+                    if key == demo:
+                        found_demo = True
+                        print(f'  demo key found in PyInstaller bytecode inside {path}')
+                    elif key not in verified_pyz_keys:
+                        verified_pyz_keys.append(key)
             if needle in path.read_bytes():
                 found_demo = True
                 print(f'  demo key found in {path}')
         except OSError:
             continue
+
     if found_demo:
         _emit('error', 'Refusing to package a demo-key installer',
               'The built app folder still embeds the demo signing key, so any Setup.exe made from it '
@@ -229,6 +432,28 @@ def _check_dist_dir(dist_dir: Path) -> int:
               'secret on release builds; on a machine with owner-keys/, run '
               '`python .github/check_release_key.py --apply` and rebuild.')
         return 1
+
+    for key in verified_pyz_keys:
+        try:
+            validate_public_key_material(key)
+        except ValueError as exc:
+            _emit('error', 'Invalid embedded signing key in built app', str(exc))
+            return 1
+        if expected_env and key != expected_env:
+            _emit('error', 'Embedded signing key mismatch',
+                  f'Built bytecode embeds {key[:12]}…, which does not match CAFE_DESK_PUBLIC_KEY ({expected_env[:12]}…).')
+            return 1
+
+    # When PyInstaller bytecode embeds a single verified non-demo owner key, write a small
+    # metadata stamp inside `_internal/` so Inno Setup (`Flags: nocompression`) preserves a
+    # verifiable record inside `CafeDesk-Setup.exe` for `tools/verify_release_key.py`.
+    if len(verified_pyz_keys) == 1 and (dist_dir / '_internal').is_dir():
+        meta_path = dist_dir / RELEASE_KEY_META_REL
+        try:
+            meta_path.write_text(f'{RELEASE_KEY_META_PREFIX}{verified_pyz_keys[0]}\n', encoding='utf-8')
+        except OSError:
+            pass
+
     print(f'App folder clean: no demo signing key in {scanned} file(s) under {dist_dir}.')
     return 0
 
@@ -243,31 +468,10 @@ def _key_in_source() -> str:
     return found.group(1).strip() if found else ''
 
 
-_DEMO_CACHE: list[str] = []
-
-
 def _pristine_demo_key() -> str:
-    """The demo key value as committed — read from git so an --apply run cannot mask it."""
-    if _DEMO_CACHE:
-        return _DEMO_CACHE[0]
-    demo = ''
-    try:
-        shown = subprocess.run(
-            ['git', 'show', 'HEAD:license_guard.py'],
-            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=20, check=False,
-        )
-        if shown.returncode == 0:
-            for line in shown.stdout.splitlines():
-                if line.startswith('DEFAULT_OWNER_PUBLIC_KEY_B64'):
-                    demo = line.split('=', 1)[1].strip().strip('\'"')
-                    break
-    except (OSError, subprocess.SubprocessError):
-        demo = ''
-    if not demo:
-        # Fallback: the shipped default (works in a shallow/tarball checkout).
-        demo = 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
-    _DEMO_CACHE.append(demo)
-    return demo
+    """The sample demo key constant — never `DEFAULT_OWNER_PUBLIC_KEY_B64`, which an owner may replace."""
+    demo = getattr(license_guard, 'DEMO_OWNER_PUBLIC_KEY_B64', '').strip()
+    return demo or 'tuAEglg-NweqdIgh4Jbojl4yQW4iWMOd3fLEbLMV7lI'
 
 
 if __name__ == '__main__':

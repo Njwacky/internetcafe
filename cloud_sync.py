@@ -265,23 +265,45 @@ def check_for_app_update(
             url,
             key,
             'GET',
-            '/rest/v1/app_releases?select=version,download_url,sha256,signature,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
+            '/rest/v1/app_releases?select=version,download_url,sha256,signature,portable_download_url,portable_sha256,portable_signature,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
             timeout=timeout,
         )
     except RuntimeError as exc:
-        # Backward compat: databases migrated before release signing lack the `signature`
-        # column (PostgREST answers 400/42703). Any OTHER failure — bad key, network,
-        # rate limit — must surface as-is instead of silently downgrading the caller to
-        # the unsigned release path.
-        if not re.search(r'\b(400|42703|column .*signature .*does not exist)\b', str(exc), re.IGNORECASE):
+        err_str = str(exc)
+        # Backward compat:
+        # 1) Legacy DBs created before release signing lack `signature` (PostgREST 400/42703).
+        # 2) DBs created before v0.8.5 portable self-update lack `portable_*` columns, while
+        #    still having `signature` (preserve `signature` in that case!).
+        # Any OTHER failure — bad key, network, rate limit — must surface as-is.
+        if not re.search(r'\b(400|42703|column .*(signature|portable_).*does not exist)\b', err_str, re.IGNORECASE):
             raise
-        rows = _supabase_request(
-            url,
-            key,
-            'GET',
-            '/rest/v1/app_releases?select=version,download_url,sha256,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
-            timeout=timeout,
-        )
+        if re.search(r'column .*signature .*does not exist', err_str, re.IGNORECASE):
+            rows = _supabase_request(
+                url,
+                key,
+                'GET',
+                '/rest/v1/app_releases?select=version,download_url,sha256,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
+                timeout=timeout,
+            )
+        else:
+            try:
+                rows = _supabase_request(
+                    url,
+                    key,
+                    'GET',
+                    '/rest/v1/app_releases?select=version,download_url,sha256,signature,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
+                    timeout=timeout,
+                )
+            except RuntimeError as exc2:
+                if not re.search(r'\b(400|42703|column .*signature .*does not exist)\b', str(exc2), re.IGNORECASE):
+                    raise
+                rows = _supabase_request(
+                    url,
+                    key,
+                    'GET',
+                    '/rest/v1/app_releases?select=version,download_url,sha256,release_notes,mandatory,published_at&order=published_at.desc&limit=10',
+                    timeout=timeout,
+                )
     if not isinstance(rows, list) or not rows:
         return {
             'ok': True,
@@ -304,6 +326,9 @@ def check_for_app_update(
         'download_url': str(best.get('download_url') or '').strip(),
         'sha256': str(best.get('sha256') or '').strip().lower(),
         'signature': str(best.get('signature') or '').strip(),
+        'portable_download_url': str(best.get('portable_download_url') or '').strip(),
+        'portable_sha256': str(best.get('portable_sha256') or '').strip().lower(),
+        'portable_signature': str(best.get('portable_signature') or '').strip(),
         'release_notes': str(best.get('release_notes') or '').strip(),
         'mandatory': bool(best.get('mandatory', False)),
         'published_at': str(best.get('published_at') or ''),
@@ -339,6 +364,9 @@ def compute_file_sha256(file_path: Path | str) -> str:
     return h.hexdigest().lower()
 
 
+MAX_UPDATE_DOWNLOAD_BYTES = 600 * 1024 * 1024  # 600 MB safety ceiling for installer/portable downloads
+
+
 def download_and_verify_update(
     download_url: str,
     expected_sha256: str,
@@ -353,8 +381,9 @@ def download_and_verify_update(
     """Download a remote Café Desk installer/zip over HTTPS and verify it end to end.
 
     If `expected_signature` is provided, the Ed25519 owner signature over
-    `CAFE-DESK-RELEASE-V1:{version}:{sha256}` is also verified and a mismatch
-    refuses the file.
+    `CAFE-DESK-RELEASE-V1:{version}:{sha256}` is verified BEFORE connecting to
+    `download_url`, so a tampered release record cannot trigger outbound downloads
+    or fill local disk.
 
     Security (audit fix): the unsigned path is now CLOSED on customer PCs. A missing
     signature used to fall through to SHA-256-only verification, which meant a leaked
@@ -369,7 +398,7 @@ def download_and_verify_update(
     clean_hash = str(expected_sha256 or '').strip().lower()
     if not _HEX64_RE.match(clean_hash):
         raise ValueError('Refusing update download: release is missing a valid 64-character SHA-256 checksum.')
-    # Fail closed BEFORE downloading: no signature means no update on a customer PC.
+    # Fail closed BEFORE downloading: missing or invalid owner signature never touches the network.
     clean_sig = str(expected_signature or '').strip()
     unsigned_allowed = bool(allow_unsigned) and not getattr(sys, 'frozen', False)
     if not clean_sig and not unsigned_allowed:
@@ -377,6 +406,11 @@ def download_and_verify_update(
             'Refusing update download: this release is not signed by the owner. '
             'Ask the owner to publish a signed release (this build will not install '
             'an unverified installer).'
+        )
+    if clean_sig and not verify_release_signature(version_label, clean_hash, clean_sig):
+        raise ValueError(
+            'Security check failed: installer Ed25519 signature is invalid or was not '
+            'issued by the owner. Download refused.'
         )
 
     out_folder = Path(dest_dir)
@@ -392,14 +426,18 @@ def download_and_verify_update(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp, open(part_path, 'wb') as out_fh:
             total_bytes = int(resp.headers.get('Content-Length') or 0)
+            if total_bytes > MAX_UPDATE_DOWNLOAD_BYTES:
+                raise ValueError('Refusing update download: package exceeds maximum safe download size.')
             downloaded = 0
             while True:
                 chunk = resp.read(1024 * 128)
                 if not chunk:
                     break
+                downloaded += len(chunk)
+                if downloaded > MAX_UPDATE_DOWNLOAD_BYTES:
+                    raise ValueError('Refusing update download: stream exceeded maximum safe download size.')
                 out_fh.write(chunk)
                 hasher.update(chunk)
-                downloaded += len(chunk)
                 if progress_cb:
                     progress_cb(downloaded, total_bytes)
             out_fh.flush()
@@ -413,16 +451,12 @@ def download_and_verify_update(
         part_path.unlink(missing_ok=True)
         raise ValueError(
             f'Security check failed: downloaded installer SHA-256 ({actual_hash[:12]}…) '
-            f'did not match owner signature ({clean_hash[:12]}…). File deleted.'
+            f'did not match owner signature ({clean_hash[:12]}…) for v{version_label}. '
+            'File deleted and your copy was NOT changed. '
+            'This usually means the published update record is out of date (the file on the '
+            'server changed after it was signed). Please ask the owner to open the Owner '
+            'Dashboard and click “Sync GitHub Release” for this version, then try again.'
         )
-
-    if clean_sig:
-        if not verify_release_signature(version_label, clean_hash, clean_sig):
-            part_path.unlink(missing_ok=True)
-            raise ValueError(
-                'Security check failed: installer Ed25519 signature is invalid or was not '
-                'issued by the owner. File deleted. Do not run this installer.'
-            )
 
     os.replace(part_path, final_path)
     return final_path
@@ -679,29 +713,54 @@ def pull_shop_price_profile(settings: dict, sync_secret: str) -> dict:
 
 
 def sync_multi_pc_sales(settings: dict, sync_secret: str, local_sales: list[dict], *, since_iso: str = '') -> dict:
-    """Upload this PC's recorded sales and return all PCs' sales for the shop."""
+    """Reconcile ALL history in bounded RPC pages, including old voids.
+
+    No creation-time cursor: a void today can affect a sale from years ago. A full
+    keyset scan is intentionally preferred to an unsafe incremental watermark.
+    Every run rechecks old rows. Interrupted uploads are safe to retry by sale ID.
+    """
     url, key = resolve_client_supabase(settings)
     if not url or not key:
         raise ValueError('Configure your Supabase Project URL and Anon Key first.')
+    if since_iso:
+        raise ValueError('Creation-date filtered sync is unsafe for old voids; synchronize full history.')
     shop_id = str(settings.get('shop_id') or '').strip().upper()
     key_hash = hash_shop_sync_secret(shop_id, sync_secret)
-    res = _supabase_request(
-        url,
-        key,
-        'POST',
-        '/rest/v1/rpc/sync_shop_sales',
-        payload={
-            'p_shop_id': shop_id,
-            'p_sync_key_sha256': key_hash,
-            'p_sales': local_sales,
-            'p_since': since_iso,
-        },
-        timeout=18.0,
-    )
-    if not isinstance(res, dict) or not res.get('ok'):
-        err = res.get('error') if isinstance(res, dict) else 'Could not sync shop sales.'
-        raise RuntimeError(str(err))
-    return res
+    def request(rows, after='', read=False):
+        try:
+            res = _supabase_request(url,key,'POST','/rest/v1/rpc/sync_shop_sales_v2',payload={
+                'p_shop_id':shop_id,'p_sync_key_sha256':key_hash,'p_sales':rows,
+                'p_after':after,'p_read':read},timeout=18.0)
+        except RuntimeError as exc:
+            if 'PGRST202' in str(exc) or ('404' in str(exc) and 'sync_shop_sales_v2' in str(exc)):
+                raise RuntimeError('Complete sales sync requires the protocol 2 database migration. Contact the owner; totals were not reconciled.') from exc
+            raise
+        if not isinstance(res,dict) or not res.get('ok'):
+            raise RuntimeError(str(res.get('error') if isinstance(res,dict) else 'Could not sync shop sales.'))
+        if res.get('protocol')!=2:
+            raise RuntimeError('Complete sales sync requires the protocol 2 database migration. Contact the owner; totals were not reconciled.')
+        return res
+    # Authenticate/check protocol before uploading any customer ledger rows.
+    request([])
+    pushed=0
+    for start in range(0,len(local_sales),250):
+        res=request(local_sales[start:start+250])
+        count=res.get('pushed_count')
+        if type(count) is not int or count!=len(local_sales[start:start+250]):
+            raise RuntimeError('Cloud did not acknowledge every uploaded sale. Retry; synchronization is incomplete.')
+        pushed+=count
+    sales=[];after=''
+    while True:
+        res=request([],after,True)
+        rows=res.get('sales')
+        if not isinstance(rows,list) or len(rows)>250:
+            raise RuntimeError('Invalid cloud sales page. Synchronization is incomplete.')
+        if not rows:break
+        ids=[r.get('sale_id') if isinstance(r,dict) else None for r in rows]
+        if any(not isinstance(sid,str) or not sid for sid in ids) or ids!=sorted(set(ids)) or ids[0]<=after or res.get('next_after')!=ids[-1]:
+            raise RuntimeError('Invalid cloud sales cursor. Synchronization is incomplete.')
+        sales.extend(rows);after=ids[-1]
+    return {'ok':True,'protocol':2,'pushed_count':pushed,'sales':sales}
 
 
 ALLOWED_TELEMETRY_SCREENS = frozenset({
@@ -733,14 +792,16 @@ def send_workspace_telemetry(
     machine_id: str | None = None,
     app_version: str = APP_VERSION,
     os_platform: str | None = None,
+    online_seconds: int = 0,
     timeout: float = 5.0,
 ) -> dict:
     """Send strictly anonymized screen-visit counts & heartbeat to Supabase.
 
     Privacy guarantee: Only whitelisted screen names (`ALLOWED_TELEMETRY_SCREENS`),
-    integer counts, Machine ID, Shop/Station/City labels, and app version are sent.
-    Never sends document contents, filenames, or customer personal data.
-    Silently returns `{'ok': False}` when offline so shop work is never interrupted.
+    integer counts, Machine ID, Shop/Station/City labels, app version, and whole-second
+    online duration are sent. Never sends document contents, filenames, or customer
+    personal data. Silently returns `{'ok': False}` when offline so shop work is never
+    interrupted.
     """
     cfg = settings or {}
     url, key = resolve_client_supabase(cfg)
@@ -763,6 +824,10 @@ def send_workspace_telemetry(
                     continue
                 if iv > 0:
                     clean_counts[k] = min(iv, 5000)
+        try:
+            online_secs = max(0, min(int(online_seconds or 0), 86400))
+        except (TypeError, ValueError):
+            online_secs = 0
         import sys as _sys
         plat = str(os_platform or _sys.platform)[:32]
         res = _supabase_request(
@@ -780,6 +845,7 @@ def send_workspace_telemetry(
                 'p_os_platform': plat,
                 'p_current_screen': cur_scr,
                 'p_screen_counts': clean_counts,
+                'p_online_seconds': online_secs,
             },
             timeout=timeout,
         )
@@ -851,6 +917,10 @@ def owner_push_issued_records_to_supabase(
     rows = []
     seen_lids: set[str] = set()
     for rec in records:
+        # Permanent scan keys are issued manually and use a non-date expiry; the
+        # existing cloud schema only supports dated keys and cannot distribute them.
+        if rec.get('type') == 'addon' and rec.get('feat') == [license_guard.FEATURE_SCAN_PAGES] and rec.get('exp') == 'permanent':
+            continue
         lid = str(rec.get('lid') or '').strip()
         tok = str(rec.get('token') or '').strip()
         mid = str(rec.get('mid') or '').strip()
@@ -892,6 +962,8 @@ def owner_publish_app_release(
     download_url: str,
     installer_path_or_sha256: str,
     *,
+    portable_download_url: str = '',
+    portable_path_or_sha256: str = '',
     release_notes: str = '',
     mandatory: bool = False,
     config_path: Path = OWNER_SUPABASE_CONFIG_PATH,
@@ -902,23 +974,36 @@ def owner_publish_app_release(
         raise ValueError(f'Owner Supabase config missing at {config_path}. Run `python admin_keygen.py --setup-supabase`.')
     clean_ver = str(version or '').strip().lstrip('vV')
     if not clean_ver:
-        raise ValueError('Release version is required (e.g. 0.8.1).')
+        raise ValueError('Release version is required (e.g. 0.8.5).')
     parsed = urllib.parse.urlparse(str(download_url or '').strip())
     if parsed.scheme != 'https':
         raise ValueError('Release download_url must use https:// (e.g. Supabase Storage or GitHub Releases URL).')
 
-    candidate = str(installer_path_or_sha256 or '').strip()
-    if _HEX64_RE.match(candidate):
-        sha256_hex = candidate.lower()
-    else:
-        fpath = Path(candidate)
+    def _resolve_sha256(val: str) -> str:
+        cand = str(val or '').strip()
+        if _HEX64_RE.match(cand):
+            return cand.lower()
+        fpath = Path(cand)
         if not fpath.is_file():
-            raise FileNotFoundError(f'Installer file not found (and not a 64-char SHA-256 hash): {candidate}')
-        sha256_hex = compute_file_sha256(fpath)
+            raise FileNotFoundError(f'Installer file not found (and not a 64-char SHA-256 hash): {cand}')
+        return compute_file_sha256(fpath)
+
+    sha256_hex = _resolve_sha256(installer_path_or_sha256)
+
+    clean_portable_url = str(portable_download_url or '').strip()
+    portable_sha_hex = ''
+    if clean_portable_url:
+        p_parsed = urllib.parse.urlparse(clean_portable_url)
+        if p_parsed.scheme != 'https':
+            raise ValueError('Release portable_download_url must use https://.')
+        if not str(portable_path_or_sha256 or '').strip():
+            raise ValueError('Provide portable_path_or_sha256 when portable_download_url is set.')
+        portable_sha_hex = _resolve_sha256(portable_path_or_sha256)
 
     # Sign the release with the owner Ed25519 private key when available so
     # customer PCs can verify the installer even if Supabase is compromised.
     signature = ''
+    portable_signature = ''
     priv_path = Path(__file__).resolve().parent / 'owner-keys' / 'cafedesk_owner.private.key'
     priv_b64 = os.environ.get('CAFE_DESK_PRIVATE_KEY', '').strip()
     if not priv_b64 and priv_path.is_file():
@@ -928,8 +1013,10 @@ def owner_publish_app_release(
             priv_b64 = ''
     if priv_b64:
         signature = sign_release_sha256(clean_ver, sha256_hex, priv_b64)
+        if portable_sha_hex:
+            portable_signature = sign_release_sha256(clean_ver, portable_sha_hex, priv_b64)
 
-    row = {
+    row: dict[str, object] = {
         'version': clean_ver,
         'download_url': str(download_url).strip(),
         'sha256': sha256_hex,
@@ -937,14 +1024,31 @@ def owner_publish_app_release(
         'release_notes': str(release_notes or '').strip(),
         'mandatory': bool(mandatory),
     }
-    _supabase_request(
-        cfg['supabase_url'],
-        cfg['service_role_key'],
-        'POST',
-        '/rest/v1/app_releases?on_conflict=version',
-        payload=row,
-        extra_headers={'Prefer': 'resolution=merge-duplicates,return=minimal'},
-    )
+    if clean_portable_url and portable_sha_hex:
+        row['portable_download_url'] = clean_portable_url
+        row['portable_sha256'] = portable_sha_hex
+        row['portable_signature'] = portable_signature
+    try:
+        _supabase_request(
+            cfg['supabase_url'],
+            cfg['service_role_key'],
+            'POST',
+            '/rest/v1/app_releases?on_conflict=version',
+            payload=row,
+            extra_headers={'Prefer': 'resolution=merge-duplicates,return=minimal'},
+        )
+    except RuntimeError as exc:
+        if 'portable_' not in str(exc) or 'portable_download_url' not in row:
+            raise
+        fallback_row = {k: v for k, v in row.items() if not k.startswith('portable_')}
+        _supabase_request(
+            cfg['supabase_url'],
+            cfg['service_role_key'],
+            'POST',
+            '/rest/v1/app_releases?on_conflict=version',
+            payload=fallback_row,
+            extra_headers={'Prefer': 'resolution=merge-duplicates,return=minimal'},
+        )
     return row
 
 

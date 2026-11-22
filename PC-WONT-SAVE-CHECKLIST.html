@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Café Desk — “This PC Won’t Save” Printable Checklist</title>
+  <style>
+    :root {
+      --bg: #0d121e;
+      --bg-elev: #141c2e;
+      --card: #192338;
+      --card-soft: #1f2b44;
+      --border: #2e3d5c;
+      --ink: #f3f6fc;
+      --muted: #a6b3cc;
+      --lime: #b9ff70;
+      --lime-dark: #132116;
+      --blue: #5c7cfa;
+      --amber: #ffd584;
+      --amber-bg: rgba(255, 213, 132, 0.1);
+      --danger: #ff9c8f;
+      --danger-bg: rgba(255, 156, 143, 0.1);
+      --radius: 16px;
+      --shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      background: radial-gradient(circle at 15% 0%, #1d2945 0%, var(--bg) 48%);
+      color: var(--ink);
+      line-height: 1.65;
+      font-size: 15.5px;
+    }
+    a { color: var(--lime); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .toc {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: rgba(16, 23, 38, 0.94);
+      border-right: 1px solid var(--border);
+      padding: 28px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .brand-box {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand-badge {
+      width: 42px; height: 42px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--lime), #7ce865);
+      color: var(--lime-dark);
+      font-weight: 900; font-size: 18px;
+      display: grid; place-items: center;
+      flex-shrink: 0;
+      box-shadow: 0 6px 18px rgba(185, 255, 112, 0.25);
+    }
+    .brand-title { font-size: 16px; font-weight: 800; line-height: 1.25; }
+    .brand-sub {
+      font-size: 10px; font-weight: 700; color: var(--lime);
+      letter-spacing: 0.08em; text-transform: uppercase;
+    }
+    .toc-label {
+      font-size: 11px; font-weight: 800; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted); padding: 6px 8px 0;
+    }
+    .toc-links { display: flex; flex-direction: column; gap: 4px; }
+    .toc-links a {
+      color: #ced8ec; font-size: 13.5px; font-weight: 600;
+      padding: 8px 10px; border-radius: 8px;
+    }
+    .toc-links a:hover, .toc-links a.active {
+      background: rgba(185, 255, 112, 0.14);
+      color: var(--lime);
+      text-decoration: none;
+    }
+    .print-btn {
+      margin-top: auto;
+      display: block;
+      text-align: center;
+      background: var(--lime);
+      color: var(--lime-dark);
+      font-weight: 800;
+      font-size: 14px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      width: 100%;
+    }
+    .print-btn:hover { background: #a7f05d; text-decoration: none; }
+    .wall-note {
+      font-size: 11.5px;
+      color: var(--muted);
+      background: var(--card-soft);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .wall-note a { font-weight: 700; }
+
+    .content { padding: 36px 42px 60px; max-width: 900px; }
+
+    .hero {
+      background: linear-gradient(135deg, #1f2d4a 0%, #162035 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 30px;
+      margin-bottom: 22px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: "";
+      position: absolute; right: -40px; top: -40px;
+      width: 180px; height: 180px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(185, 255, 112, 0.16), transparent 70%);
+      pointer-events: none;
+    }
+    .eyebrow {
+      font-size: 11px; font-weight: 800; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--lime);
+      background: rgba(185, 255, 112, 0.12);
+      display: inline-block;
+      padding: 4px 10px; border-radius: 999px;
+      border: 1px solid rgba(185, 255, 112, 0.35);
+      margin-bottom: 12px;
+    }
+    .hero h1 {
+      font-size: 30px; font-weight: 900; letter-spacing: -0.02em;
+      line-height: 1.2; margin-bottom: 10px;
+    }
+    .hero p { color: #c8d4eb; font-size: 15px; max-width: 62ch; }
+    .hero .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .pill {
+      font-size: 12px; font-weight: 700;
+      background: rgba(13, 18, 30, 0.55);
+      border: 1px solid var(--border);
+      color: #eef3fc;
+      padding: 5px 10px; border-radius: 999px;
+    }
+
+    h2.section-title {
+      font-size: 20px; font-weight: 850; margin: 28px 0 12px;
+      letter-spacing: -0.01em;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .step-num {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--lime); color: var(--lime-dark);
+      font-weight: 900; font-size: 14px;
+      display: grid; place-items: center; flex-shrink: 0;
+    }
+    .section-intro { color: var(--muted); margin-bottom: 14px; max-width: 70ch; }
+
+    .callout {
+      background: var(--amber-bg);
+      border: 1px solid rgba(255, 213, 132, 0.45);
+      border-left: 4px solid var(--amber);
+      border-radius: 12px;
+      padding: 14px 18px;
+      margin: 14px 0;
+      color: #ffe7b8;
+      font-size: 14.5px;
+    }
+    .callout strong { color: var(--amber); }
+    .callout.danger {
+      background: var(--danger-bg);
+      border-color: rgba(255, 156, 143, 0.45);
+      border-left-color: var(--danger);
+      color: #ffd2cc;
+    }
+    .callout.danger strong { color: var(--danger); }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin: 12px 0;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      break-inside: avoid;
+    }
+    .card h3 {
+      font-size: 14px; font-weight: 800; color: var(--lime);
+      margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .card p, .card li { color: #dce5f7; font-size: 14px; }
+    .card ul { list-style: none; }
+    .card li { padding: 5px 0 5px 22px; position: relative; }
+    .card li::before {
+      content: "☐";
+      position: absolute; left: 0; top: 4px;
+      color: var(--lime); font-weight: 900; font-size: 14px;
+    }
+    .card li.plain::before { content: "•"; color: var(--blue); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 14px;
+      break-inside: avoid;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--card-soft);
+      color: var(--lime);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    td { background: var(--card); color: #dce5f7; }
+    td:first-child { color: var(--ink); font-weight: 600; }
+
+    code, .mono {
+      font-family: Consolas, "SF Mono", Menlo, Monaco, "Courier New", monospace;
+      font-size: 0.92em;
+      background: rgba(13, 18, 30, 0.75);
+      border: 1px solid var(--border);
+      color: var(--lime);
+      padding: 1px 6px;
+      border-radius: 5px;
+    }
+    .path-block {
+      display: block;
+      text-align: center;
+      font-family: Consolas, "SF Mono", Menlo, Monaco, "Courier New", monospace;
+      font-size: 16px;
+      font-weight: 800;
+      background: rgba(185, 255, 112, 0.1);
+      border: 1px dashed rgba(185, 255, 112, 0.55);
+      color: var(--lime);
+      padding: 12px;
+      border-radius: 10px;
+      margin: 10px 0;
+      word-break: break-all;
+    }
+    .msg-block {
+      display: block;
+      font-family: Consolas, "SF Mono", Menlo, Monaco, "Courier New", monospace;
+      font-size: 13px;
+      background: rgba(255, 156, 143, 0.08);
+      border-left: 3px solid var(--danger);
+      color: #ffc4bc;
+      padding: 8px 12px;
+      border-radius: 0 8px 8px 0;
+      margin: 8px 0;
+      font-weight: 600;
+    }
+
+    .tree {
+      font-family: Consolas, "SF Mono", Menlo, Monaco, "Courier New", monospace;
+      font-size: 13.5px;
+      line-height: 1.55;
+      background: #0a0f18;
+      border: 1px solid var(--border);
+      color: #d7e2f5;
+      padding: 16px 18px;
+      border-radius: 12px;
+      white-space: pre-wrap;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+    .tree .k { color: var(--lime); font-weight: 700; }
+    .tree .w { color: var(--danger); font-weight: 700; }
+
+    .fill-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .fill-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px 12px;
+      min-height: 58px;
+      break-inside: avoid;
+    }
+    .fill-item span {
+      display: block;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .fill-line {
+      border-bottom: 1.5px dotted #5c7cfa;
+      height: 18px;
+    }
+
+    .do-dont {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin: 14px 0;
+    }
+    .do, .dont {
+      border-radius: 14px;
+      padding: 16px 18px;
+      break-inside: avoid;
+    }
+    .do { background: rgba(185, 255, 112, 0.08); border: 1px solid rgba(185, 255, 112, 0.4); }
+    .dont { background: var(--danger-bg); border: 1px solid rgba(255, 156, 143, 0.4); }
+    .do h3, .dont h3 {
+      font-size: 13px; font-weight: 900; text-transform: uppercase;
+      letter-spacing: 0.06em; margin-bottom: 8px;
+    }
+    .do h3 { color: var(--lime); }
+    .dont h3 { color: var(--danger); }
+    .do li, .dont li {
+      list-style: none; font-size: 14px; padding: 4px 0 4px 20px;
+      position: relative; color: #dce5f7;
+    }
+    .do li::before { content: "✓"; position: absolute; left: 0; color: var(--lime); font-weight: 900; }
+    .dont li::before { content: "✗"; position: absolute; left: 0; color: var(--danger); font-weight: 900; }
+
+    footer {
+      margin-top: 36px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    footer strong { color: var(--ink); }
+
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      .toc {
+        position: relative; height: auto;
+        border-right: none; border-bottom: 1px solid var(--border);
+      }
+      .toc-links { flex-direction: row; flex-wrap: wrap; }
+      .content { padding: 24px 18px 48px; }
+      .do-dont { grid-template-columns: 1fr; }
+      .hero h1 { font-size: 24px; }
+    }
+
+    @media print {
+      body {
+        background: #ffffff !important;
+        color: #111827 !important;
+        font-size: 11.5pt;
+      }
+      .layout { display: block; max-width: none; }
+      .toc, .print-btn, .wall-note { display: none !important; }
+      .content { max-width: 100%; padding: 0; }
+      .hero, .card, .callout, .do, .dont, .fill-item, .tree, .path-block, .msg-block {
+        background: #ffffff !important;
+        color: #111827 !important;
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+      }
+      .hero h1, h2.section-title, .card h3, .do h3, .dont h3, th, .eyebrow {
+        color: #0f172a !important;
+      }
+      .hero p, .card p, .card li, .section-intro, .callout, .do li, .dont li, td {
+        color: #334155 !important;
+      }
+      .eyebrow, .pill, .step-num, .brand-badge {
+        background: #ecfdf5 !important;
+        color: #065f46 !important;
+        border-color: #94a3b8 !important;
+        box-shadow: none !important;
+      }
+      .path-block, code, .mono {
+        color: #065f46 !important;
+        background: #f0fdf4 !important;
+        border-color: #86efac !important;
+      }
+      .msg-block {
+        color: #991b1b !important;
+        background: #fef2f2 !important;
+        border-left-color: #b91c1c !important;
+      }
+      .tree {
+        background: #f8fafc !important;
+        color: #0f172a !important;
+      }
+      .tree .k { color: #166534 !important; }
+      .tree .w { color: #b91c1c !important; }
+      th { background: #f1f5f9 !important; color: #0f172a !important; }
+      td { background: #ffffff !important; }
+      .do { background: #f0fdf4 !important; border-color: #86efac !important; }
+      .dont { background: #fef2f2 !important; border-color: #fecaca !important; }
+      .do li::before { color: #166534 !important; }
+      .dont li::before { color: #b91c1c !important; }
+      .card li::before { color: #166534 !important; }
+      .fill-line { border-bottom-color: #94a3b8 !important; }
+      footer { border-top-color: #cbd5e1 !important; color: #475569 !important; }
+      footer strong { color: #0f172a !important; }
+      @page { size: A4; margin: 12mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="toc">
+      <div class="brand-box">
+        <div class="brand-badge">CD</div>
+        <div>
+          <div class="brand-title">PC Won’t Save</div>
+          <div class="brand-sub">Staff checklist</div>
+        </div>
+      </div>
+
+      <div class="toc-label">On this page</div>
+      <nav class="toc-links">
+        <a href="#before">Before you start</a>
+        <a href="#step1">1 · Exact error</a>
+        <a href="#step2">2 · Machine ID</a>
+        <a href="#step3">3 · Data folder</a>
+        <a href="#step4">4 · Fix paths</a>
+        <a href="#step5">5 · Reinstall?</a>
+        <a href="#step6">6 · Help pack</a>
+        <a href="#tree">Decision tree</a>
+        <a href="#shop">Shop backups</a>
+      </nav>
+
+      <div class="wall-note">
+        Need a one-page wall version?<br>
+        <a href="PC-WONT-SAVE-WALL.html">Open PC-WONT-SAVE-WALL.html</a>
+      </div>
+
+      <button class="print-btn" type="button" onclick="window.print()">🖨 Print this checklist</button>
+    </aside>
+
+    <main class="content">
+      <header class="hero" id="top">
+        <div class="eyebrow">Café Desk · Multi-PC shops</div>
+        <h1>“This PC won’t save” checklist</h1>
+        <p>
+          Use when <strong>one computer</strong> in the shop misbehaves and the others are fine —
+          won’t save the key, PIN, business settings, prices, or sales.
+          Tick each box as you go. About <strong>10–15 minutes</strong>.
+        </p>
+        <div class="badges">
+          <span class="pill">Station: ______________</span>
+          <span class="pill">Date: __________</span>
+          <span class="pill">Staff: ________</span>
+          <span class="pill">Time: 10–15 min</span>
+        </div>
+      </header>
+
+      <section id="before">
+        <h2 class="section-title"><span class="step-num">!</span>Before you touch anything</h2>
+        <div class="do-dont">
+          <div class="do">
+            <h3>Do</h3>
+            <ul>
+              <li>Write the <strong>exact</strong> words on screen (or photograph them)</li>
+              <li>Note the <strong>Station Name</strong> (e.g. Desk 2)</li>
+              <li>Note if hardware was changed or repaired</li>
+              <li>Keep the shop USB / backup nearby</li>
+            </ul>
+          </div>
+          <div class="dont">
+            <h3>Don’t</h3>
+            <ul>
+              <li>Don’t uninstall yet</li>
+              <li>Don’t copy <code>license.json</code> from another PC</li>
+              <li>Don’t delete the whole <code>CafeDesk</code> folder</li>
+              <li>Don’t guess the error — copy it word for word</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Why one PC can differ:</strong> every install has its own
+          <strong>Machine ID</strong> and its own local settings folder.
+          A key or password from PC #1 will not unlock or configure PC #3.
+        </div>
+      </section>
+
+      <section id="step1">
+        <h2 class="section-title"><span class="step-num">1</span>What exactly is not saving?</h2>
+        <p class="section-intro">Tick everything that matches. Photograph the full message if there is one.</p>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Tick what fails</h3>
+            <ul>
+              <li>Activation / license key (won’t accept, or “another computer”)</li>
+              <li>Business settings (name, icon, station name)</li>
+              <li>Staff PIN — won’t set, or asks again</li>
+              <li>Prices — disappear after restart</li>
+              <li>Sales — not in Sales reports</li>
+              <li>Something else: ______________</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Copy the error here</h3>
+            <div class="fill-grid">
+              <div class="fill-item" style="grid-column: 1 / -1">
+                <span>Exact words on screen</span>
+                <div class="fill-line"></div>
+              </div>
+              <div class="fill-item" style="grid-column: 1 / -1">
+                <span>Screenshot taken?</span>
+                <div class="fill-line"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="step2">
+        <h2 class="section-title"><span class="step-num">2</span>Read the Machine ID (always)</h2>
+        <p class="section-intro">
+          Open <strong>About &amp; contact</strong> → find <strong>Machine ID</strong>
+          (<code>CD-XXXX-XXXX-XXXX</code>) → copy it into your notes. Check the licence card.
+        </p>
+        <div class="path-block">CD-____-____-____ &nbsp;·&nbsp; this PC’s Machine ID</div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>What you see on the licence card</th>
+              <th>What it means</th>
+              <th>What to do</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Active · days remaining shown</td>
+              <td>Licence is fine — problem is elsewhere (settings/save)</td>
+              <td>Go to Step 3</td>
+            </tr>
+            <tr>
+              <td>Activation screen at startup / “needs a 1-year activation key”</td>
+              <td>This PC is not licensed (new PC, wiped install, or expired)</td>
+              <td>Send <strong>this</strong> Machine ID to the owner for a key</td>
+            </tr>
+            <tr>
+              <td>“belongs to another computer”</td>
+              <td><strong>Wrong key</strong> — made for a different machine</td>
+              <td>Get a new key for <strong>this</strong> Machine ID — reinstall will not help</td>
+            </tr>
+            <tr>
+              <td>“license expired on …”</td>
+              <td>Renewal needed</td>
+              <td>New 1-year key for the <strong>same</strong> Machine ID</td>
+            </tr>
+            <tr>
+              <td>“license has been paused”</td>
+              <td>Owner must approve this Machine ID again</td>
+              <td>Contact owner / request approval</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="msg-block">
+          This activation key belongs to another computer (CD-…).
+          This computer’s Machine ID is CD-…. Please request a new key from the owner.
+        </div>
+
+        <div class="callout">
+          <strong>Hardware change = new Machine ID.</strong>
+          Motherboard or major repair changes the ID. The old key will never work on the new hardware.
+          A key for the <strong>new</strong> ID is required — not a reinstall.
+        </div>
+
+        <div class="card">
+          <h3>If the key is wrong / expired / paused</h3>
+          <ul>
+            <li>Write down <strong>this PC’s</strong> Machine ID</li>
+            <li>Send that ID to the owner and ask for a <strong>new 1-year key for this Machine ID</strong></li>
+            <li>About &amp; contact → <strong>Enter / Renew 1-Year Key</strong></li>
+            <li>Paste the key → retest the save</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="step3">
+        <h2 class="section-title"><span class="step-num">3</span>Open this PC’s data folder</h2>
+        <p class="section-intro">On Windows:</p>
+        <div class="path-block">Win + R &nbsp;→&nbsp; %APPDATA%\CafeDesk &nbsp;→&nbsp; Enter</div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Tick files you see</h3>
+            <ul>
+              <li><code>settings.json</code> — name, icon, PIN, station, prices</li>
+              <li><code>settings.json.bak</code> — automatic good backup</li>
+              <li><code>settings.json.corrupt</code> — damaged file quarantined</li>
+              <li><code>sales.sqlite3</code> — sales history</li>
+              <li><code>license.json</code> — licence for <strong>this</strong> PC only</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Portable USB mode?</h3>
+            <ul>
+              <li>Settings may live in <code>CafeDeskData</code> next to <code>CafeDesk.exe</code></li>
+              <li>Check both locations if unsure</li>
+              <li>Write down which folder you used</li>
+            </ul>
+          </div>
+        </div>
+        <div class="fill-grid">
+          <div class="fill-item"><span>Files present (names)</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>.bak present? Y / N</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>.corrupt present? Y / N</span><div class="fill-line"></div></div>
+        </div>
+      </section>
+
+      <section id="step4">
+        <h2 class="section-title"><span class="step-num">4</span>Match what you see to a fix</h2>
+
+        <div class="card" style="margin-bottom:14px">
+          <h3>A · Settings damaged / staff access locked</h3>
+          <div class="msg-block">
+            Settings file is damaged or unreadable. Staff access is locked until an
+            administrator restores settings.json.bak or removes the damaged file.
+          </div>
+          <ul>
+            <li>If the app offers <strong>restore from settings.json.bak</strong> → choose <strong>Yes</strong></li>
+            <li>Damaged file is kept as <code>settings.json.corrupt</code> (safe)</li>
+            <li>Try the save again</li>
+            <li>No prompt / no <code>.bak</code> → close app → rename <code>settings.json</code> → <code>settings.json.broken</code></li>
+            <li>Copy <code>settings.json.bak</code> → <code>settings.json</code> if present → start app → retest</li>
+          </ul>
+          <div class="callout danger">
+            <strong>Do not delete the whole folder</strong> — sales live there.
+            Restoring <code>.bak</code> may reset some recent settings.
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:14px">
+          <h3>B · “Could not save …” (business / multi-PC / prices)</h3>
+          <div class="msg-block">Could not save business name · Could not save settings · Export failed · Import failed</div>
+          <ul>
+            <li>Close Café Desk</li>
+            <li>Confirm the drive with <code>%APPDATA%</code> is <strong>not full</strong></li>
+            <li>CafeDesk folder → Properties → Security → user has <strong>Modify / Write</strong></li>
+            <li>Use the Windows account that normally runs the shop app</li>
+            <li>Reopen and save again</li>
+            <li>Note whether <strong>every</strong> setting fails or only one screen</li>
+          </ul>
+        </div>
+
+        <div class="card" style="margin-bottom:14px">
+          <h3>C · Key / PIN “won’t save” but folder looks healthy</h3>
+          <ul>
+            <li><strong>Licence path</strong> → Step 2 (wrong / expired / paused key)</li>
+            <li><strong>5 wrong PINs</strong> → staff entry locks for <strong>60 seconds</strong> — wait, use correct PIN</li>
+            <li><strong>Idle lock</strong> → staff locks after ~5 minutes without mouse/keyboard — unlock with PIN and save immediately</li>
+            <li><strong>Wrong-PC habit</strong> → settings on PC A do not appear on PC B unless you Import Shop Pack or sync</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>D · Only sales are missing</h3>
+          <ul>
+            <li>Sales live in <code>sales.sqlite3</code> in the same data folder, per computer user</li>
+            <li>Confirm the sale was recorded: <em>“Recorded in sales history”</em></li>
+            <li>Check <strong>Sales reports</strong> on <strong>this</strong> PC (station filter if present)</li>
+            <li>If the sale exists on another PC → <strong>Import Other PC File</strong>, <strong>Sync Shared LAN Folder</strong>, or <strong>Sync via Supabase</strong></li>
+            <li>Don’t re-type sales on the broken PC</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="step5">
+        <h2 class="section-title"><span class="step-num">5</span>Only now consider reinstall</h2>
+        <div class="do-dont">
+          <div class="do">
+            <h3>Reinstall if</h3>
+            <ul>
+              <li>The app won’t start at all, or install files are broken</li>
+              <li>Steps 2–4 didn’t explain the problem</li>
+            </ul>
+          </div>
+          <div class="dont">
+            <h3>Reinstall does NOT</h3>
+            <ul>
+              <li>Change the Machine ID</li>
+              <li>Transfer a licence from another PC</li>
+              <li>Restore lost settings / prices / sales by itself</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card">
+          <h3>After any reinstall you still need</h3>
+          <ul>
+            <li>Correct <strong>activation key for this PC’s Machine ID</strong></li>
+            <li>Re-enter or <strong>Import Shop Pack</strong> / <strong>Pull Prices from Cloud</strong></li>
+            <li>PIN re-set if settings were wiped</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="step6">
+        <h2 class="section-title"><span class="step-num">6</span>What to collect before asking for help</h2>
+        <p class="section-intro">Send all of the following in <strong>one</strong> message.</p>
+        <div class="fill-grid">
+          <div class="fill-item"><span>1 · Station name of the bad PC</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>2 · Machine ID (CD-…)</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>3 · Exact error text / photo</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>4 · Hardware replaced or repaired? Y / N</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>5 · Fails: key / PIN / settings / prices / sales</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>6 · Files in %APPDATA%\CafeDesk (names)</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>7 · .corrupt or .bak present? Y / N</span><div class="fill-line"></div></div>
+          <div class="fill-item"><span>8 · App version (About &amp; contact)</span><div class="fill-line"></div></div>
+        </div>
+      </section>
+
+      <section id="tree">
+        <h2 class="section-title"><span class="step-num">→</span>Quick decision tree</h2>
+        <div class="tree"><span class="k">One PC won’t save</span>
+│
+├─ Error mentions “another computer” / activation / expired / paused
+│    → <span class="k">Machine ID or key problem</span>
+│    → Get NEW key for THIS PC’s Machine ID (reinstall will not help)
+│
+├─ “Settings file damaged” / staff locked fail-closed
+│    → <span class="k">Restore settings.json.bak</span> (or repair that one file)
+│    → Never delete the whole CafeDesk folder
+│
+├─ “Could not save …” with no licence wording
+│    → <span class="k">Disk full? Folder read-only? Wrong Windows account?</span>
+│    → Fix permissions / free space on THAT PC only
+│
+├─ Sales missing only
+│    → <span class="k">Check Sales reports + sync/import from other PCs</span>
+│
+└─ App broken / won’t open at all
+     → <span class="w">Reinstall app, THEN re-activate with key for this Machine ID</span>
+        <span class="w">and re-import Shop Pack / prices</span></div>
+      </section>
+
+      <section id="shop">
+        <h2 class="section-title"><span class="step-num">★</span>Shop-wide habit (before any update)</h2>
+        <p class="section-intro">
+          Do these on <strong>all</strong> shop PCs so one bad machine never strands you.
+        </p>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Prices &amp; settings</h3>
+            <ul>
+              <li>Business settings → <strong>Export / Import Shop Pack (`.cafeshop.json`)</strong></li>
+              <li>Keep a copy on USB <strong>and</strong> one other PC</li>
+              <li>Or use <strong>Push / Pull Prices via Cloud</strong></li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Folder backup</h3>
+            <ul>
+              <li>Close Café Desk</li>
+              <li>Copy each PC’s <code>%APPDATA%\CafeDesk</code> folder to backup</li>
+              <li>That one folder restores PIN, prices, logo and sales</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Sales sync</h3>
+            <ul>
+              <li>LAN folder / Import Other PC File / Supabase</li>
+              <li>No single PC should be the only copy</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Update order</h3>
+            <ul>
+              <li>Backup <strong>all 5</strong> PCs first</li>
+              <li>Update <strong>one pilot PC</strong></li>
+              <li>Confirm it works → update the rest</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span><strong>Café Desk Document Studio</strong> · “PC won’t save” staff checklist</span>
+        <span>
+          WhatsApp: <a href="https://wa.me/27722279505" target="_blank" rel="noopener noreferrer">072 227 9505</a>
+          &nbsp;•&nbsp;
+          Wall sheet: <a href="PC-WONT-SAVE-WALL.html">PC-WONT-SAVE-WALL.html</a>
+        </span>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    // Highlight current TOC section while scrolling (screen only)
+    (function () {
+      var links = Array.prototype.slice.call(document.querySelectorAll('.toc-links a'));
+      var sections = links.map(function (a) {
+        return document.querySelector(a.getAttribute('href'));
+      }).filter(Boolean);
+      if (!('IntersectionObserver' in window) || !sections.length) return;
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          var id = '#' + entry.target.id;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === id);
+          });
+        });
+      }, { rootMargin: '-20% 0px -70% 0px', threshold: 0 });
+      sections.forEach(function (s) { io.observe(s); });
+    })();
+  </script>
+</body>
+</html>
