@@ -12,4 +12,4 @@ Bump this ONE line per release. `python tools/check_version_sync.py` (also run i
 CI) fails the build if any consumer drifts away from this value.
 """
 
-__version__ = '0.8.4'
+__version__ = '0.8.5'
