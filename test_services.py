@@ -36,6 +36,21 @@ class Tests(unittest.TestCase):
         tif=self.p/'multipage.tif'; Image.new('RGB',(100,150),'white').save(tif,save_all=True,append_images=[Image.new('RGB',(100,150),'black')])
         dest=self.p/'images.pdf'; services.images_to_pdf([img,tif],dest); self.assertEqual(len(PdfReader(dest).pages),3)
         output=self.p/'draft.txt'; services.export_text('Hello',output); self.assertEqual(output.read_text(),'Hello')
+    def test_images_pdf_size_limit_preserves_existing_output(self):
+        from unittest.mock import patch
+        img=self.p/'scan.png'; Image.new('RGB',(50,50),'white').save(img)
+        dest=self.p/'scan.pdf'
+        services.images_to_pdf([img],dest)
+        original=dest.read_bytes(); size=len(original)
+        # The boundary is inclusive, and an oversized export must not replace a file.
+        with patch.object(services,'MAX_PDF_FILE_BYTES',size):
+            services.images_to_pdf([img],dest)
+        dest.write_bytes(b'existing PDF')
+        with patch.object(services,'MAX_PDF_FILE_BYTES',size-1):
+            with self.assertRaisesRegex(ValueError,'PDF exceeds.*size limit'):
+                services.images_to_pdf([img],dest)
+        self.assertEqual(dest.read_bytes(),b'existing PDF')
+        self.assertEqual(list(self.p.glob('.cafedesk-*')),[])
     def test_cv_exports(self):
         for i in range(10):
             out=self.p/f'cv{i}.pdf'; services.export_document_pdf(make_document(CATEGORIES[0],i,{'name':'Nandi'}),out,CATEGORIES[0],i)

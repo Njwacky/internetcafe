@@ -240,7 +240,7 @@ def sign_addon_token(
     norm_mid = license_guard.normalize_machine_id(machine_id)
     clean_cust = ' '.join(str(customer or 'Licensed Café').split())[:80] or 'Licensed Café'
     iat = issued_date or _dt.datetime.now(_dt.timezone.utc).date()
-    exp = iat + _dt.timedelta(days=int(days))
+    exp = 'permanent' if feature == license_guard.FEATURE_SCAN_PAGES else (iat + _dt.timedelta(days=int(days))).isoformat()
     lid = uuid.uuid4().hex[:12].upper()
 
     payload: dict = {
@@ -250,7 +250,7 @@ def sign_addon_token(
         'mid': norm_mid,
         'cust': clean_cust,
         'iat': iat.isoformat(),
-        'exp': exp.isoformat(),
+        'exp': exp,
         'lid': lid,
     }
     if shop_id or seat_no or seat_max:
@@ -393,7 +393,7 @@ def rebuild_owner_exports(
                 days_left = (_dt.date.fromisoformat(exp_str) - today).days
                 status_txt = f'ACTIVE ({days_left}d left)' if days_left >= 0 else f'EXPIRED ({abs(days_left)}d ago)'
             except ValueError:
-                status_txt = 'UNKNOWN'
+                status_txt = 'ACTIVE (permanent)' if exp_str == 'permanent' and rec.get('feat') == [license_guard.FEATURE_SCAN_PAGES] else 'UNKNOWN'
             seat_txt = ''
             if rec.get('seat_no') and rec.get('seat_max'):
                 seat_txt = f"Seat {rec['seat_no']}/{rec['seat_max']}"
@@ -425,8 +425,9 @@ def rebuild_owner_exports(
             badge_cls = 'badge-exp' if not is_active else ('badge-warn' if days_left <= 30 else 'badge-ok')
             badge_txt = f'ACTIVE • {days_left}d left' if is_active else f'EXPIRED • {abs(days_left)}d ago'
         except ValueError:
-            badge_cls = 'badge-warn'
-            badge_txt = 'UNKNOWN'
+            permanent = exp_str == 'permanent' and rec.get('feat') == [license_guard.FEATURE_SCAN_PAGES]
+            badge_cls = 'badge-ok' if permanent else 'badge-warn'
+            badge_txt = 'ACTIVE • permanent' if permanent else 'UNKNOWN'
         tok = str(rec.get('token') or '')
         mid = str(rec.get('mid') or '')
         cust = str(rec.get('cust') or '')
@@ -597,7 +598,7 @@ def print_issued_registry(query: str = '', log_path: Path = ISSUED_LOG_PATH) -> 
             dleft = (_dt.date.fromisoformat(exp_str) - today).days
             st = f'ACTIVE ({dleft}d left)' if dleft >= 0 else f'EXPIRED ({abs(dleft)}d ago)'
         except ValueError:
-            st = 'UNKNOWN'
+            st = 'ACTIVE (permanent)' if exp_str == 'permanent' and rec.get('feat') == [license_guard.FEATURE_SCAN_PAGES] else 'UNKNOWN'
         seat_info = ''
         if rec.get('shop_id') or rec.get('seat_no'):
             s_part = f"Seat {rec.get('seat_no')}/{rec.get('seat_max')}" if rec.get('seat_no') and rec.get('seat_max') else ''

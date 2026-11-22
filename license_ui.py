@@ -382,8 +382,8 @@ def open_addon_modal(
     """Modal to request owner approval & enter a Machine-ID-locked Paid Add-on Key (`CDADD1...`)."""
     dlg = ctk.CTkToplevel(parent)
     dlg.title(f'Activate Paid Add-on — {feature_title}')
-    dlg.geometry('680x500')
-    dlg.minsize(600, 460)
+    dlg.geometry('680x580' if feature == license_guard.FEATURE_SCAN_PAGES else '680x500')
+    dlg.minsize(600, 540 if feature == license_guard.FEATURE_SCAN_PAGES else 460)
     dlg.configure(fg_color=BG)
     dlg.transient(parent)
     dlg.grab_set()
@@ -478,8 +478,9 @@ def open_addon_modal(
             f'{feature_title} activated!',
             f'{feature_title} is now unlocked on this computer:\n'
             f'• Customer: {info["customer"]}\n'
-            f'• Machine ID: {info["machine_id"]}\n'
-            f'• Valid until: {info["expires_at"]} ({info["days_remaining"]} days remaining)',
+            f'• Machine ID: {info["machine_id"]}\n' +
+            ('• Validity: permanent (one-time payment)' if info.get('permanent') else
+             f'• Valid until: {info["expires_at"]} ({info["days_remaining"]} days remaining)'),
             parent=dlg,
         )
         dlg.destroy()
@@ -535,6 +536,7 @@ def open_addon_modal(
     _btn(row, 'Activate Add-on', apply_addon, fg_color=LIME, hover_color='#A9EB65', text_color='#142018', width=170).pack(
         side='left', padx=(0, 8)
     )
-    _btn(row, 'Check Online Approval', check_addon_online, secondary=True, width=185).pack(side='left', padx=(0, 8))
+    if feature != license_guard.FEATURE_SCAN_PAGES:
+        _btn(row, 'Check Online Approval', check_addon_online, secondary=True, width=185).pack(side='left', padx=(0, 8))
     _btn(row, 'Load file…', browse_addon, secondary=True, width=115).pack(side='left', padx=(0, 8))
     _btn(row, 'Cancel', dlg.destroy, secondary=True, width=85).pack(side='right')

@@ -883,6 +883,10 @@ def owner_push_issued_records_to_supabase(
     rows = []
     seen_lids: set[str] = set()
     for rec in records:
+        # Permanent scan keys are issued manually and use a non-date expiry; the
+        # existing cloud schema only supports dated keys and cannot distribute them.
+        if rec.get('type') == 'addon' and rec.get('feat') == [license_guard.FEATURE_SCAN_PAGES] and rec.get('exp') == 'permanent':
+            continue
         lid = str(rec.get('lid') or '').strip()
         tok = str(rec.get('token') or '').strip()
         mid = str(rec.get('mid') or '').strip()
