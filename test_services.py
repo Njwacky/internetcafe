@@ -1849,10 +1849,15 @@ class SecurityHardeningTests(unittest.TestCase):
     """Regression tests for the security audit fixes (demo key, sync secret, CSP, release signing)."""
 
     def test_demo_key_warning_is_surfaced(self):
-        import license_guard
-        self.assertTrue(license_guard.is_demo_public_key_active())
-        self.assertIn('DEMO SIGNING KEY', license_guard.demo_key_warning())
-        self.assertFalse(license_guard.is_customer_build_ready())
+        import license_guard, os
+        from unittest import mock
+        demo = license_guard.DEMO_OWNER_PUBLIC_KEY_B64
+        # Force the demo key into play so the warning path is tested regardless of
+        # whether the repo ships the demo key or the owner's real key.
+        with mock.patch.dict(os.environ, {'CAFE_DESK_PUBLIC_KEY': demo}):
+            self.assertTrue(license_guard.is_demo_public_key_active())
+            self.assertIn('DEMO SIGNING KEY', license_guard.demo_key_warning())
+            self.assertFalse(license_guard.is_customer_build_ready())
         # The installer must never greet a customer with a modal error: build hygiene is
         # reported as an in-app owner notice, and the release pipelines refuse to ship.
         ui_src = (Path(__file__).resolve().parent / 'license_ui.py').read_text(encoding='utf-8')
@@ -2052,12 +2057,25 @@ class ReleaseKeyGuardTests(unittest.TestCase):
     """The CI demo-key guard must block a demo-signed build and allow a real key."""
 
     def _tree(self, tmp):
-        """Copy the files the guard needs into a throw-away tree (no .git)."""
-        import shutil
+        """Copy the files the guard needs into a throw-away tree (no .git).
+
+        The demo key is forced into the copied ``license_guard.py`` so the
+        guard's demo-detection logic is exercised deterministically — regardless
+        of whether the repo currently ships the demo key or the owner's real key
+        (the owner replaces the demo key via ``admin_keygen.py --apply-public-key``).
+        """
+        import shutil, re
+        import license_guard
         root = Path(tmp)
         repo = Path(__file__).resolve().parent
         for name in ('license_guard.py', 'admin_keygen.py', 'cloud_sync.py', 'version.py'):
             shutil.copy2(repo / name, root / name)
+        demo = license_guard.DEMO_OWNER_PUBLIC_KEY_B64
+        guard_src = (root / 'license_guard.py').read_text(encoding='utf-8')
+        guard_src = re.sub(
+            r"(DEFAULT_OWNER_PUBLIC_KEY_B64 = ')[^']*(')",
+            lambda m: m.group(1) + demo + m.group(2), guard_src)
+        (root / 'license_guard.py').write_text(guard_src, encoding='utf-8')
         (root / '.github').mkdir(exist_ok=True)
         shutil.copy2(repo / '.github' / 'check_release_key.py', root / '.github' / 'check_release_key.py')
         return root
@@ -2538,9 +2556,16 @@ class ReleaseTrustTests(unittest.TestCase):
 
     def test_embedded_key_demo_check_is_fail_closed(self):
         import license_guard
-        # This repository ships the demo key, so the embedded check must trip.
-        self.assertTrue(license_guard.embedded_public_key_is_demo())
-        self.assertTrue(license_guard.is_demo_public_key_active())
+        from unittest import mock
+        demo = license_guard.DEMO_OWNER_PUBLIC_KEY_B64
+        real = '14W-XVzHc9Ju8X-87VLoIt8frfFWHPWvSJPsHijrz3w'
+        # When the embedded key IS the demo key, the check must trip (fail-closed).
+        with mock.patch.object(license_guard, 'DEFAULT_OWNER_PUBLIC_KEY_B64', demo):
+            self.assertTrue(license_guard.embedded_public_key_is_demo())
+            self.assertTrue(license_guard.is_demo_public_key_active())
+        # When the embedded key is a real key, the check must NOT trip.
+        with mock.patch.object(license_guard, 'DEFAULT_OWNER_PUBLIC_KEY_B64', real):
+            self.assertFalse(license_guard.embedded_public_key_is_demo())
 
     def test_check_for_app_update_propagates_auth_failures(self):
         from unittest import mock
@@ -2570,10 +2595,15 @@ class ReleaseTrustTests(unittest.TestCase):
 
     def test_preview_build_is_reported_calmly_not_as_an_error(self):
         """A demo-key build must warn its owner without looking broken to a customer."""
-        import license_guard
-        self.assertTrue(license_guard.is_demo_public_key_active())
-        self.assertFalse(license_guard.is_customer_build_ready())
-        notice = license_guard.owner_build_notice()
+        import license_guard, os
+        from unittest import mock
+        demo = license_guard.DEMO_OWNER_PUBLIC_KEY_B64
+        # Force the demo key into play via the (non-frozen) env override, so the
+        # preview-build wording is tested regardless of the repo's embedded key.
+        with mock.patch.dict(os.environ, {'CAFE_DESK_PUBLIC_KEY': demo}):
+            self.assertTrue(license_guard.is_demo_public_key_active())
+            self.assertFalse(license_guard.is_customer_build_ready())
+            notice = license_guard.owner_build_notice()
         self.assertIsInstance(notice, str)
         # Calm wording: no shouting, no "do not distribute" alarm, but still actionable.
         self.assertNotIn('DO NOT', notice.upper())
