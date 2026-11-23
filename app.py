@@ -558,7 +558,7 @@ class CafeDesk(ctk.CTk):
         if not messagebox.askyesno('Save private project','The project will include document details and copies of any photos. It is not encrypted. Save only where appropriate for the customer. Continue?',parent=self): return
         filename='career-project.cafeproject' if kind=='career' else 'picture-sheet.cafeproject'
         path=filedialog.asksaveasfilename(parent=self,defaultextension='.cafeproject',filetypes=[('Café Desk project','*.cafeproject')],initialfile=filename)
-        if path:self.saved_job('Saving project…',lambda:projects.save(kind,snapshot,path),lambda _:messagebox.showinfo('Project saved',f'Project saved to:\n{path}\n\nKeep it private; it includes photos.',parent=self),'project')
+        if path:self.saved_job('Saving project…',lambda:projects.save(kind,snapshot,path),lambda _:self.status.set(f'Project saved • {path} (keep it private; it includes photos)'),'project')
     def open_project(self,path=None,allow_recovery=False):
         if self.busy: return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
         path=path or filedialog.askopenfilename(parent=self,filetypes=[('Café Desk project','*.cafeproject')])
@@ -1436,7 +1436,8 @@ class CafeDesk(ctk.CTk):
         def refresh():
             try:
                 saved_services.reconcile_receipt(self.receipt_items)
-                self.receipt_recorded=bool(self.receipt_items) and all(x.get('_recorded') for x in self.receipt_items)
+                active=[x for x in self.receipt_items if not x.get('_excluded')]
+                self.receipt_recorded=bool(active) and all(x.get('_recorded') for x in active)
                 note='Recorded in sales history' if self.receipt_recorded else 'Unrecorded lines remain • save receipt or record sale to retry'
             except Exception as exc:
                 note='Sales status could not be verified: '+str(exc)
@@ -1444,6 +1445,8 @@ class CafeDesk(ctk.CTk):
             receipt.configure(state='normal');receipt.delete('1.0','end')
             if self.receipt_items:receipt.insert('1.0',draft_text())
             receipt.configure(state='disabled');status.configure(text=note)
+            try:render_lines()
+            except Exception:pass
         def add():
             if choice.get() not in lookup:return
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
@@ -1458,19 +1461,70 @@ class CafeDesk(ctk.CTk):
             self.receipt_recorded=False
             self.receipt_items.append({'name':choice.get(),'price':lookup[choice.get()],'qty':n});refresh()
         button(row,'Add service',add).pack(side='left')
+        label(box,'Receipt lines',size=14,bold=True).pack(anchor='w',padx=20,pady=(14,4))
+        label(box,'Toggle Bill OFF for a line you do not want to charge this customer. A recorded sale is removed from history; unrecorded lines are simply not billed.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,6))
+        lines_box=ctk.CTkScrollableFrame(box,fg_color='#0E1524',border_color=BORDER,border_width=1,corner_radius=10);lines_box.pack(fill='x',padx=20,pady=(0,10))
+        line_widgets=[]
+        def render_lines():
+            for w in line_widgets:
+                try:w.destroy()
+                except Exception:pass
+            line_widgets.clear()
+            if not self.receipt_items:
+                label(lines_box,'No lines yet. Saved work and manual services appear here.',size=12,color=MUTED).pack(anchor='w',padx=14,pady=14)
+                return
+            for i,item in enumerate(self.receipt_items):
+                lrow=ctk.CTkFrame(lines_box,fg_color='transparent');lrow.pack(fill='x',padx=10,pady=4)
+                bill=ctk.BooleanVar(value=not item.get('_excluded',False))
+                state_txt='Bill' if bill.get() else 'Excluded'
+                cb=ctk.CTkCheckBox(lrow,text=state_txt,variable=bill,width=90,
+                                  fg_color=GREEN if bill.get() else MUTED,
+                                  checkmark_color=INK if bill.get() else MUTED,
+                                  text_color=INK if bill.get() else MUTED,
+                                  command=lambda idx=i,var=bill:toggle_line(idx,var.get()))
+                cb.pack(side='left',padx=(8,10),pady=8)
+                state_note=''
+                if item.get('_voided'):state_note=' · voided from history'
+                elif item.get('_excluded'):state_note=' · not billed'
+                label(lrow,f"{item['name']}  x {item['qty']}  @ {self.receipt_currency or ''}{item['price']}{state_note}",size=12).pack(side='left',pady=8,fill='x',expand=True)
+                line_widgets.append((lrow,bill))
+        def toggle_line(index,included):
+            if self.busy:
+                bill_var=line_widgets[index][1] if index<len(line_widgets) else None
+                if bill_var:bill_var.set(not included)
+                return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
+            item=self.receipt_items[index]
+            if included:
+                if not item.get('_excluded'):return
+                if not self.require_staff():
+                    line_widgets[index][1].set(False);return
+                saved_services.include_line(item)
+            else:
+                if item.get('_excluded'):return
+                if not self.require_staff():
+                    line_widgets[index][1].set(True);return
+                if not messagebox.askyesno('Exclude this line?','This line will not be billed to this customer.'+(' A recorded sale will be removed from sales history.' if item.get('_recorded') else '')+'\n\nRe-including it later will record it again. Continue?',parent=self):
+                    line_widgets[index][1].set(True);return
+                saved_services.exclude_line(item)
+            try:saved_services.reconcile_receipt(self.receipt_items)
+            except Exception:pass
+            self.receipt_recorded=bool(self.receipt_items) and all(x.get('_recorded') for x in self.receipt_items if not x.get('_excluded'))
+            render_lines();refresh()
+        render_lines()
         buttons=button_row(box,pady=(0,10))
         def sync_recorded(items):
             for current,snapshot in zip(self.receipt_items,items):
                 current.update(snapshot)
-            self.receipt_recorded=all(x.get('_recorded') for x in self.receipt_items)
+            active=[x for x in self.receipt_items if not x.get('_excluded')]
+            self.receipt_recorded=bool(active) and all(x.get('_recorded') for x in active)
             refresh()
         def save_receipt():
             if self.busy:return
             if not self.receipt_items:return messagebox.showinfo('Receipt','Add a service first.',parent=self)
             try:saved_services.reconcile_receipt(self.receipt_items)
             except Exception as exc:return messagebox.showerror('Could not verify sales status',str(exc),parent=self)
-            if not any(not x.get('_voided') for x in self.receipt_items):return messagebox.showinfo('Receipt','All services on this receipt have been voided. There is nothing to bill.',parent=self)
-            if any(not x.get('_recorded') and not x.get('_saved_work') for x in self.receipt_items) and not self.require_staff():return
+            if not saved_services.billable_lines(self.receipt_items):return messagebox.showinfo('Receipt','All services on this receipt are voided or excluded. There is nothing to bill.',parent=self)
+            if any(not x.get('_recorded') and not x.get('_saved_work') and not x.get('_excluded') for x in self.receipt_items) and not self.require_staff():return
             out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF','*.pdf')],initialfile='receipt.pdf')
             if not out:return
             text=draft_text();items=[dict(x) for x in self.receipt_items]
@@ -1479,7 +1533,7 @@ class CafeDesk(ctk.CTk):
                 services.export_document_pdf(text,out,'Receipt',0)
                 when=datetime.now().astimezone().isoformat(timespec='seconds')
                 for item in items:
-                    if not item.get('_recorded'):
+                    if not item.get('_recorded') and not item.get('_excluded'):
                         item['_saved_work']=True;item.setdefault('_created_at',when);item.setdefault('_station',station)
                 try:saved_services.record_pending(items,business,curr,token)
                 except Exception as exc:
@@ -1491,6 +1545,7 @@ class CafeDesk(ctk.CTk):
         def record():
             if self.busy:return
             if not self.receipt_items:return messagebox.showinfo('Receipt','Add a service first.',parent=self)
+            if not saved_services.billable_lines(self.receipt_items):return messagebox.showinfo('Nothing to record','All services are voided or excluded. There is nothing to add to history.',parent=self)
             if self.receipt_recorded:return messagebox.showinfo('Already recorded','All these services are already in sales history.',parent=self)
             if not self.require_staff():return
             items=[dict(x) for x in self.receipt_items];business=self.receipt_business;curr=self.receipt_currency;token=self.receipt_token
@@ -1504,7 +1559,8 @@ class CafeDesk(ctk.CTk):
             if not removable:
                 return messagebox.showinfo('Saved services','Only unsaved manual lines can be undone. Staff can void mistaken saved services in Sales reports.',parent=self)
             self.receipt_items.pop(removable[-1])
-            self.receipt_recorded=bool(self.receipt_items) and all(x.get('_recorded') for x in self.receipt_items)
+            active=[x for x in self.receipt_items if not x.get('_excluded')]
+            self.receipt_recorded=bool(active) and all(x.get('_recorded') for x in active)
             refresh()
         def new_receipt():
             if self.busy:return messagebox.showinfo('Please wait','Wait for the current task to finish.',parent=self)
@@ -1514,7 +1570,7 @@ class CafeDesk(ctk.CTk):
         button(buttons,'Save receipt PDF',save_receipt,secondary=True).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'Undo last item',remove_line,ghost=True).pack(side='left',padx=(0,BTN_PADX))
         button(buttons,'New receipt',new_receipt,ghost=True).pack(side='left')
-        label(box,'Saved work is already recorded. Saving this receipt records only new manual lines.\nSaved work cannot be undone here; staff can void mistakes in Sales reports. Payment and tax are not tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
+        label(box,'Each line has a Bill toggle: switch it OFF to skip charging that service to this customer. A recorded sale is removed from history when excluded; re-including it records it again.\nSaved work is already recorded. Saving this receipt records only new manual lines.\nSaved work cannot be undone here; staff can void mistakes in Sales reports. Payment and tax are not tracked.',size=11,color=MUTED).pack(anchor='w',padx=20,pady=(0,18));refresh()
     def ocr_screen_part(self):
         show_ocr(self,self.body,card,label,button)
     def create_shell(self):
@@ -1689,14 +1745,18 @@ class CafeDesk(ctk.CTk):
                     self.receipt_business=business;self.receipt_currency=currency;self.receipt_timestamp=when
                 if self.receipt_recorded:self.receipt_token=uuid.uuid4().hex
                 self.receipt_items.append(dict(item,_reference=reference,_recorded=not error,_saved_work=True,_created_at=when,_station=data.get('station_name','')))
-                self.receipt_recorded=all(x.get('_recorded') for x in self.receipt_items)
+                active=[x for x in self.receipt_items if not x.get('_excluded')]
+                self.receipt_recorded=bool(active) and all(x.get('_recorded') for x in active)
                 if getattr(self,'current',None)=='Receipts':self.show('Receipts')
                 if error:
-                    messagebox.showerror('File saved — sales recording needs attention',
-                        'Your file was saved, but its service could not be added to sales totals. '
-                        'The line is kept in Receipts. Completed sales are queued locally when storage permits; use Record sale here or Retry pending saved sales in Sales reports.\n\n'+error,parent=self)
+                    # Silent for the customer: the file is already saved. The status
+                    # bar flags it for staff; the line stays in Receipts for a retry.
+                    self.status.set('File saved • sales recording needs retry — check Receipts')
+                else:
+                    # Default confirmation; the tool's success callback may refine it
+                    # with the saved file path. No modal popup interrupts the customer.
+                    self.status.set('File saved • added to Receipts and sales totals')
                 success(result)
-                self.status.set('File saved • added to Receipts' + (' • sales recording needs retry' if error else ' and sales totals'))
             self.job(description,work,done)
         except (ValueError,OSError) as exc:
             messagebox.showerror('Could not prepare saved-work receipt',str(exc),parent=self)
@@ -1919,7 +1979,7 @@ class CafeDesk(ctk.CTk):
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='merged.pdf' if kind=='pdf' else 'images.pdf')
         if not out: return
         task=services.merge_pdf if kind=='pdf' else services.images_to_pdf
-        self.saved_job('Working on your PDF…',lambda:task(paths,out),lambda _:messagebox.showinfo('All done',f'Your PDF was saved:\n{out}',parent=self),'merge' if kind=='pdf' else 'images')
+        self.saved_job('Working on your PDF…',lambda:task(paths,out),lambda _:self.status.set(f'All done • PDF saved: {out}'),'merge' if kind=='pdf' else 'images')
     def pdf_screen(self):
         self.heading(self.body,'PDF tools','Simple, reliable tools for the documents you use every day.')
         self.filebox(self.body,'pdf')
@@ -1989,10 +2049,10 @@ class CafeDesk(ctk.CTk):
                     if add_merge:
                         self.pdf_files.append(dest)
                         self.show('PDF tools')
-                        messagebox.showinfo('Unlocked & added to merge',f'Removed password from {pages_n} page(s) and added the unlocked copy to Files to merge.',parent=self)
+                        self.status.set(f'Unlocked • {pages_n} page(s) added to Files to merge')
                     else:
-                        note='Password removed!' if was_enc else 'Note: this PDF had no password encryption; saved a clean copy.'
-                        messagebox.showinfo('PDF unlocked',f'{note}\n{pages_n} page(s) saved to:\n{dest}',parent=self)
+                        note='Password removed' if was_enc else 'No password was set; saved a clean copy'
+                        self.status.set(f'PDF unlocked • {pages_n} page(s) saved: {dest}')
                 if add_merge:self.job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done)
                 else:self.saved_job('Removing PDF password…',lambda:services.remove_pdf_password(src,dest,pwd_val),done,'unlock')
 
@@ -2020,12 +2080,12 @@ class CafeDesk(ctk.CTk):
                 if pdf_preview.fingerprint(src)!=self.split_preview_fingerprint: return messagebox.showerror('PDF changed','The PDF changed since it was previewed. Choose it again and reselect the pages.',parent=self)
             except (OSError,ValueError) as exc:return messagebox.showerror('Cannot read PDF',str(exc),parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='extracted-pages.pdf')
-        if out: self.saved_job('Extracting pages…',lambda:services.extract_pdf(src,spec,out),lambda count:messagebox.showinfo('All done',f'{count} page(s) saved to:\n{out}',parent=self),'extract')
+        if out: self.saved_job('Extracting pages…',lambda:services.extract_pdf(src,spec,out),lambda count:self.status.set(f'All done • {count} page(s) saved: {out}'),'extract')
     def split_all(self):
         src=self.split_source
         if not src: return messagebox.showinfo('Select a PDF','Choose a PDF first.',parent=self)
         folder=filedialog.askdirectory(parent=self,title='Choose output folder (existing files will not be overwritten)')
-        if folder: self.saved_job('Splitting pages…',lambda:services.split_each_page(src,folder),lambda count:messagebox.showinfo('All done',f'{count} PDF file(s) saved in:\n{folder}',parent=self),'split')
+        if folder: self.saved_job('Splitting pages…',lambda:services.split_each_page(src,folder),lambda count:self.status.set(f'All done • {count} PDF file(s) saved in: {folder}'),'split')
     def scan_screen(self):
         self.heading(self.body,'Scan & convert','Bring paper documents and images into your digital workspace.')
         show_scanner(self,self.body,card,label,button)
@@ -2333,7 +2393,7 @@ class CafeDesk(ctk.CTk):
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF document','*.pdf')],initialfile='career-document.pdf')
         if out:
-            category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None; self.saved_job('Saving document…',lambda:services.export_document_pdf(text,out,category,index,photo),lambda _:messagebox.showinfo('All done',f'PDF saved:\n{out}',parent=self),'career')
+            category=self.doc_type.get(); index=self.selected_template_index(); photo=self.cv_photo if category==CATEGORIES[0] else None; self.saved_job('Saving document…',lambda:services.export_document_pdf(text,out,category,index,photo),lambda _:self.status.set(f'All done • PDF saved: {out}'),'career')
     def add_document_to_merge(self):
         text=self.current_text()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
@@ -2347,7 +2407,7 @@ class CafeDesk(ctk.CTk):
         text=self.current_text()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         out=filedialog.asksaveasfilename(parent=self,defaultextension='.txt',filetypes=[('Text file','*.txt')],initialfile='career-document.txt')
-        if out: self.saved_job('Saving document…',lambda:services.export_text(text,out),lambda _:messagebox.showinfo('All done',f'Text file saved:\n{out}',parent=self),'career')
+        if out: self.saved_job('Saving document…',lambda:services.export_text(text,out),lambda _:self.status.set(f'All done • Text file saved: {out}'),'career')
     def settings_screen(self):
         self.heading(self.body,'AI settings','Optional writing help — supports Google Gemini (AI Studio), OpenRouter, OpenAI, Groq, DeepSeek & compatible APIs.')
         box=card(self.body); box.pack(fill='x')

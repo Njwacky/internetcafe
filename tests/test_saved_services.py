@@ -38,6 +38,7 @@ class Widget:
     def configure(self, **kwargs): self.options = kwargs
     def bind(self, *args, **kwargs): pass
     def winfo_exists(self): return True
+    def destroy(self): pass
     def delete(self, *args): self.value = ''
     def insert(self, index, text): self.value = str(text)
     def get(self, *args): return self.value
@@ -66,7 +67,9 @@ class SavedServicesTests(unittest.TestCase):
                        uuid=uuid, datetime=datetime, messagebox=self.dialogs,
                        filedialog=self.files, simpledialog=self.inputs,
                        ctk=SimpleNamespace(CTkTextbox=Widget, CTkFrame=Widget,
-                                           CTkOptionMenu=Widget, StringVar=Widget),
+                                           CTkOptionMenu=Widget, StringVar=Widget,
+                                           CTkScrollableFrame=Widget, CTkCheckBox=Widget,
+                                           BooleanVar=Widget),
                        card=Widget, label=Widget, entry=Widget, button=button,
                        button_row=Widget, BORDER='', INK='', MUTED='', GREEN='',
                        GREEN_HOVER='', BTN_PADX=8)
@@ -113,6 +116,15 @@ class SavedServicesTests(unittest.TestCase):
         self.assertEqual(row['items'], [self.item])
         self.assertNotIn('customer content', str(row))
         self.assertNotIn(str(out), str(row))
+
+    def test_successful_save_is_silent_for_the_customer(self):
+        # No modal popup after a successful save — the status bar carries the
+        # confirmation so customers are not interrupted.
+        out = self.save_scan()
+        self.assertTrue(out.exists())
+        self.dialogs.showinfo.assert_not_called()
+        self.dialogs.showerror.assert_not_called()
+        self.assertIn('File saved', self.app.status.value)
 
     def test_failed_save_never_records_or_changes_receipt(self):
         def fail(): raise OSError('disk full')
@@ -212,7 +224,9 @@ class SavedServicesTests(unittest.TestCase):
             self.save_scan()
         self.assertFalse(self.app.receipt_recorded)
         self.assertEqual(self.total(), 0)
-        self.dialogs.showerror.assert_called_once()
+        # Silent for the customer: no modal; the status bar flags it for staff.
+        self.assertIn('sales recording needs retry', self.app.status.value)
+        self.dialogs.showerror.assert_not_called()
         self.receipt_screen(self.app)
         self.buttons['Record sale']()
         self.buttons['Record sale']()
@@ -353,6 +367,68 @@ class SavedServicesTests(unittest.TestCase):
         self.files.asksaveasfilename.assert_not_called()
         self.assertTrue(self.app.receipt_items[0]['_voided'])
         self.assertEqual(self.total(), 0)
+
+    def test_exclude_recorded_line_voids_it_and_skips_billing(self):
+        self.save_scan()
+        line = self.app.receipt_items[0]
+        self.assertFalse(line.get('_excluded'))
+        self.assertTrue(saved_services.exclude_line(line, reason='Not charged'))
+        self.assertTrue(line['_excluded'])
+        self.assertFalse(line['_included'])
+        self.assertTrue(line['_voided'])
+        # The sale is removed from sales history (voided), not silently forgotten.
+        self.assertEqual(self.total(), 0)
+        # The receipt text excludes it from the total; a voided recorded sale
+        # is listed under VOIDED (not the Excluded section, which is for
+        # non-voided exclusions) to avoid a duplicate listing.
+        text = saved_services.receipt_text('Shop', 'R', self.app.receipt_items, reference='T')
+        self.assertIn('VOIDED — excluded from total:', text)
+        self.assertIn(line['_reference'], text)
+        self.assertIn('TOTAL: R0.00', text)
+
+    def test_exclude_unrecorded_manual_line_is_not_billed(self):
+        self.save_scan()
+        manual = {'name': 'Extra copy', 'qty': 2, 'price': '1.00'}
+        self.app.receipt_items.append(manual)
+        saved_services.exclude_line(manual, reason='Not charged')
+        self.assertTrue(manual['_excluded'])
+        self.assertFalse(manual.get('_voided'))
+        # record_pending must skip excluded lines entirely.
+        before = self.total()
+        saved_services.record_pending(self.app.receipt_items, 'Shop', 'R', 'T')
+        # Only the scan was recorded earlier; the excluded manual line added nothing.
+        self.assertEqual(self.total(), before)
+
+    def test_include_line_requeues_a_voided_sale_once(self):
+        self.save_scan()
+        line = self.app.receipt_items[0]
+        saved_services.exclude_line(line, reason='Not charged')
+        self.assertTrue(line['_voided'])
+        self.assertEqual(self.total(), 0)
+        saved_services.include_line(line)
+        self.assertFalse(line['_excluded'])
+        self.assertTrue(line['_included'])
+        self.assertFalse(line['_recorded'])
+        self.assertIsNone(line.get('_reference'))
+        # Re-included line must be billable again on the receipt (not left voided).
+        self.assertIn(line, saved_services.billable_lines(self.app.receipt_items))
+        rt = saved_services.receipt_text('Shop', 'R', self.app.receipt_items, reference='T')
+        self.assertIn('TOTAL: R12.50', rt)
+        self.assertNotIn('VOIDED', rt)
+        # Saving the receipt records it exactly once — no double count.
+        saved_services.record_pending(self.app.receipt_items, 'Shop', 'R', 'T')
+        self.assertEqual(self.total(), 1250)
+        self.assertEqual(len(self.rows()), 2)  # voided audit line + re-recorded sale
+
+    def test_billable_lines_ignores_voided_and_excluded(self):
+        self.save_scan()
+        a = self.app.receipt_items[0]
+        b = {'name': 'Free', 'qty': 1, 'price': '0.00'}
+        self.app.receipt_items.append(b)
+        saved_services.exclude_line(a)
+        saved_services.exclude_line(b)
+        self.assertEqual(saved_services.billable_lines(self.app.receipt_items), [])
+
 
     def install_real_job_pump(self):
         self.ns.update(queue=queue, threading=threading,
