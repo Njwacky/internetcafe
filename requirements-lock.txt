@@ -10,7 +10,7 @@ idna==3.20
 packaging==26.3
 pillow==13.0.0
 pycparser==3.12
-pypdf==7.1.0
+pypdf==7.1.1
 pypdfium2==5.15.2
 pywin32==312; sys_platform == "win32"
 reportlab==5.1.0
