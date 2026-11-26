@@ -1,0 +1,4 @@
+# Linux CI / optional local multi-connection PostgreSQL tests only.
+# Not desktop runtime or Windows packaging dependencies.
+psycopg[binary]==3.2.13
+typing_extensions==4.16.0

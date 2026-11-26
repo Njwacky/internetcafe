@@ -921,3 +921,125 @@ full dashboard inline-script syntax and `git diff --check` all passed.
    reads/writes, storage access, RPCs, cloud signing/re-signing and audit records.
    Check the browser QR/challenge/CSP flow on an actual authenticator. PGlite and
    VM tests do not certify the deployed Auth service, browser or live policies.
+
+## Hardening sequence — Step 3: duplicate-licence repair lock order (2026-11-26)
+
+**Status:** implemented and tested in the repository; review/merge and live
+application remain separate gates. Step 2 is merged as PR #60. This step changes
+only duplicate-repair serialization, its tests and the CI database test service.
+No live Supabase database, Auth configuration or Edge Function was changed.
+
+### Five whys
+
+1. **Why could concurrent operations act on inconsistent duplicate state?**
+   Repair assembled its candidate list and could return a no-op *before* taking
+   the machine advisory lock. Two simultaneous repairs could both start from the
+   same old list; a waiter could write a second, empty repair audit.
+2. **Why did the advisory lock not coordinate issuance/re-signing?** The Step 2
+   repair function used `hashtext('cafedesk-dup:' || v_mid)`, while issuance and
+   signature replacement used `hashtextextended(v_mid, 0)`. Different lock keys
+   do not serialize the same Machine ID, regardless of the function names.
+3. **Why could a chosen keeper become invalid while others were revoked?** The
+   code validated the keeper with an unlocked SELECT and locked only rows being
+   revoked. A simultaneous pause could therefore remove the only survivor.
+4. **Why not simply wait while locking every row?** PostgreSQL acquires an UPDATE
+   row lock before invoking its BEFORE trigger. An identity/expiry UPDATE could
+   hold the row while waiting for the machine lock already held by repair. If
+   repair then waited for that row, the lock order would invert and deadlock.
+5. **Why was this not caught earlier?** PGlite runs a single embedded session;
+   serial SQL tests proved function results, not independent-backend contention,
+   wait ordering, snapshot revalidation or rollback behavior.
+
+**Root cause:** the machine-level critical section neither shared a lock identity
+with the other writers nor enclosed every decision and row needed for repair.
+The tests did not model the multi-connection failure boundary.
+
+### Fix and contract
+
+- New migration `20261126180000_duplicate_repair_lock_order.sql` replaces only
+  `owner_review_duplicate_machine_keys`; the consolidated schema contains the
+  identical migration. Previously merged migrations remain unchanged.
+- Owner identity/AAL2 and input validation run first. A `resolve` then acquires
+  `pg_advisory_xact_lock(hashtextextended(v_mid, 0))` **before** reading candidates,
+  validating the keeper or returning a no-op. The normalized key matches the
+  existing issuance trigger and signature-replacement RPC exactly.
+- Resolve locks all unexpired base/combo candidates, including the keeper and
+  paused candidates, in deterministic UUID order with `FOR UPDATE NOWAIT`.
+  A busy row raises **55P03** and aborts the entire repair without partial
+  revocations/audits. It does not wait and form a cycle with an UPDATE trigger
+  already waiting for the machine advisory lock. Locks last until transaction
+  end; a later explicit owner pause remains allowed.
+- After locking, the active candidate list is rebuilt. The requested keeper must
+  identify **exactly one** active candidate, including when zero/one candidates
+  remain. This rejects stale/conflicting selections and ambiguous legacy
+  case/whitespace variants. The same keeper retried after a successful repair is
+  a no-op and writes no second repair audit. Preview remains a read-only snapshot
+  without advisory/row locks; preview is never a promise of future resolve state.
+- Only other active, unexpired base/combo keys are revoked. Add-ons, expired keys
+  and prior manual pauses/reasons remain unchanged. Both audit tables retain
+  transactional writes and the Step 2 owner MFA requirement remains in force.
+- **Retry policy:** on 55P03 (busy row), refresh/re-preview and retry the **whole
+  transaction**, never just the failed statement or with an automatically chosen
+  keeper. At REPEATABLE READ/SERIALIZABLE, a changed snapshot can instead produce
+  **40001** and likewise requires a whole-transaction retry. An invalid/stale
+  keeper gives **22023** and requires a new explicit selection. No automatic
+  retry loop, factor bypass or destructive repair-on-read was added.
+
+### Reproduction and regression coverage
+
+Before the fix, real PostgreSQL tests reproduced premature no-op, redundant
+repair audits, unprotected keeper pauses, non-coordination with issuance and
+re-signing, and ambiguous normalized keepers (7 failing/error cases in the
+initial 10-test run). The tests use actual schema/RPC/trigger definitions and
+separate backend connections, observing `pg_blocking_pids`/`pg_locks` rather than
+assuming sleeps prove that a request waited.
+
+- **14 real PostgreSQL behavioral tests** plus **1 schema/lock-order tripwire**:
+  simultaneous same/conflicting keepers; issuance and re-sign lock coordination;
+  post-wait keeper revalidation; keeper row protection; row/advisory inversion;
+  fail-closed busy-row retries; rollback releasing locks and undoing audits;
+  REPEATABLE READ serialization failure; non-blocking preview; distinct-machine
+  repair independence; ambiguous keepers; audit-failure atomic rollback.
+- Five new PGlite tests cover same-keeper retry, stale conflicting selection,
+  zero/one-candidate validation, unchanged add-on/expired/paused records, and
+  normalized identifiers. Existing entitlement/MFA suites now apply the newest
+  migration so they cannot silently test only historical repair definitions.
+- CI's Linux job now starts a **local PostgreSQL 16 service** and supplies an
+  explicit test DSN to the full Python suite. Test-only driver dependencies live
+  in `requirements-postgres-test.txt`, not desktop/Windows dependencies. When a
+  DSN is supplied, missing driver/service/setup is a failure, not a skip.
+- Tests refuse non-local hosts and create/drop a uniquely named disposable
+  database; they never reuse the database named in the test DSN for app tables.
+  Without a DSN, the multi-connection tests are explicitly skipped, while the
+  schema tripwire and PGlite tests still run.
+
+### Run locally / Step 4 hand-off
+
+Use a disposable local PostgreSQL 16 server whose test role can create databases:
+
+```sh
+python -m pip install -r requirements-lock.txt -r requirements-postgres-test.txt
+export CAFEDESK_TEST_POSTGRES_DSN='postgresql://<test-user>:<test-password>@127.0.0.1:5432/postgres'
+python .github/run_tests.py
+npm ci --ignore-scripts
+npm test
+```
+
+The local verification server used PostgreSQL 16.2 supplied by an optional
+`pgserver` wheel (not a project dependency). That wheel lacks pgcrypto, so the
+local test bootstrap uses PostgreSQL's native SHA-256 only for `digest(text,
+'sha256')`; CI's stock PostgreSQL image uses the real pgcrypto extension. Auth
+claims are synthetic test fixtures; these tests do not certify live JWT/RLS
+configuration. All locking, transaction, trigger and snapshot behavior runs on
+real PostgreSQL backends, not mocks.
+
+After review/merge, **Step 4** must apply the pending reviewed migrations in
+order (including MFA before this repair migration), verify the deployed function
+and lock expression, and check owner AAL1 denials/AAL2 success and transactional
+audit records. Concurrent destructive repair is tested only on synthetic data;
+do not recreate duplicate customer licences in production to test contention.
+
+**Final local verification:** full Python suite **372 run, OK (1 skipped)** with
+all real PostgreSQL tests enabled; JavaScript/PGlite suite **53/53 passed**;
+15-test PostgreSQL suite passed five additional consecutive runs. Version sync,
+owner digest sync, release-key guard and `git diff --check` all passed.
