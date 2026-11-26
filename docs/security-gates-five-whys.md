@@ -655,3 +655,160 @@ during the resolve window.
   `is_cafedesk_owner()` digest guard; the migration must be applied to the live
   Supabase project before release. Remote revocation takes effect at the next
   10-minute entitlement sync (the documented recheck interval).
+
+## Follow-up — Custom AI endpoint hostname validation (COMPLETE)
+
+**Risk addressed:** a custom OpenAI-compatible endpoint URL bypassing the HTTPS
+requirement via string-prefix spoofing, authority confusion or parser
+differentials — transmitting the bearer API key and customer draft over
+cleartext HTTP to a non-loopback server — or triggering provider-specific
+model/header/payload mutations via URL substring collisions, or persisting an
+unvalidated/secret-bearing `custom_url` into `ai-key.json`.
+
+### Five whys: why could custom AI endpoint validation be bypassed?
+
+1. **Why could a custom endpoint send the API key and customer text over
+   cleartext HTTP to an external server (e.g. `http://localhost.evil.com/v1`,
+   `http://127.0.0.1.evil.com/v1`, `http://localhost@evil.com/v1`, or
+   `http://evil.com\@localhost/v1`), accept hostless `https:///v1`, or trigger
+   wrong-provider headers/models?**
+   `services.detect_ai_provider` checked
+   `url.startswith(('https://', 'http://localhost', 'http://127.0.0.1'))` and
+   `normalize_ai_model`/`call_ai_chat` checked `'api.groq.com' in endpoint_url`
+   instead of parsing and validating the URL's authority and hostname.
+2. **Why did prefix and substring checks accept hostile or malformed URLs?**
+   In URL syntax, the characters following `http://localhost` or
+   `http://127.0.0.1` need not end the hostname: `.evil.com` extends it into an
+   external domain, `.10` extends the IPv4 octet (`127.0.0.10`), `@evil.com`
+   demotes `localhost` to URL userinfo while making `evil.com` the destination
+   host, `https:///v1` has a scheme prefix with no host at all, and a provider
+   domain in a subdomain suffix or query parameter matches `' in endpoint_url'`.
+3. **Why wasn't a plain `urllib.parse.urlsplit(url).hostname` check used — and
+   why is naive `urlsplit` alone still insufficient?**
+   Validation was originally written as a UI format hint ("starts with
+   `https://`") rather than a network trust-boundary parser. Moreover, naive
+   `urllib.parse.urlsplit` disagrees with `urllib3`/`requests` (WHATWG URL
+   parsing) on backslashes (`http://evil.com\@localhost/v1` yields `urlsplit`
+   hostname `'localhost'` while `urllib3` connects to `'evil.com'`), allows
+   embedded credentials, and accepts malformed DNS labels, non-canonical IPv4
+   notations (`0177.0.0.1`, `127.1`, `2130706433`, `0x7f000001`), and
+   unspecified/link-local/metadata/mapped IPs (`0.0.0.0`, `::`,
+   `169.254.169.254`, `::ffff:...`).
+4. **Why could an invalid or secret-bearing `custom_url` also reach disk or
+   partially mutate in-memory UI state?**
+   Validation ran only inside `detect_ai_provider` when `Custom
+   OpenAI-compatible URL` was active, not in `ai_key_store.save_key` (which
+   writes a plaintext display copy of `custom_url` in `ai-key.json`) and only
+   *after* `_load_saved_ai_key` had already populated the in-memory key,
+   provider and model. In addition, the percent-decoded secret check compared
+   `redact_secrets(unquote(url), key) != url` (decoded vs raw), falsely
+   rejecting benign percent-encoding such as `%20` while missing
+   double-encoded keys.
+5. **Why did tests not catch this?**
+   All prior custom-URL tests used a single clean host (`https://example.com`)
+   to exercise query-key redaction; none tested adversarial authorities,
+   parser differentials, provider-substring collisions or `save_key` URL
+   persistence.
+
+**Root cause:** URL trust decisions (cleartext loopback exemption, host
+validity, secret-free authority, and provider identification) were evaluated on
+**raw unparsed URL strings** at request time instead of **strict,
+canonicalized, parser-consistent URL/hostname validation** across both request
+and persistence boundaries.
+
+### Fix (`ai_safety.py`, `services.py`, `ai_key_store.py`, `app.py`)
+
+- `ai_safety.validate_custom_ai_url`:
+  - Rejects empty/oversized URLs, whitespace, ASCII control characters,
+    backslashes (`\`), userinfo/credentials (`@`), fragments (`#`), empty or
+    out-of-range ports, percent-encoded hostnames, and embedded keys/tokens
+    across up to four percent-decoding passes (fixing the `unquote(url) != url`
+    false positive on clean `%20` paths).
+  - Permits cleartext `http://` **only** for exact local loopback hosts
+    (`localhost`, `127.0.0.1`, `[::1]`).
+  - Requires `https://` for every non-loopback endpoint, validating multi-label
+    RFC 1123 / IDNA 2008 hostnames (blocking NFKC/fullwidth-dot confusables,
+    single-label/malformed hosts, and non-canonical numeric/octal/hex/shorthand
+    IPv4 literals via a strict letter-initial TLD rule) or valid unicast IP
+    literals (blocking unspecified, link-local/cloud-metadata, multicast,
+    reserved, non-`127.0.0.1` loopback, and IPv4-mapped IPv6 addresses).
+  - Expands `/v1` on the parsed path component only (never corrupting query
+    parameters) and rebuilds the canonical URL via `urlunsplit` so `urllib3`
+    receives the exact validated `(scheme, host, port)`.
+- `services.py`: `detect_ai_provider` delegates custom URL validation to
+  `ai_safety.validate_custom_ai_url(..., expand_v1=True)`; `normalize_ai_model`
+  and `call_ai_chat` match `ai_safety.endpoint_hostname(endpoint)` instead of
+  raw URL substrings.
+- `ai_key_store.py` & `app.py`: `save_key` validates and canonicalizes
+  `custom_url` before writing `ai-key.json`; `save_key_now` validates before
+  prompting for the PIN and clears stale hidden custom URLs when a built-in
+  provider is selected; `_load_saved_ai_key` validates before loading the key
+  into memory or updating UI variables.
+
+### Adversarial Recheck — 5 Whys & Hardening Pass
+
+A second-pass adversarial review against `validate_custom_ai_url`,
+`detect_ai_provider`, `save_key`, `_load_saved_ai_key`, and `improve` uncovered
+four subtle residual gaps:
+
+1. **Why did `https://0.0.0.1/v1`, `https://100.100.100.200/v1`,
+   `https://[2002:a9fe:a9fe::1]/v1` (6to4 metadata), `https://[2001::a9fe:a9fe]/v1`
+   (Teredo), `https://[64:ff9b::169.254.169.254]/v1` (NAT64), and TEST-NET blocks
+   pass the first IP check?**
+   Python's `ipaddress` marks `0.0.0.0/8` (except `0.0.0.0`), documentation
+   ranges, 6to4 (`2002::/16`), and Teredo (`2001::/32`) as `is_private=True,
+   is_reserved=False, is_unspecified=False`, marks CGNAT / Alibaba metadata
+   (`100.64.0.0/10`) as neither private nor global, and marks RFC 6052 NAT64
+   (`64:ff9b::/96`) as `is_global=True` — so a property **denylist** left holes.
+   - **Fix:** Replaced the IP property denylist with a **positive allowlist**:
+     exact `127.0.0.1` / `[::1]` on `http`/`https`, and on `https` only either
+     global unicast (`is_global and not is_multicast`, excluding `ipv4_mapped`,
+     `sixtofour`, `teredo`, `64:ff9b::/96`, and `64:ff9b:1::/48`) or standard
+     shop-LAN private unicast (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+     `fc00::/7`).
+2. **Why could unlocking a saved auto-detect or built-in key after `lock_staff`
+   still route to a stale custom URL?**
+   `lock_staff()` clears `self.key` in memory (`_set_key_memory('')`) without
+   resetting `self.ai_provider` or `self.ai_custom_url`, and
+   `_load_saved_ai_key` only overwrote those Tk variables *when non-empty* in
+   the saved record (`if data.get('provider') in services.AI_PROVIDERS:` /
+   `if clean_custom:`). In addition, unrecognised `provider` names fell through
+   to auto-detect instead of failing closed.
+   - **Fix:** `detect_ai_provider` and `save_key` now fail closed on any
+     unknown provider name (`ai_safety.KNOWN_AI_PROVIDERS` locked to
+     `services.AI_PROVIDERS`); `_load_saved_ai_key` validates every saved record
+     through `detect_ai_provider` and unconditionally overwrites both
+     `self.ai_provider` (mapping `""` to `'Auto-detect from API key'`) and
+     `self.ai_custom_url` (clearing it whenever `saved_prov != 'Custom OpenAI-compatible URL'`).
+3. **Why could an opaque third-party key in `?api_key=<hex>` or `?token=<hex>`
+   slip past `_url_contains_secret` when different from the key entry box?**
+   `redact_secrets` matches the registered `api_key` plus standard prefixes
+   (`sk-`, `gsk_`, `AIza`, `xai-`, `hf_`), so an unprefixed hex token in a
+   credential query parameter was missed.
+   - **Fix:** Added `_has_secret_query_param` (supporting `&` and `;`
+     separators plus percent-encoded parameter names) blocking non-empty
+     `key`, `api_key`, `apikey`, `api-key`, `token`, `access_token`, `auth`,
+     `authorization`, `secret`, `password`, `passwd`, `bearer`, and
+     `client_secret` query parameters while keeping benign parameters such as
+     `api-version=2024-06-01` working.
+4. **Why did `normalize_ai_model("", endpoint_url)` and the customer consent
+   prompt lose hostname specificity on custom URLs?**
+   `normalize_ai_model` looked up `endpoint_url` in `AI_DEFAULT_MODELS` by full
+   string when `model == ""`, and `app.py` `improve()` displayed only the generic
+   label `Custom endpoint`.
+   - **Fix:** Added `_HOST_DEFAULT_MODELS` hostname fallback in
+     `normalize_ai_model`, canonicalized empty URL paths `""` -> `"/"` to match
+     `requests.PreparedRequest.url`, and included
+     `ai_safety.endpoint_hostname(resolved_ep)` in `improve()`'s customer
+     consent prompt (`Custom endpoint — <hostname>`).
+
+### Validation
+
+- **11 new regression test methods** (covering 100+ valid and adversarial URL /
+  IP / query-secret / state-restoration sub-cases, `urllib3` & `requests`
+  parity, double-encoded keys, provider-substring non-interference, `save_key`
+  rejection of bad URLs and unknown providers, and authoritative
+  `_load_saved_ai_key` state reset) in `tests/test_ai_safety.py` and
+  `tests/test_ai_key_store.py`.
+- **353 Python tests OK (skipped=1), 39 JavaScript tests OK**; version-sync,
+  owner-digest and `git diff --check` all clean.

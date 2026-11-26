@@ -343,5 +343,304 @@ class ApiKeyExposureGateTests(unittest.TestCase):
         self.assertIn("redirect", str(ctx.exception))
 
 
+class CustomAiEndpointHostnameTests(unittest.TestCase):
+    """Custom AI endpoint URLs must validate parsed hostnames, not raw string prefixes."""
+
+    KEY = "gsk_secretkey123456789"
+    CUSTOM = "Custom OpenAI-compatible URL"
+
+    def test_valid_https_and_loopback_http_endpoints_resolve_cleanly(self):
+        import urllib3.util
+
+        import services
+
+        valid_cases = [
+            ("https://openrouter.ai/api/v1/chat/completions", "https://openrouter.ai/api/v1/chat/completions", "openrouter.ai"),
+            ("https://Example.COM/v1", "https://example.com/v1/chat/completions", "example.com"),
+            ("https://Example.COM/v1/", "https://example.com/v1/chat/completions", "example.com"),
+            ("https://api.x.ai/v1/chat/completions", "https://api.x.ai/v1/chat/completions", "api.x.ai"),
+            (
+                "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-06-01",
+                "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-06-01",
+                "my-resource.openai.azure.com",
+            ),
+            (
+                "https://example.com/v1?api-version=2024-06-01",
+                "https://example.com/v1/chat/completions?api-version=2024-06-01",
+                "example.com",
+            ),
+            (
+                "https://example.com/chat/completions?upstream=/v1",
+                "https://example.com/chat/completions?upstream=/v1",
+                "example.com",
+            ),
+            (
+                "https://example.com/my%20gateway/v1/chat/completions",
+                "https://example.com/my%20gateway/v1/chat/completions",
+                "example.com",
+            ),
+            ("http://localhost:11434/v1", "http://localhost:11434/v1/chat/completions", "localhost"),
+            ("http://LOCALHOST:11434/v1/chat/completions", "http://localhost:11434/v1/chat/completions", "localhost"),
+            ("http://127.0.0.1:1234/v1", "http://127.0.0.1:1234/v1/chat/completions", "127.0.0.1"),
+            ("http://[::1]:11434/v1", "http://[::1]:11434/v1/chat/completions", "[::1]"),
+            ("https://localhost:8443/v1", "https://localhost:8443/v1/chat/completions", "localhost"),
+            ("https://127.0.0.1:8443/v1", "https://127.0.0.1:8443/v1/chat/completions", "127.0.0.1"),
+            ("https://[::1]:8443/v1", "https://[::1]:8443/v1/chat/completions", "[::1]"),
+            ("https://192.168.1.50:8443/v1", "https://192.168.1.50:8443/v1/chat/completions", "192.168.1.50"),
+            ("https://ollama.local/v1", "https://ollama.local/v1/chat/completions", "ollama.local"),
+            ("https://m\u00fcnchen.de/v1", "https://xn--mnchen-3ya.de/v1/chat/completions", "xn--mnchen-3ya.de"),
+        ]
+        for raw, expected, expected_u3_host in valid_cases:
+            with self.subTest(url=raw):
+                resolved, label = services.detect_ai_provider(self.KEY, self.CUSTOM, raw)
+                self.assertEqual(label, "Custom endpoint")
+                self.assertEqual(resolved, expected)
+                # urllib3 (used by requests) must agree on the exact destination host.
+                u3 = urllib3.util.parse_url(resolved)
+                self.assertEqual(u3.host, expected_u3_host)
+
+    def test_http_prefix_spoofing_hosts_are_rejected(self):
+        import services
+
+        spoofed_http_urls = [
+            "http://localhost.evil.com/v1/chat/completions",
+            "http://localhost-ai.evil.com/v1",
+            "http://127.0.0.1.evil.com/v1/chat/completions",
+            "http://127.0.0.1.nip.io/v1",
+            "http://127.0.0.10:11434/v1",
+            "http://127.0.0.2:11434/v1",
+            "http://192.168.1.50:11434/v1",
+            "http://10.0.0.5:8000/v1",
+            "http://example.com/v1/chat/completions",
+        ]
+        for bad in spoofed_http_urls:
+            with self.subTest(url=bad):
+                with self.assertRaises(ValueError):
+                    services.detect_ai_provider(self.KEY, self.CUSTOM, bad)
+
+    def test_authority_confusion_credentials_and_backslash_differentials_are_rejected(self):
+        import services
+
+        confusion_urls = [
+            "http://localhost@evil.com/v1/chat/completions",
+            "http://localhost:11434@evil.com/v1",
+            "http://127.0.0.1@evil.com/v1",
+            "http://evil.com\\@localhost/v1",
+            "http://localhost\\@evil.com/v1",
+            "https://evil.com\\@api.openai.com/v1",
+            "https://user:pass@example.com/v1/chat/completions",
+            "https://user@example.com/v1/chat/completions",
+            "https://example.com/v1/chat/completions#frag",
+        ]
+        for bad in confusion_urls:
+            with self.subTest(url=bad):
+                with self.assertRaises(ValueError):
+                    services.detect_ai_provider(self.KEY, self.CUSTOM, bad)
+
+    def test_malformed_hosts_ports_and_noncanonical_or_reserved_ips_are_rejected(self):
+        import services
+
+        malformed_or_reserved = [
+            "",
+            "   ",
+            "ftp://example.com/v1",
+            "localhost:11434/v1",
+            "https://",
+            "https:///v1/chat/completions",
+            "https://:443/v1",
+            "https://https://example.com/v1",
+            "https://example.com:/v1",
+            "https://example.com:0/v1",
+            "https://example.com:65536/v1",
+            "https://example.com:abc/v1",
+            "https://.",
+            "https://..",
+            "https://example..com/v1",
+            "https://.example.com/v1",
+            "https://example.com./v1",
+            "https://-bad.com/v1",
+            "https://bad-.com/v1",
+            "https://exa_mple.com/v1",
+            "https://singlelabel/v1",
+            "https://[localhost]/v1",
+            "https://[127.0.0.1]/v1",
+            "https://api\u3002openai.com/v1",
+            "http://localhost\uff0eevil.com/v1",
+            "https://lo\xadcalhost.com/v1",
+            "https://example.com /v1",
+            "https://ex\nample.com/v1",
+            "http://0177.0.0.1:11434/v1",
+            "https://0177.0.0.1/v1",
+            "http://2130706433:11434/v1",
+            "https://2130706433/v1",
+            "https://2852039166/v1",
+            "http://0x7f000001/v1",
+            "https://0x7f000001/v1",
+            "http://127.1/v1",
+            "https://127.1/v1",
+            "http://0.0.0.0:11434/v1",
+            "https://0.0.0.0/v1",
+            "http://[::]:11434/v1",
+            "https://[::]/v1",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://[fe80::1]/v1",
+            "https://[fe80::1%25eth0]/v1",
+            "http://[::ffff:127.0.0.1]:11434/v1",
+            "https://[::ffff:127.0.0.1]/v1",
+            "https://[::ffff:169.254.169.254]/v1",
+            "https://224.0.0.1/v1",
+            "https://255.255.255.255/v1",
+        ]
+        for bad in malformed_or_reserved:
+            with self.subTest(url=bad):
+                with self.assertRaises(ValueError):
+                    services.detect_ai_provider(self.KEY, self.CUSTOM, bad)
+
+    def test_double_percent_encoded_key_in_custom_url_is_rejected(self):
+        import urllib.parse
+
+        import services
+
+        double_encoded = urllib.parse.quote(urllib.parse.quote(self.KEY, safe=""), safe="")
+        url = "https://example.com/v1/chat/completions?key=" + double_encoded
+        with self.assertRaises(ValueError) as ctx:
+            services.detect_ai_provider(self.KEY, self.CUSTOM, url)
+        self.assertIn("must not contain", str(ctx.exception))
+
+    def test_provider_quirks_match_parsed_hostname_not_url_substring(self):
+        import services
+
+        # Subdomain suffixes or path/query substrings must not trigger provider-specific
+        # model rewrites, headers, or payload fields on unrelated custom endpoints.
+        self.assertEqual(
+            services.normalize_ai_model("gpt-4o-mini", "https://api.groq.com.example.com/v1/chat/completions"),
+            "gpt-4o-mini",
+        )
+        self.assertEqual(
+            services.normalize_ai_model("gpt-4o-mini", "https://gateway.example.com/generativelanguage.googleapis.com/v1"),
+            "gpt-4o-mini",
+        )
+        self.assertEqual(
+            services.normalize_ai_model("gpt-4o-mini", "https://gateway.example.com/openrouter.ai/v1"),
+            "gpt-4o-mini",
+        )
+
+        fake_resp = mock.Mock(ok=True, status_code=200)
+        fake_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+        custom_gateway = (
+            "https://gateway.example.com/v1/chat/completions"
+            "?upstream=api.openai.com&via=openrouter.ai&alt=api.groq.com"
+        )
+        with mock.patch("requests.post", return_value=fake_resp) as post_mock:
+            services.call_ai_chat(
+                self.KEY,
+                "gpt-4o-mini",
+                "hello",
+                provider_choice=self.CUSTOM,
+                custom_url=custom_gateway,
+                max_tokens=32,
+            )
+        headers = post_mock.call_args[1]["headers"]
+        payload = post_mock.call_args[1]["json"]
+        self.assertNotIn("HTTP-Referer", headers)
+        self.assertNotIn("store", payload)
+        self.assertNotIn("max_completion_tokens", payload)
+        self.assertEqual(payload["max_tokens"], 32)
+        self.assertEqual(payload["model"], "gpt-4o-mini")
+
+    def test_recheck_ip_allowlist_blocks_this_network_cgnat_nat64_6to4_teredo_and_testnet(self):
+        import services
+
+        # Special-purpose blocks that Python's ipaddress does NOT flag as is_unspecified /
+        # is_reserved must still be rejected by positive unicast allowlisting.
+        non_routable_or_tunnel_ips = [
+            "https://0.0.0.1/v1",
+            "https://0.255.255.255/v1",
+            "https://100.100.100.200/v1",
+            "https://100.64.0.1/v1",
+            "https://192.0.0.1/v1",
+            "https://192.0.2.1/v1",
+            "https://198.18.0.1/v1",
+            "https://198.51.100.1/v1",
+            "https://203.0.113.1/v1",
+            "https://[2001:db8::1]/v1",
+            "https://[2002:a9fe:a9fe::1]/v1",
+            "https://[2002:7f00:1::1]/v1",
+            "https://[2001::a9fe:a9fe]/v1",
+            "https://[64:ff9b::169.254.169.254]/v1",
+            "https://[64:ff9b::8.8.8.8]/v1",
+            "https://[64:ff9b:1::1]/v1",
+        ]
+        for bad in non_routable_or_tunnel_ips:
+            with self.subTest(url=bad):
+                with self.assertRaises(ValueError):
+                    services.detect_ai_provider(self.KEY, self.CUSTOM, bad)
+
+        # Legitimate global unicast and RFC 1918 / RFC 4193 shop-LAN HTTPS IPs remain allowed.
+        for allowed in (
+            "https://1.1.1.1/v1",
+            "https://[2606:4700:4700::1111]/v1",
+            "https://10.0.0.5:8443/v1",
+            "https://172.16.0.5:8443/v1",
+            "https://192.168.1.50:8443/v1",
+            "https://[fd00::1]:8443/v1",
+        ):
+            with self.subTest(url=allowed):
+                resolved, _ = services.detect_ai_provider(self.KEY, self.CUSTOM, allowed)
+                self.assertTrue(resolved.endswith("/v1/chat/completions"))
+
+    def test_recheck_non_pattern_secret_query_params_and_unknown_providers_rejected(self):
+        import requests
+
+        import ai_safety
+        import services
+
+        # Provider allowlists in ai_safety and services must stay in exact lockstep.
+        self.assertEqual(set(services.AI_PROVIDERS), ai_safety.KNOWN_AI_PROVIDERS)
+
+        # Arbitrary hex/opaque third-party tokens in credential query params must be rejected
+        # even when they do not match sk-/gsk_/AIza prefixes or the key in the entry box.
+        for param in ("api_key", "apikey", "api-key", "key", "token", "access_token", "auth", "authorization", "secret"):
+            url = f"https://api.together.xyz/v1/chat/completions?{param}=9f8e7d6c5b4a32109f8e7d6c5b4a3210"
+            with self.subTest(param=param):
+                with self.assertRaises(ValueError) as ctx:
+                    services.detect_ai_provider("unrelated-box-key", self.CUSTOM, url)
+                self.assertIn("must not contain", str(ctx.exception))
+
+        # Semicolon-separated and percent-encoded secret param names are also rejected.
+        for tricky_url in (
+            "https://api.together.xyz/v1/chat/completions?v=1;api_key=9f8e7d6c5b4a3210",
+            "https://api.together.xyz/v1/chat/completions?%61pi_key=9f8e7d6c5b4a3210",
+        ):
+            with self.subTest(url=tricky_url):
+                with self.assertRaises(ValueError):
+                    services.detect_ai_provider("unrelated-box-key", self.CUSTOM, tricky_url)
+
+        # Benign query params like Azure api-version remain allowed, and empty path canonicalizes to "/".
+        azure_ep, _ = services.detect_ai_provider(
+            self.KEY,
+            self.CUSTOM,
+            "https://myshop.openai.azure.com/openai/deployments/gpt4o/chat/completions?api-version=2024-06-01",
+        )
+        self.assertTrue(azure_ep.endswith("?api-version=2024-06-01"))
+        bare_ep = ai_safety.validate_custom_ai_url("https://example.com", self.KEY, expand_v1=False)
+        self.assertEqual(bare_ep, "https://example.com/")
+        self.assertEqual(requests.Request("POST", bare_ep).prepare().url, bare_ep)
+
+        # Unknown provider names fail closed instead of silently falling back to OpenAI.
+        with self.assertRaises(ValueError):
+            services.detect_ai_provider(self.KEY, "Tampered Provider Name", "")
+
+        # Empty model resolves default by parsed hostname even on /v1 or query-bearing URLs.
+        self.assertEqual(
+            services.normalize_ai_model("", "https://api.groq.com/openai/v1/chat/completions?foo=1"),
+            "openai/gpt-oss-120b",
+        )
+        self.assertEqual(
+            services.normalize_ai_model("", "https://api.deepseek.com/v1/chat/completions"),
+            "deepseek-chat",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

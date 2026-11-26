@@ -222,13 +222,26 @@ def saved_key_info(path=None) -> dict | None:
 
 def save_key(api_key: str, pin: str, *, provider: str = "", model: str = "", custom_url: str = "", path=None) -> dict:
     """Encrypt and store the key. `pin` must already be verified by the caller."""
+    import ai_safety
+
     key = _validate_key(api_key)
     if not isinstance(pin, str) or not pin:
         raise ValueError("The staff PIN is required to save the key.")
+    provider = (provider or "").strip()[:80]
+    if provider and provider not in ai_safety.KNOWN_AI_PROVIDERS:
+        raise ValueError(f"Unknown AI provider: {provider}")
+    model = (model or "").strip()[:120]
+    raw_custom = (custom_url or "").strip()
+    if provider == "Custom OpenAI-compatible URL" or raw_custom:
+        clean_custom = ai_safety.validate_custom_ai_url(raw_custom, key, expand_v1=False)
+        if len(clean_custom) > 300:
+            raise ValueError("Custom AI endpoint URL must be 300 characters or fewer.")
+        custom_url = clean_custom
+    else:
+        custom_url = ""
     protection = "dpapi+pin" if os_protection_available() else "pin"
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-    provider, model, custom_url = (provider or "")[:80], (model or "")[:120], (custom_url or "")[:300]
     # Everything that decides *where* the key is sent lives inside the authenticated payload.
     payload = json.dumps({"api_key": key, "provider": provider, "model": model, "custom_url": custom_url}).encode("utf-8")
     salt, nonce = os.urandom(16), os.urandom(12)
@@ -317,7 +330,8 @@ def rewrap_for_new_pin(old_pin: str, new_pin: str, path=None) -> bool:
         return False
     if not data:
         return False
-    save_key(data["api_key"], new_pin, provider=data["provider"], model=data["model"], custom_url=data["custom_url"], path=path)
+    custom_url = data["custom_url"] if data["provider"] == "Custom OpenAI-compatible URL" else ""
+    save_key(data["api_key"], new_pin, provider=data["provider"], model=data["model"], custom_url=custom_url, path=path)
     return True
 
 
