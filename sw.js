@@ -1,5 +1,5 @@
 /* Café Desk Owner Console — service worker (network-first with offline fallback) */
-const VERSION = 'cafedesk-console-v3';
+const VERSION = 'cafedesk-console-v4';
 const CORE = [
   '/dashboard',
   '/owner-auth.js',

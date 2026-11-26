@@ -52,11 +52,14 @@ async function keyStates() {
 before(async () => {
   db = new PGlite();
   await db.exec('create role anon; create role authenticated;');
-  // auth.jwt() stub reading a session GUC so a test can act as owner or not.
+  // auth.jwt() stub reading session GUCs so tests can exercise owner identity and MFA (AAL1/AAL2).
   await db.exec(`create schema auth;
     create function auth.jwt() returns jsonb language plpgsql stable as $$
     begin
-      return jsonb_build_object('email', current_setting('app.jwt_email', true));
+      return jsonb_build_object(
+        'email', current_setting('app.jwt_email', true),
+        'aal', coalesce(current_setting('app.jwt_aal', true), '')
+      );
     end;
     $$;`);
   // pgcrypto digest() stub: the real owner digest only for the test owner email.
@@ -84,7 +87,7 @@ beforeEach(async () => {
   await db.exec('alter table public.owner_license_actions disable trigger all;');
   await db.exec(`truncate public.issued_machine_keys, public.activation_requests, public.owner_license_actions;`);
   await db.exec('alter table public.owner_license_actions enable trigger all;');
-  await db.exec(`set app.jwt_email = '${OWNER_EMAIL}';`);
+  await db.exec(`set app.jwt_email = '${OWNER_EMAIL}'; set app.jwt_aal = 'aal2';`);
 });
 
 test('consolidated schema dropped the destructive read-time revocation', () => {
@@ -189,6 +192,15 @@ test('a non-owner cannot review or resolve duplicate keys', async () => {
   await seedKey('LIC-A');
   await seedKey('LIC-B');
   await db.exec(`set app.jwt_email = 'someone-else@example.com';`);
+  await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'preview', '']), /Only the Café Desk owner/);
+  await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']), /Only the Café Desk owner/);
+  assert.deepEqual(await keyStates(), [['LIC-A', false], ['LIC-B', false]]);
+});
+
+test('an owner session at AAL1 (without MFA) cannot review or resolve duplicate keys', async () => {
+  await seedKey('LIC-A');
+  await seedKey('LIC-B');
+  await db.exec(`set app.jwt_email = '${OWNER_EMAIL}'; set app.jwt_aal = 'aal1';`);
   await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'preview', '']), /Only the Café Desk owner/);
   await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']), /Only the Café Desk owner/);
   assert.deepEqual(await keyStates(), [['LIC-A', false], ['LIC-B', false]]);

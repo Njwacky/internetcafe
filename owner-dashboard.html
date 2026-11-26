@@ -388,6 +388,39 @@
   </div>
 </main>
 
+<!-- ==================== MFA (AAL2) GATE ==================== -->
+<main id="mfaView" class="auth-view hidden">
+  <div class="auth-card">
+    <div class="auth-badge"><span style="width:6px;height:6px;border-radius:50%;background:#b9ff70;display:inline-block"></span> Multi-factor security · AAL2</div>
+
+    <div id="mfaChallengeSection">
+      <h2>Two-factor verification</h2>
+      <p class="lead">Enter the 6-digit code from your authenticator app to unlock console operations.</p>
+      <label for="mfaVerifyCode">6-digit authenticator code</label>
+      <input id="mfaVerifyCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" onkeydown="if(event.key==='Enter')submitMfaChallenge()">
+      <button class="btn btn-primary btn-block" id="mfaVerifyBtn" onclick="submitMfaChallenge()">Verify 6-digit code</button>
+    </div>
+
+    <div id="mfaEnrollSection" class="hidden">
+      <h2>Set up authenticator (2FA)</h2>
+      <p class="lead">Owner operations require server-enforced two-factor authentication (AAL2). Scan this QR code in Google Authenticator, 1Password, Authy, or Microsoft Authenticator, then enter the 6-digit code.</p>
+      <div style="text-align:center;margin:10px 0 12px">
+        <img id="mfaQrImg" alt="Authenticator QR code" style="width:176px;height:176px;background:#fff;padding:8px;border-radius:12px;display:inline-block">
+      </div>
+      <div style="background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px">
+        <div style="color:var(--muted);margin-bottom:4px">Manual setup key</div>
+        <code id="mfaSecretCode" style="user-select:all;word-break:break-all;color:var(--lime);font-size:12.5px">—</code>
+      </div>
+      <label for="mfaEnrollCode">6-digit code from authenticator</label>
+      <input id="mfaEnrollCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" onkeydown="if(event.key==='Enter')submitMfaEnrollment()">
+      <button class="btn btn-primary btn-block" id="mfaEnrollBtn" onclick="submitMfaEnrollment()">Activate 2FA &amp; continue</button>
+    </div>
+
+    <p id="mfaMsg" style="margin:12px 0 0;font-size:12.4px;color:var(--lime);min-height:17px"></p>
+    <button class="btn btn-ghost btn-block" style="margin-top:10px" onclick="signOutOwner()">Sign out</button>
+  </div>
+</main>
+
 <!-- ==================== APP ==================== -->
 <div id="appView" class="shell hidden">
   <div class="backdrop" id="backdrop" onclick="toggleSidebar(false)"></div>
@@ -450,6 +483,9 @@
         <div class="n" id="ownerName">Owner</div>
         <div class="e" id="ownerEmailSide">—</div>
       </div>
+      <button class="icon-btn" title="Two-factor security (AAL2)" onclick="openMfaModal()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l7 3v5.5c0 4.6-2.9 8.4-7 9.5-4.1-1.1-7-4.9-7-9.5V6l7-3z"/><path d="M9.2 12.2l2 2 3.8-4"/></svg>
+      </button>
       <button class="icon-btn" title="Set password" onclick="openPasswordModal()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V8a4 4 0 018 0v2.5"/></svg>
       </button>
@@ -983,6 +1019,27 @@
   </div>
 </div>
 
+<!-- ==================== MFA SECURITY MODAL ==================== -->
+<div id="mfaModal" class="modal hidden" onclick="if(event.target===this)closeModal('mfaModal')">
+  <div class="modal-card" style="max-width:460px">
+    <div class="modal-head">
+      <div><h3>Two-factor authentication (AAL2)</h3><p id="mfaModalSub">Server-enforced TOTP protection for all privileged operations.</p></div>
+      <button class="icon-btn" onclick="closeModal('mfaModal')" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div id="mfaFactorsList" style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Checking enrolled authenticators…</div>
+      <label for="mfaStepUpCode">Re-verify 6-digit authenticator code (step-up confirmation)</label>
+      <input id="mfaStepUpCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" onkeydown="if(event.key==='Enter')confirmMfaStepUpNow()">
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-ghost" onclick="closeModal('mfaModal')">Close</button>
+        <button class="btn btn-primary" id="mfaStepUpBtn" onclick="confirmMfaStepUpNow()">Verify code</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast-wrap" id="toastWrap"></div>
 
 <script>
@@ -1006,6 +1063,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const state = {
   keys: [], reqs: [], releases: [], announcements: [], visits: [], stations: [], sales: [], onlineDaily: [],
   gh: null, sums: null, days: 14, view: "overview", email: "",
+  mfaVerifiedAt: 0, mfaFactorId: "", mfaEnrollFactorId: "",
   lastSync: null, telemetryError: false, loading: false, dataErrors: [], salesReady: false,
 };
 
@@ -1173,11 +1231,203 @@ function closeModal(id) { document.getElementById(id).classList.add("hidden"); }
 async function saveOwnerPassword() {
   const pwd = $("#newOwnerPwd").value;
   if (!pwd || pwd.length < 8) return toast("Use at least 8 characters.", "err");
+  try { await ensureFreshOwnerStepUp("change the owner password"); } catch (err) { return toast(err.message, "err"); }
   const { error } = await sb.auth.updateUser({ password: pwd });
   if (error) return toast(error.message, "err");
   closeModal("pwdModal");
   $("#newOwnerPwd").value = "";
   toast("Owner password saved. You can now sign in with email + password.");
+}
+
+/* ---------------- MFA (AAL2) enrollment & step-up ---------------- */
+async function inspectOwnerMfaState(session) {
+  const [aalRes, factorsRes] = await Promise.all([
+    sb.auth.mfa.getAuthenticatorAssuranceLevel(),
+    sb.auth.mfa.listFactors(),
+  ]);
+  if (aalRes.error) throw aalRes.error;
+  if (factorsRes.error) throw factorsRes.error;
+  const rawList = factorsRes.data?.totp || factorsRes.data?.all || [];
+  const totpFactors = rawList.filter((f) => f && (!f.factor_type || f.factor_type === "totp"));
+  const verifiedFactors = totpFactors.filter((f) => f.status === "verified");
+  const unverifiedFactors = totpFactors.filter((f) => f.status !== "verified");
+  const hasAal2 = window.CafeDeskOwner.hasMfaAssurance(session, aalRes.data);
+  return { hasAal2, aalData: aalRes.data, verifiedFactors, unverifiedFactors };
+}
+
+async function startMfaEnrollment() {
+  if (typeof sb.auth.mfa.listFactors === "function" && typeof sb.auth.mfa.unenroll === "function") {
+    try {
+      const existing = await sb.auth.mfa.listFactors();
+      const stale = (existing.data?.totp || existing.data?.all || []).filter((f) => f && f.status !== "verified");
+      for (const item of stale) {
+        await sb.auth.mfa.unenroll({ factorId: item.id }).catch(() => {});
+      }
+    } catch (_) {}
+  }
+  const { data, error } = await sb.auth.mfa.enroll({
+    factorType: "totp",
+    friendlyName: "Café Desk Console",
+  });
+  if (error || !data?.id || !data?.totp) {
+    throw new Error(error?.message || "Could not start authenticator setup.");
+  }
+  state.mfaEnrollFactorId = data.id;
+  const qr = String(data.totp.qr_code || "").trim();
+  const safeQrSrc = qr.startsWith("data:image/svg+xml")
+    ? qr
+    : qr.startsWith("<svg")
+      ? "data:image/svg+xml;utf-8," + encodeURIComponent(qr)
+      : "";
+  $("#mfaQrImg").src = safeQrSrc;
+  $("#mfaSecretCode").textContent = String(data.totp.secret || "—");
+  $("#mfaEnrollCode").value = "";
+}
+
+async function showMfaGate(mfaInfo) {
+  $("#bootScreen").classList.add("hidden");
+  $("#authView").classList.add("hidden");
+  $("#appView").classList.add("hidden");
+  $("#mfaView").classList.remove("hidden");
+  $("#mfaMsg").textContent = "";
+  if (mfaInfo.verifiedFactors.length > 0) {
+    state.mfaFactorId = mfaInfo.verifiedFactors[0].id;
+    $("#mfaChallengeSection").classList.remove("hidden");
+    $("#mfaEnrollSection").classList.add("hidden");
+    $("#mfaVerifyCode").value = "";
+  } else {
+    $("#mfaChallengeSection").classList.add("hidden");
+    $("#mfaEnrollSection").classList.remove("hidden");
+    try {
+      await startMfaEnrollment();
+    } catch (err) {
+      $("#mfaMsg").textContent = err.message || "Could not load QR code.";
+      $("#mfaMsg").style.color = "#ff9488";
+    }
+  }
+}
+
+async function verifyTotpFactorCode(factorId, rawCode) {
+  const code = String(rawCode || "").replace(/\s+/g, "");
+  if (!/^\d{6}$/.test(code)) {
+    throw new Error("Enter the 6-digit numeric code from your authenticator app.");
+  }
+  if (!factorId) {
+    throw new Error("No authenticator factor found. Refresh and try again.");
+  }
+  const { data: chal, error: chalErr } = await sb.auth.mfa.challenge({ factorId });
+  if (chalErr || !chal?.id) {
+    throw new Error(chalErr?.message || "Could not start MFA challenge.");
+  }
+  const { error: verErr } = await sb.auth.mfa.verify({
+    factorId,
+    challengeId: chal.id,
+    code,
+  });
+  if (verErr) {
+    throw new Error(verErr.message || "Invalid 6-digit authenticator code.");
+  }
+  state.mfaVerifiedAt = Date.now();
+  state.mfaFactorId = factorId;
+  const { data: refreshed } = await sb.auth.getSession();
+  await applySession(refreshed?.session || null);
+}
+
+async function submitMfaChallenge() {
+  const btn = $("#mfaVerifyBtn");
+  btn.disabled = true;
+  $("#mfaMsg").textContent = "";
+  try {
+    await verifyTotpFactorCode(state.mfaFactorId, $("#mfaVerifyCode").value);
+    toast("Two-factor verification complete (AAL2).");
+  } catch (err) {
+    $("#mfaMsg").textContent = err.message || "Verification failed.";
+    $("#mfaMsg").style.color = "#ff9488";
+    toast(err.message || "Verification failed.", "err");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function submitMfaEnrollment() {
+  const btn = $("#mfaEnrollBtn");
+  btn.disabled = true;
+  $("#mfaMsg").textContent = "";
+  try {
+    await verifyTotpFactorCode(state.mfaEnrollFactorId, $("#mfaEnrollCode").value);
+    toast("Two-factor authentication activated (AAL2).");
+  } catch (err) {
+    $("#mfaMsg").textContent = err.message || "Could not activate 2FA.";
+    $("#mfaMsg").style.color = "#ff9488";
+    toast(err.message || "Could not activate 2FA.", "err");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function openMfaModal() {
+  $("#mfaModal").classList.remove("hidden");
+  $("#mfaStepUpCode").value = "";
+  const listEl = document.getElementById("mfaFactorsList");
+  listEl.textContent = "Loading enrolled authenticators…";
+  try {
+    const { data } = await sb.auth.getSession();
+    const info = await inspectOwnerMfaState(data?.session || null);
+    if (!info.verifiedFactors.length) {
+      listEl.textContent = "No verified authenticator enrolled yet.";
+      return;
+    }
+    state.mfaFactorId = info.verifiedFactors[0].id;
+    const minsAgo = state.mfaVerifiedAt ? Math.max(0, Math.round((Date.now() - state.mfaVerifiedAt) / 60000)) : null;
+    const statusLine = minsAgo === null
+      ? `Active session assurance: AAL2 (${info.verifiedFactors.length} verified TOTP authenticator).`
+      : `Active session assurance: AAL2 · last verified ${minsAgo} min ago (${info.verifiedFactors.length} TOTP authenticator).`;
+    listEl.textContent = statusLine;
+  } catch (err) {
+    listEl.textContent = err.message || "Could not load MFA status.";
+  }
+}
+
+async function confirmMfaStepUpNow() {
+  const btn = $("#mfaStepUpBtn");
+  btn.disabled = true;
+  try {
+    await verifyTotpFactorCode(state.mfaFactorId, $("#mfaStepUpCode").value);
+    closeModal("mfaModal");
+    toast("Step-up MFA confirmation verified.");
+  } catch (err) {
+    toast(err.message || "Invalid 6-digit code.", "err");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+const MFA_STEP_UP_MAX_AGE_MS = 15 * 60 * 1000;
+
+async function ensureOwnerAal2Session() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) throw new Error("Please sign in first.");
+  if (window.CafeDeskOwner.parseJwtAal(session.access_token) !== "aal2") {
+    try {
+      const info = await inspectOwnerMfaState(session);
+      await showMfaGate(info);
+    } catch (_) {}
+    throw new Error("Verify your 6-digit MFA authenticator code (AAL2) before running owner operations.");
+  }
+  if (typeof window.CafeDeskOwner.parseJwtMfaTimestampMs === "function") {
+    const jwtMfaTs = window.CafeDeskOwner.parseJwtMfaTimestampMs(session.access_token);
+    if (jwtMfaTs > state.mfaVerifiedAt) state.mfaVerifiedAt = jwtMfaTs;
+  }
+  return session;
+}
+
+async function ensureFreshOwnerStepUp(actionLabel) {
+  const session = await ensureOwnerAal2Session();
+  if (!(state.mfaVerifiedAt > 0) || state.mfaVerifiedAt > Date.now() || (Date.now() - state.mfaVerifiedAt) > MFA_STEP_UP_MAX_AGE_MS) {
+    try { await openMfaModal(); } catch (_) {}
+    throw new Error(`Confirm a fresh 6-digit MFA code to ${actionLabel}.`);
+  }
+  return session;
 }
 
 /* ---------------- navigation ---------------- */
@@ -1249,6 +1499,7 @@ async function registerShopSyncProfile() {
   if (passcode.length < 10) return toast("Use a shop sync passcode of at least 10 characters.", "err");
   btn.disabled = true;
   try {
+    await ensureOwnerAal2Session();
     const secretHash = await sha256TextHex(`CAFE-DESK-SYNC-V1:${shopId}:${passcode}`);
     const { data, error } = await sb.rpc("owner_register_shop_sync_profile", {
       p_shop_id: shopId,
@@ -1267,8 +1518,7 @@ async function registerShopSyncProfile() {
 }
 
 async function callOwnerAdmin(payload) {
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) throw new Error("Please sign in first.");
+  const session = await ensureOwnerAal2Session();
   const resp = await fetch(`${SUPABASE_URL}/functions/v1/owner-admin`, {
     method: "POST",
     headers: {
@@ -1280,14 +1530,18 @@ async function callOwnerAdmin(payload) {
   });
   let json = {};
   try { json = await resp.json(); } catch (_) {}
-  if (!resp.ok || !json.ok) throw new Error(json.error || "Owner API request failed.");
+  if (!resp.ok || !json.ok) {
+    if (json.code === "MFA_REQUIRED") {
+      try { await showMfaGate(await inspectOwnerMfaState(session)); } catch (_) {}
+    }
+    throw new Error(json.error || "Owner API request failed.");
+  }
   return json;
 }
 
 // The signing seed and verification-key configuration stay on the server.
 async function callOwnerResign(payload) {
-  const { data: { session } } = await sb.auth.getSession();
-  if (!session) throw new Error("Please sign in first.");
+  const session = await ensureFreshOwnerStepUp("re-sign a licence");
   const resp = await fetch(`${SUPABASE_URL}/functions/v1/owner-resign`, {
     method: "POST",
     headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
@@ -1295,7 +1549,12 @@ async function callOwnerResign(payload) {
   });
   let json = {};
   try { json = await resp.json(); } catch (_) {}
-  if (!resp.ok || !json.ok) throw new Error(json.error || "Signature repair failed.");
+  if (!resp.ok || !json.ok) {
+    if (json.code === "MFA_REQUIRED") {
+      try { await showMfaGate(await inspectOwnerMfaState(session)); } catch (_) {}
+    }
+    throw new Error(json.error || "Signature repair failed.");
+  }
   return json;
 }
 
@@ -2172,6 +2431,7 @@ document.addEventListener("click", async (e) => {
     if (!confirmed) return;
     deleteMachineBtn.disabled = true;
     try {
+      await ensureFreshOwnerStepUp("permanently purge machine records");
       const { data, error } = await sb.rpc("owner_purge_machine_records", { p_machine_id: machineId });
       if (error) throw error;
       if (!data || data.ok !== true) throw new Error(data?.error || "The server did not confirm the purge.");
@@ -2207,6 +2467,7 @@ document.addEventListener("click", async (e) => {
   if (announcementBtn) {
     announcementBtn.disabled = true;
     try {
+      await ensureOwnerAal2Session();
       const active = announcementBtn.dataset.active !== "1";
       const { error } = await sb.from("app_announcements").update({ active }).eq("id", announcementBtn.dataset.announcementToggle);
       if (error) throw error;
@@ -2390,6 +2651,7 @@ async function publishAnnouncement() {
   if (!title || !message) return toast("Enter a title and message first.", "err");
   const btn = $("#sendAnnouncementBtn"); btn.disabled = true;
   try {
+    await ensureOwnerAal2Session();
     const { error } = await sb.from("app_announcements").insert({ title, message, kind, active: true });
     if (error) throw error;
     $("#announcementTitle").value = ""; $("#announcementMessage").value = "";
@@ -2589,6 +2851,7 @@ function showAccessDenied() {
   // Hard gate: an authenticated non-owner session never sees the console.
   // RLS blocks the data server-side too, so this is defence in depth.
   $("#appView").classList.add("hidden");
+  $("#mfaView").classList.add("hidden");
   $("#authView").classList.remove("hidden");
   $("#authMsg").textContent = "Access denied.";
   $("#authMsg").style.color = "#ff9488";
@@ -2598,16 +2861,27 @@ function showAccessDenied() {
 async function applySession(session) {
   const loggedIn = Boolean(session && session.user);
   if (!loggedIn) {
+    state.mfaVerifiedAt = 0;
+    state.mfaFactorId = "";
+    state.mfaEnrollFactorId = "";
+    $("#mfaSecretCode").textContent = "";
+    $("#mfaQrImg").src = "";
+    $("#mfaEnrollCode").value = "";
+    $("#mfaVerifyCode").value = "";
+    $("#mfaStepUpCode").value = "";
+    $("#mfaModal").classList.add("hidden");
     $("#bootScreen").classList.add("hidden");
+    $("#mfaView").classList.add("hidden");
     $("#authView").classList.remove("hidden");
     $("#appView").classList.add("hidden");
     if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
     return;
   }
-  // Keep the console shell hidden (and the boot spinner up) until the session's
-  // email digest is confirmed, so no privileged UI flashes for a wrong account.
+  // Keep the console shell hidden (and the boot spinner up) until BOTH the
+  // session's owner email digest AND AAL2 MFA assurance are confirmed.
   $("#appView").classList.add("hidden");
   $("#authView").classList.add("hidden");
+  $("#mfaView").classList.add("hidden");
   $("#bootScreen").classList.remove("hidden");
 
   state.email = session.user.email || "";
@@ -2623,13 +2897,44 @@ async function applySession(session) {
   } catch (_) {
     allowed = false;
   }
-  $("#bootScreen").classList.add("hidden");
   if (!allowed) {
+    $("#bootScreen").classList.add("hidden");
     showAccessDenied();
     await sb.auth.signOut().catch(() => {});
     return;
   }
+
+  let mfaInfo;
+  try {
+    mfaInfo = await inspectOwnerMfaState(session);
+  } catch (err) {
+    $("#bootScreen").classList.add("hidden");
+    $("#authView").classList.remove("hidden");
+    $("#authMsg").textContent = err?.message || "Could not verify MFA session level.";
+    $("#authMsg").style.color = "#ff9488";
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    return;
+  }
+
+  if (!mfaInfo.hasAal2) {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    await showMfaGate(mfaInfo);
+    return;
+  }
+
+  state.mfaFactorId = mfaInfo.verifiedFactors[0]?.id || state.mfaFactorId || "";
+  state.mfaEnrollFactorId = "";
+  $("#mfaSecretCode").textContent = "";
+  $("#mfaQrImg").src = "";
+  $("#mfaEnrollCode").value = "";
+  $("#mfaVerifyCode").value = "";
+  if (typeof window.CafeDeskOwner.parseJwtMfaTimestampMs === "function") {
+    const jwtMfaTs = window.CafeDeskOwner.parseJwtMfaTimestampMs(session.access_token);
+    if (jwtMfaTs > state.mfaVerifiedAt) state.mfaVerifiedAt = jwtMfaTs;
+  }
+  $("#bootScreen").classList.add("hidden");
   $("#authView").classList.add("hidden");
+  $("#mfaView").classList.add("hidden");
   $("#appView").classList.remove("hidden");
   switchView("overview");
   refreshAll();
@@ -2722,7 +3027,7 @@ function requestedView() {
   wireShareLinks();
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      ["dlModal", "pwdModal"].forEach((id) => { const el = document.getElementById(id); if (el) el.classList.add("hidden"); });
+      ["dlModal", "pwdModal", "mfaModal"].forEach((id) => { const el = document.getElementById(id); if (el) el.classList.add("hidden"); });
       toggleSidebar(false);
     }
   });
@@ -2799,6 +3104,9 @@ function requestedView() {
         return;
       }
       status.textContent = "Publishing…";
+      if (typeof ensureOwnerAal2Session === "function") {
+        try { await ensureOwnerAal2Session(); } catch (err) { status.textContent = "Error: " + err.message; return; }
+      }
       const { error } = await sb.from("templates").upsert(payload, { onConflict: "slug" });
       if (error) {
         status.textContent = "Error: " + error.message;
@@ -2810,6 +3118,9 @@ function requestedView() {
 
     async function toggleTemplateActive(id, nextActive) {
       if (typeof sb === "undefined" || !sb) return;
+      if (typeof ensureOwnerAal2Session === "function") {
+        try { await ensureOwnerAal2Session(); } catch (err) { return toast(err.message, "err"); }
+      }
       const { error } = await sb.from("templates").update({ is_active: nextActive, updated_at: new Date().toISOString() }).eq("id", id);
       if (error) return toast(error.message, "err");
       loadTemplates();
@@ -2818,6 +3129,9 @@ function requestedView() {
     async function deleteTemplate(id) {
       if (typeof sb === "undefined" || !sb) return;
       if (!confirm("Delete this template?")) return;
+      if (typeof ensureOwnerAal2Session === "function") {
+        try { await ensureOwnerAal2Session(); } catch (err) { return toast(err.message, "err"); }
+      }
       const { error } = await sb.from("templates").delete().eq("id", id);
       if (error) return toast(error.message, "err");
       loadTemplates();

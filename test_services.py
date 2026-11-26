@@ -2053,6 +2053,66 @@ class LoginPrivacyTests(unittest.TestCase):
         self.assertEqual(expected, self.DIGEST)
 
 
+class OwnerMfaSecurityTests(unittest.TestCase):
+    """Source-level tripwires complement the executable PostgreSQL/JS MFA tests."""
+
+    repo = Path(__file__).resolve().parent
+
+    def read(self, name):
+        return (self.repo / name).read_text(encoding='utf-8')
+
+    def test_mfa_migration_is_in_consolidated_schema(self):
+        migration = self.read('supabase/migrations/20261126160000_owner_mfa_aal2_enforcement.sql')
+        schema = self.read('supabase_schema.sql')
+        import re
+        for function in re.findall(r'create or replace function public\.[\s\S]*?\n\$\$;', migration):
+            self.assertIn(function, schema, 'migration function drifted from consolidated schema')
+        self.assertIn('grant select, insert on public.owner_audit_log to service_role;', schema)
+        self.assertIn("coalesce(auth.jwt() ->> 'aal', '') = 'aal2'", migration)
+        self.assertIn('owner_audit_log_append_only', migration)
+        self.assertIn('before truncate', migration.lower())
+        for name in ('owner_register_shop_sync_profile', 'owner_review_duplicate_machine_keys', 'owner_purge_machine_records'):
+            function = migration.split('create or replace function public.' + name + '(', 1)[1].split('$$;', 1)[0]
+            self.assertIn('if not public.is_cafedesk_owner() then', function)
+            self.assertIn('insert into public.owner_audit_log', function)
+
+    def test_edge_functions_share_mfa_gate_before_request_body(self):
+        shared = self.read('supabase/functions/_shared/owner-auth.mjs')
+        self.assertIn('hasVerifiedMfaAmr(claims.amr)', shared)
+        self.assertIn('Array.isArray(user.factors)', shared)
+        self.assertIn('!aalOk || !amrOk || !factorsOk', shared)
+        for name in ('owner-admin', 'owner-resign'):
+            src = self.read('supabase/functions/' + name + '/index.ts')
+            self.assertLess(src.index('await verifyOwnerMfaRequest('), src.index('await req.json()'))
+            self.assertIn('if (!gate.ok)', src)
+            self.assertIn('await recordOwnerAudit(', src)
+            self.assertNotIn(LoginPrivacyTests.EMAIL, src)
+        self.assertNotIn(LoginPrivacyTests.EMAIL, shared)
+
+    def test_totp_secret_is_rendered_as_text_not_html_or_persisted(self):
+        src = self.read('owner-dashboard.html')
+        self.assertIn('id="mfaView"', src)
+        self.assertIn('id="mfaModal"', src)
+        self.assertIn('sb.auth.mfa.enroll(', src)
+        self.assertIn('sb.auth.mfa.challenge(', src)
+        self.assertIn('sb.auth.mfa.verify(', src)
+        enrollment = src.split('async function startMfaEnrollment()', 1)[1].split('async function showMfaGate', 1)[0]
+        self.assertNotIn('innerHTML', enrollment)
+        self.assertNotIn('localStorage', enrollment)
+        self.assertNotIn('sessionStorage', enrollment)
+        self.assertIn('.textContent = String(data.totp.secret', enrollment)
+        self.assertIn('$("#mfaQrImg").src = safeQrSrc', enrollment)
+
+    def test_session_restore_cannot_manufacture_fresh_mfa(self):
+        src = self.read('owner-dashboard.html')
+        apply_session = src.split('async function applySession(session)', 1)[1].split('/* ---------------- PWA', 1)[0]
+        self.assertNotIn('mfaVerifiedAt = Date.now()', apply_session)
+        self.assertIn('parseJwtMfaTimestampMs(session.access_token)', apply_session)
+        self.assertIn('ensureFreshOwnerStepUp("re-sign a licence")', src)
+        self.assertIn('ensureFreshOwnerStepUp("permanently purge machine records")', src)
+        self.assertIn("cafedesk-console-v4", self.read('sw.js'))
+
+
 class ReleaseKeyGuardTests(unittest.TestCase):
     """The CI demo-key guard must block a demo-signed build and allow a real key."""
 

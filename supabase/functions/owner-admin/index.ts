@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { recordOwnerAudit, verifyOwnerMfaRequest } from "../_shared/owner-auth.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -222,25 +223,26 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const ownerEmailEnv = (Deno.env.get("CAFEDESK_OWNER_EMAIL") || "").trim();
+    const ownerUserIdEnv = (Deno.env.get("CAFEDESK_OWNER_USER_ID") || "").trim();
     const privKeyB64 = (Deno.env.get("CAFEDESK_OWNER_PRIVATE_KEY_B64") || "").trim();
 
-    const authHeader = req.headers.get("Authorization") || "";
-    if (!authHeader.startsWith("Bearer ")) {
-      return new Response(JSON.stringify({ ok: false, error: "Missing owner login token." }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const jwt = authHeader.slice(7).trim();
-    const { data: userData, error: userErr } = await adminClient.auth.getUser(jwt);
-    if (userErr || !userData?.user || !(await isVerifiedOwnerEmail(userData.user.email || "", ownerEmailEnv))) {
-      return new Response(JSON.stringify({ ok: false, error: "Access denied: Only the verified Café Desk owner account can access this API." }), {
-        status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const gate = await verifyOwnerMfaRequest({
+      authHeader: req.headers.get("Authorization") || "",
+      adminClient,
+      configuredOwnerEmail: ownerEmailEnv,
+      configuredOwnerUserId: ownerUserIdEnv,
+    });
+    if (!gate.ok) {
+      return new Response(
+        JSON.stringify({ ok: false, code: gate.code, error: gate.error }),
+        {
+          status: gate.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
+        },
+      );
     }
+    const actor = gate.actor;
 
     const body = await req.json();
     const action = String(body?.action || "");
@@ -333,6 +335,19 @@ Deno.serve(async (req: Request) => {
         await adminClient.from("activation_requests").update({ status: "approved" }).eq("id", String(body.request_id));
       }
 
+      await recordOwnerAudit(adminClient, actor, {
+        action: "sign_keys",
+        targetType: "issued_machine_keys",
+        targetId: shopId || (issuedOut[0] ? String(issuedOut[0].machine_id) : ""),
+        detail: {
+          mode,
+          days,
+          customer,
+          count: issuedOut.length,
+          license_ids: issuedOut.map((r) => r.license_id),
+        },
+      });
+
       return new Response(JSON.stringify({ ok: true, shop_id: shopId, issued: issuedOut }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -347,6 +362,12 @@ Deno.serve(async (req: Request) => {
         .update({ revoked, revoke_reason: reason })
         .eq("license_id", lid);
       if (error) throw new Error(error.message);
+      await recordOwnerAudit(adminClient, actor, {
+        action: "set_revoked",
+        targetType: "issued_machine_keys",
+        targetId: lid,
+        detail: { revoked, reason },
+      });
       return new Response(JSON.stringify({ ok: true, license_id: lid, revoked }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -357,6 +378,12 @@ Deno.serve(async (req: Request) => {
       const status = String(body.status || "rejected");
       const { error } = await adminClient.from("activation_requests").update({ status }).eq("id", reqId);
       if (error) throw new Error(error.message);
+      await recordOwnerAudit(adminClient, actor, {
+        action: "update_request_status",
+        targetType: "activation_requests",
+        targetId: reqId,
+        detail: { status },
+      });
       return new Response(JSON.stringify({ ok: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -404,6 +431,12 @@ Deno.serve(async (req: Request) => {
         published_at: body.published_at ? String(body.published_at) : new Date().toISOString(),
       };
       await upsertReleaseWithFallback(adminClient, releaseRow);
+      await recordOwnerAudit(adminClient, actor, {
+        action: "publish_release",
+        targetType: "app_releases",
+        targetId: cleanVer,
+        detail: { sha256, portable_sha256: portableSha, mandatory: Boolean(body.mandatory) },
+      });
       return new Response(JSON.stringify({ ok: true, release: releaseRow }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -499,6 +532,12 @@ Deno.serve(async (req: Request) => {
         published_at: new Date().toISOString(),
       };
       await upsertReleaseWithFallback(adminClient, releaseRow);
+      await recordOwnerAudit(adminClient, actor, {
+        action: "sync_github_release",
+        targetType: "app_releases",
+        targetId: tag,
+        detail: { repo, sha256: chosenSha, portable_sha256: portableSha },
+      });
 
       return new Response(JSON.stringify({
         ok: true,
