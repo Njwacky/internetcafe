@@ -550,12 +550,13 @@ class CafeDesk(ctk.CTk):
             if info.get('damaged'): self.status.set('Staff unlocked • saved AI key file is damaged (AI settings → Forget saved key)'); return
             data=ai_key_store.load_key(pin)
             if not data: return
+            if data.get('provider')=='Custom OpenAI-compatible URL' or data.get('custom_url'):
+                services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])  # https/loopback host only
+            clean_custom=ai_safety.validate_custom_ai_url(data['custom_url'],data['api_key'],expand_v1=False) if data.get('custom_url') else ''
             self._set_key_memory(data['api_key'])
             if data.get('provider') in services.AI_PROVIDERS: self.ai_provider.set(data['provider'])
             if data.get('model'): self.model.set(data['model'])
-            if data.get('custom_url'):
-                services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])  # https/localhost only
-                self.ai_custom_url.set(data['custom_url'])
+            if clean_custom: self.ai_custom_url.set(clean_custom)
             self.status.set(f"Staff unlocked • saved AI key loaded ({info.get('hint','')})")
         except (ai_key_store.SavedKeyError,ValueError) as exc:
             self._set_key_memory('')
@@ -2551,6 +2552,9 @@ class CafeDesk(ctk.CTk):
             if not key: return messagebox.showinfo('Paste API key','Paste your API key above first (and test the connection).',parent=self)
             logging_utils.register_secret(key)
             try:
+                prov_choice=self.ai_provider.get()
+                curl_to_save=self.ai_custom_url.get().strip() if prov_choice=='Custom OpenAI-compatible URL' else ''
+                services.detect_ai_provider(key,prov_choice,curl_to_save)
                 rem=settings_store.lockout_remaining()
                 if rem>0: return messagebox.showwarning('Try again later',f'Too many incorrect PIN attempts. Wait {int(rem)+1} seconds.',parent=self)
                 pin=simpledialog.askstring('Confirm staff PIN','Enter your staff PIN to encrypt and save the key on this computer:',show='*',parent=self)
@@ -2560,7 +2564,7 @@ class CafeDesk(ctk.CTk):
                     if rem_after>0: self.lockout_until=time.monotonic()+rem_after
                     return messagebox.showerror('Staff access','Incorrect PIN. The key was not saved.',parent=self)
                 if len(pin)<8 and not messagebox.askyesno('Short PIN',f'Your staff PIN has only {len(pin)} digits. The saved key is only as strong as this PIN: a short PIN can be guessed by someone who copies files from this computer.\n\nRecommended: change to a 10–12 digit PIN first (Business settings → Change staff PIN).\n\nSave the key anyway?',parent=self): return
-                ai_key_store.save_key(key,pin,provider=self.ai_provider.get(),model=self.model.get().strip(),custom_url=self.ai_custom_url.get().strip())
+                ai_key_store.save_key(key,pin,provider=prov_choice,model=self.model.get().strip(),custom_url=curl_to_save)
             except (ValueError,OSError,settings_store.CorruptedSettingsError) as exc:
                 return messagebox.showerror('Could not save key',str(exc),parent=self)
             refresh_saved(); self.status.set('AI key saved (encrypted) on this computer')

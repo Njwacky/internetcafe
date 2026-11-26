@@ -19,7 +19,10 @@ Nothing in this module logs, prints or stores the document text.
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import unicodedata
+import urllib.parse
 from dataclasses import dataclass, field
 
 # --------------------------------------------------------------------------------------
@@ -475,3 +478,195 @@ def redact_secrets(message: str, api_key: str = "") -> str:
         "[hidden key]",
         message,
     )
+
+
+# --------------------------------------------------------------------------------------
+# Custom AI endpoint URL & hostname validation
+# --------------------------------------------------------------------------------------
+
+_MAX_CUSTOM_URL_CHARS = 2048
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# Valid DNS TLDs (including punycode `xn--...` and local suffixes like `.local`) are at
+# least 2 chars and start with an ASCII letter, which also rejects non-canonical numeric/
+# octal/hex/shorthand IPv4 literals (`127.1`, `0177.0.0.1`, `2130706433`, `0x7f000001`).
+_DNS_TLD = re.compile(r"^[a-z](?:[a-z0-9-]{1,61}[a-z0-9]|[a-z0-9])$")
+_CUSTOM_URL_SCHEME_HOST_ERROR = (
+    "Custom AI endpoint must be a valid https:// URL "
+    "(or http://localhost, http://127.0.0.1, or http://[::1] for local Ollama/LM Studio)."
+)
+
+
+def _url_contains_secret(url: str, api_key: str = "") -> bool:
+    """True when `url` carries `api_key` or a key-like token in raw or percent-decoded form."""
+    key = (api_key or "").strip()
+    candidate = url
+    for _ in range(4):
+        if redact_secrets(candidate, key) != candidate:
+            return True
+        decoded = urllib.parse.unquote(candidate)
+        if decoded == candidate:
+            break
+        candidate = decoded
+    return False
+
+
+def _idna_ascii_label(label: str) -> str:
+    """Convert one DNS label to lowercase ASCII (IDNA 2008 when `idna` is available)."""
+    if label.isascii() and not label.startswith("xn--"):
+        return label
+    try:
+        import idna  # locked transitive dependency of requests/urllib3
+    except ImportError as exc:  # pragma: no cover - bare-stdlib fallback
+        if label.isascii():
+            return label
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR) from exc
+    try:
+        return idna.encode(label).decode("ascii").lower()
+    except idna.IDNAError as exc:
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR) from exc
+
+
+def validate_custom_ai_url(custom_url: str, api_key: str = "", *, expand_v1: bool = False) -> str:
+    """Validate and canonicalize a custom OpenAI-compatible endpoint URL.
+
+    Security invariants:
+    * Remote endpoints MUST use ``https://`` with a valid RFC 1123 / IDNA2008 multi-label
+      domain name or valid unicast IP literal (never unspecified, link-local/metadata,
+      multicast, reserved, or IPv4-mapped IPv6).
+    * Cleartext ``http://`` is permitted ONLY for exact local loopback hosts
+      (``localhost``, ``127.0.0.1``, ``[::1]``) — never prefix-spoofed domains such as
+      ``http://localhost.evil.com`` or ``http://127.0.0.1.evil.com``.
+    * Rejects embedded credentials (``@``), fragments (``#``), backslashes (``\\``),
+      whitespace/control characters, and API keys/tokens (raw or percent-encoded), then
+      rebuilds the URL from validated components so ``urllib.parse`` and ``urllib3``
+      cannot disagree on the destination authority.
+    """
+    url = (custom_url or "").strip()
+    if not url:
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+    if len(url) > _MAX_CUSTOM_URL_CHARS:
+        raise ValueError("Custom AI endpoint URL is too long.")
+    # Secrets must never travel in a URL (query, path, fragment, or userinfo).
+    if _url_contains_secret(url, api_key):
+        raise ValueError(
+            "The custom AI endpoint URL must not contain the API key or another key-like token. "
+            "Paste the endpoint without the key."
+        )
+    # Reject whitespace, control chars, and backslashes before parsing to prevent
+    # RFC 3986 (urllib.parse) vs WHATWG (urllib3/requests) authority differentials.
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F or ch == "\\" for ch in url):
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR) from exc
+
+    scheme = parsed.scheme.lower()
+    raw_netloc = parsed.netloc
+    if scheme not in ("https", "http") or not raw_netloc:
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+    if parsed.username is not None or parsed.password is not None or "@" in raw_netloc:
+        raise ValueError("Custom AI endpoint URL must not include credentials (@) in the host.")
+    if parsed.fragment or "#" in url:
+        raise ValueError("Custom AI endpoint URL must not include a # fragment.")
+    if raw_netloc.endswith(":"):
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Custom AI endpoint URL has an invalid port number.") from exc
+    if port is not None and not (1 <= port <= 65535):
+        raise ValueError("Custom AI endpoint URL has an invalid port number.")
+
+    raw_host = parsed.hostname
+    if not raw_host or "%" in raw_host:
+        raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+
+    if "[" in raw_netloc or "]" in raw_netloc:
+        try:
+            ipv6 = ipaddress.IPv6Address(raw_host)
+        except ValueError as exc:
+            raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR) from exc
+        if ipv6 == ipaddress.IPv6Address("::1"):
+            host_for_netloc = "[::1]"
+        else:
+            if scheme != "https":
+                raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+            if (
+                ipv6.ipv4_mapped is not None
+                or ipv6.is_loopback
+                or ipv6.is_unspecified
+                or ipv6.is_link_local
+                or ipv6.is_multicast
+                or ipv6.is_reserved
+                or ipv6.is_site_local
+            ):
+                raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+            host_for_netloc = f"[{ipv6.compressed}]"
+    else:
+        ipv4: ipaddress.IPv4Address | None = None
+        try:
+            ipv4 = ipaddress.IPv4Address(raw_host)
+        except ValueError:
+            ipv4 = None
+
+        if ipv4 is not None:
+            if ipv4 == ipaddress.IPv4Address("127.0.0.1"):
+                host_for_netloc = "127.0.0.1"
+            else:
+                if scheme != "https":
+                    raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+                if (
+                    ipv4.is_loopback
+                    or ipv4.is_unspecified
+                    or ipv4.is_link_local
+                    or ipv4.is_multicast
+                    or ipv4.is_reserved
+                ):
+                    raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+                host_for_netloc = ipv4.compressed
+        else:
+            # Block NFKC-unstable characters and fullwidth/ideographic dot confusables.
+            if unicodedata.normalize("NFKC", raw_host) != raw_host or any(
+                dot in raw_host for dot in "\u3002\uff0e\uff61"
+            ):
+                raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+            host_str = raw_host.lower()
+            if host_str == "localhost":
+                host_for_netloc = "localhost"
+            else:
+                if scheme != "https":
+                    raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+                if host_str.startswith(".") or host_str.endswith(".") or ".." in host_str:
+                    raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+                raw_labels = host_str.split(".")
+                if len(raw_labels) < 2:
+                    raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+                ascii_labels = [_idna_ascii_label(lbl) for lbl in raw_labels]
+                ascii_host = ".".join(ascii_labels)
+                if (
+                    len(ascii_host) > 253
+                    or not all(_DNS_LABEL.match(lbl) for lbl in ascii_labels)
+                    or not _DNS_TLD.match(ascii_labels[-1])
+                ):
+                    raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
+                host_for_netloc = ascii_host
+
+    clean_path = parsed.path
+    if not clean_path and parsed.query:
+        clean_path = "/"
+    if expand_v1 and clean_path.rstrip("/").endswith("/v1"):
+        clean_path = clean_path.rstrip("/") + "/chat/completions"
+
+    canonical_netloc = f"{host_for_netloc}:{port}" if port is not None else host_for_netloc
+    return urllib.parse.urlunsplit((scheme, canonical_netloc, clean_path, parsed.query, ""))
+
+
+def endpoint_hostname(endpoint_url: str) -> str:
+    """Return the parsed lowercase hostname of `endpoint_url` (or `''` if invalid)."""
+    try:
+        return (urllib.parse.urlsplit(str(endpoint_url or "").strip()).hostname or "").lower()
+    except ValueError:
+        return ""

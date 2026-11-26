@@ -581,18 +581,7 @@ def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API ke
     key=(api_key or '').strip()
     choice=(provider_choice or 'Auto-detect from API key').strip()
     if choice=='Custom OpenAI-compatible URL':
-        url=(custom_url or '').strip()
-        if not url.startswith(('https://','http://localhost','http://127.0.0.1')):
-            raise ValueError('Custom AI endpoint must start with https:// (or http://localhost for local Ollama/LM Studio).')
-        # Secrets must never travel in a URL: they leak into error messages, logs,
-        # proxy logs and browser history. Reject a URL that carries the key (or any
-        # key-like token) instead of sending it and leaking it later. Check both the
-        # raw URL and its percent-decoded form - an encoded key would otherwise
-        # bypass the exact match and the key-pattern regex.
-        if ai_safety.redact_secrets(url,key)!=url or ai_safety.redact_secrets(urllib.parse.unquote(url),key)!=url:
-            raise ValueError('The custom AI endpoint URL must not contain the API key or another key-like token. Paste the endpoint without the key.')
-        if url.rstrip('/').endswith('/v1'):
-            url=url.rstrip('/')+'/chat/completions'
+        url=ai_safety.validate_custom_ai_url(custom_url,key,expand_v1=True)
         return url,'Custom endpoint'
     mapped=AI_PROVIDERS.get(choice,'')
     if mapped:
@@ -610,16 +599,17 @@ def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API ke
 def normalize_ai_model(model:str, endpoint_url:str)->str:
     """Adjust model names to match the resolved provider (Gemini, OpenRouter, Groq, DeepSeek, OpenAI)."""
     m=(model or '').strip()
+    host=ai_safety.endpoint_hostname(endpoint_url)
     if not m:
         return AI_DEFAULT_MODELS.get(endpoint_url,'gpt-4o-mini')
-    if 'api.groq.com' in endpoint_url:
+    if host=='api.groq.com':
         groq_default=AI_DEFAULT_MODELS['https://api.groq.com/openai/v1/chat/completions']
         other_provider_defaults=set(AI_DEFAULT_MODELS.values())-{groq_default}
         other_provider_defaults.update({'openai/gpt-4o-mini','openrouter/auto'})
         if m in other_provider_defaults:
             return groq_default
         return GROQ_RETIRED_MODELS.get(m,m)
-    if 'generativelanguage.googleapis.com' in endpoint_url:
+    if host=='generativelanguage.googleapis.com':
         if m.startswith('google/'):
             m=m.split('/',1)[1]
         if m.startswith('models/'):
@@ -628,7 +618,7 @@ def normalize_ai_model(model:str, endpoint_url:str)->str:
         if not m.startswith(('gemini-','learnlm-','gemma-')):
             return AI_DEFAULT_MODELS[GOOGLE_GEMINI_OPENAI_URL]
         return m
-    if 'openrouter.ai' in endpoint_url and '/' not in m:
+    if host=='openrouter.ai' and '/' not in m:
         if m.startswith(('gpt-','o1','o3','o4')):
             return 'openai/'+m
         if m.startswith('claude-'):
@@ -663,12 +653,13 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
     if not (user_text or '').strip():
         raise ValueError('Enter or create a draft first.')
     endpoint,provider_label=detect_ai_provider(key,provider_choice,custom_url)
+    host=ai_safety.endpoint_hostname(endpoint)
     resolved_model=normalize_ai_model(model,endpoint)
     headers={
         'Authorization':f'Bearer {key}',
         'Content-Type':'application/json',
     }
-    if 'openrouter.ai' in endpoint:
+    if host=='openrouter.ai':
         headers['HTTP-Referer']='https://github.com/Njwacky/internetcafe'
         headers['X-Title']='Cafe Desk Document Studio'
     sys_msg=system_prompt or ai_safety.AI_SYSTEM_PROMPT
@@ -679,7 +670,7 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
             {'role':'user','content':user_text},
         ],
     }
-    if 'api.groq.com' in endpoint:
+    if host=='api.groq.com':
         # Groq documents `max_completion_tokens`; GPT-OSS needs reasoning headroom.
         if resolved_model.startswith('openai/gpt-oss'):
             payload['reasoning_effort']='low'
@@ -689,7 +680,7 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
             payload['max_completion_tokens']=int(max_tokens)
     elif max_tokens is not None:
         payload['max_tokens']=int(max_tokens)
-    if 'api.openai.com' in endpoint:
+    if host=='api.openai.com' or host.endswith('.api.openai.com'):
         payload['store']=False  # do not keep the completion in the OpenAI dashboard
     try:
         # No redirects: a redirect could re-send the customer's text to another server.
