@@ -745,12 +745,70 @@ and persistence boundaries.
   provider is selected; `_load_saved_ai_key` validates before loading the key
   into memory or updating UI variables.
 
+### Adversarial Recheck — 5 Whys & Hardening Pass
+
+A second-pass adversarial review against `validate_custom_ai_url`,
+`detect_ai_provider`, `save_key`, `_load_saved_ai_key`, and `improve` uncovered
+four subtle residual gaps:
+
+1. **Why did `https://0.0.0.1/v1`, `https://100.100.100.200/v1`,
+   `https://[2002:a9fe:a9fe::1]/v1` (6to4 metadata), `https://[2001::a9fe:a9fe]/v1`
+   (Teredo), `https://[64:ff9b::169.254.169.254]/v1` (NAT64), and TEST-NET blocks
+   pass the first IP check?**
+   Python's `ipaddress` marks `0.0.0.0/8` (except `0.0.0.0`), documentation
+   ranges, 6to4 (`2002::/16`), and Teredo (`2001::/32`) as `is_private=True,
+   is_reserved=False, is_unspecified=False`, marks CGNAT / Alibaba metadata
+   (`100.64.0.0/10`) as neither private nor global, and marks RFC 6052 NAT64
+   (`64:ff9b::/96`) as `is_global=True` — so a property **denylist** left holes.
+   - **Fix:** Replaced the IP property denylist with a **positive allowlist**:
+     exact `127.0.0.1` / `[::1]` on `http`/`https`, and on `https` only either
+     global unicast (`is_global and not is_multicast`, excluding `ipv4_mapped`,
+     `sixtofour`, `teredo`, `64:ff9b::/96`, and `64:ff9b:1::/48`) or standard
+     shop-LAN private unicast (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+     `fc00::/7`).
+2. **Why could unlocking a saved auto-detect or built-in key after `lock_staff`
+   still route to a stale custom URL?**
+   `lock_staff()` clears `self.key` in memory (`_set_key_memory('')`) without
+   resetting `self.ai_provider` or `self.ai_custom_url`, and
+   `_load_saved_ai_key` only overwrote those Tk variables *when non-empty* in
+   the saved record (`if data.get('provider') in services.AI_PROVIDERS:` /
+   `if clean_custom:`). In addition, unrecognised `provider` names fell through
+   to auto-detect instead of failing closed.
+   - **Fix:** `detect_ai_provider` and `save_key` now fail closed on any
+     unknown provider name (`ai_safety.KNOWN_AI_PROVIDERS` locked to
+     `services.AI_PROVIDERS`); `_load_saved_ai_key` validates every saved record
+     through `detect_ai_provider` and unconditionally overwrites both
+     `self.ai_provider` (mapping `""` to `'Auto-detect from API key'`) and
+     `self.ai_custom_url` (clearing it whenever `saved_prov != 'Custom OpenAI-compatible URL'`).
+3. **Why could an opaque third-party key in `?api_key=<hex>` or `?token=<hex>`
+   slip past `_url_contains_secret` when different from the key entry box?**
+   `redact_secrets` matches the registered `api_key` plus standard prefixes
+   (`sk-`, `gsk_`, `AIza`, `xai-`, `hf_`), so an unprefixed hex token in a
+   credential query parameter was missed.
+   - **Fix:** Added `_has_secret_query_param` (supporting `&` and `;`
+     separators plus percent-encoded parameter names) blocking non-empty
+     `key`, `api_key`, `apikey`, `api-key`, `token`, `access_token`, `auth`,
+     `authorization`, `secret`, `password`, `passwd`, `bearer`, and
+     `client_secret` query parameters while keeping benign parameters such as
+     `api-version=2024-06-01` working.
+4. **Why did `normalize_ai_model("", endpoint_url)` and the customer consent
+   prompt lose hostname specificity on custom URLs?**
+   `normalize_ai_model` looked up `endpoint_url` in `AI_DEFAULT_MODELS` by full
+   string when `model == ""`, and `app.py` `improve()` displayed only the generic
+   label `Custom endpoint`.
+   - **Fix:** Added `_HOST_DEFAULT_MODELS` hostname fallback in
+     `normalize_ai_model`, canonicalized empty URL paths `""` -> `"/"` to match
+     `requests.PreparedRequest.url`, and included
+     `ai_safety.endpoint_hostname(resolved_ep)` in `improve()`'s customer
+     consent prompt (`Custom endpoint — <hostname>`).
+
 ### Validation
 
-- **8 new regression test methods** (covering 70+ valid and adversarial URL
-  sub-cases, `urllib3` host parity, double-encoded keys, provider-substring
-  non-interference, `save_key` rejection of bad/secret URLs, and fail-closed
-  `_load_saved_ai_key` state ordering) in `tests/test_ai_safety.py` and
+- **11 new regression test methods** (covering 100+ valid and adversarial URL /
+  IP / query-secret / state-restoration sub-cases, `urllib3` & `requests`
+  parity, double-encoded keys, provider-substring non-interference, `save_key`
+  rejection of bad URLs and unknown providers, and authoritative
+  `_load_saved_ai_key` state reset) in `tests/test_ai_safety.py` and
   `tests/test_ai_key_store.py`.
-- **350 Python tests OK (skipped=1), 39 JavaScript tests OK**; version-sync,
+- **353 Python tests OK (skipped=1), 39 JavaScript tests OK**; version-sync,
   owner-digest and `git diff --check` all clean.

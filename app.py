@@ -550,13 +550,13 @@ class CafeDesk(ctk.CTk):
             if info.get('damaged'): self.status.set('Staff unlocked • saved AI key file is damaged (AI settings → Forget saved key)'); return
             data=ai_key_store.load_key(pin)
             if not data: return
-            if data.get('provider')=='Custom OpenAI-compatible URL' or data.get('custom_url'):
-                services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])  # https/loopback host only
+            resolved_ep,_=services.detect_ai_provider(data['api_key'],data.get('provider',''),data['custom_url'])  # https/loopback host & known provider only
             clean_custom=ai_safety.validate_custom_ai_url(data['custom_url'],data['api_key'],expand_v1=False) if data.get('custom_url') else ''
+            saved_prov=(data.get('provider') or '').strip() or 'Auto-detect from API key'
             self._set_key_memory(data['api_key'])
-            if data.get('provider') in services.AI_PROVIDERS: self.ai_provider.set(data['provider'])
-            if data.get('model'): self.model.set(data['model'])
-            if clean_custom: self.ai_custom_url.set(clean_custom)
+            self.ai_provider.set(saved_prov)
+            self.model.set(data.get('model') or services.normalize_ai_model('',resolved_ep))
+            self.ai_custom_url.set(clean_custom if saved_prov=='Custom OpenAI-compatible URL' else '')
             self.status.set(f"Staff unlocked • saved AI key loaded ({info.get('hint','')})")
         except (ai_key_store.SavedKeyError,ValueError) as exc:
             self._set_key_memory('')
@@ -2588,14 +2588,15 @@ class CafeDesk(ctk.CTk):
         if not key or not model: return messagebox.showinfo('Set up AI','Add an API key and model in AI settings first.',parent=self)
         logging_utils.register_secret(key)
         try:
-            _,prov_label=services.detect_ai_provider(key,prov,curl)
+            resolved_ep,prov_label=services.detect_ai_provider(key,prov,curl)
         except ValueError as exc:
             return messagebox.showerror('AI settings',str(exc),parent=self)
         if len(text)>ai_safety.MAX_AI_INPUT_CHARS:
             return messagebox.showerror('Draft too long',f'This draft has {len(text):,} characters. The AI limit is {ai_safety.MAX_AI_INPUT_CHARS:,}. Improve it in smaller parts.',parent=self)
         hidden=ai_safety.protect_personal_details(text).summary()
         training_note='\n• Free AI tiers (e.g. Google Gemini free, OpenRouter free models) may use the text to improve their models.' if prov_label in ('Google Gemini','OpenRouter') else ''
-        if not messagebox.askyesno('Customer consent & privacy',f'Send this draft to {prov_label} ({model}) for proof-reading?\n\n🔒 Kept on this computer (replaced with placeholders, never sent):\n{hidden}.\n\n• Get the customer’s explicit permission first.\n• Other wording in the draft (job history, schools, skills) IS sent.{training_note}\n• Standard API charges may apply.\n\nSend draft now?',parent=self): return
+        consent_dest=f'{prov_label} — {ai_safety.endpoint_hostname(resolved_ep)}' if prov_label=='Custom endpoint' else prov_label
+        if not messagebox.askyesno('Customer consent & privacy',f'Send this draft to {consent_dest} ({model}) for proof-reading?\n\n🔒 Kept on this computer (replaced with placeholders, never sent):\n{hidden}.\n\n• Get the customer’s explicit permission first.\n• Other wording in the draft (job history, schools, skills) IS sent.{training_note}\n• Standard API charges may apply.\n\nSend draft now?',parent=self): return
         req_gen=self.ai_generation
         def request():
             return services.improve_document_with_ai(key,model,text,provider_choice=prov,custom_url=curl,timeout=60)

@@ -558,6 +558,11 @@ AI_DEFAULT_MODELS={
     'https://api.groq.com/openai/v1/chat/completions':'openai/gpt-oss-120b',
     'https://api.deepseek.com/chat/completions':'deepseek-chat',
 }
+_HOST_DEFAULT_MODELS={
+    ai_safety.endpoint_hostname(ep):default_model
+    for ep,default_model in AI_DEFAULT_MODELS.items()
+    if ai_safety.endpoint_hostname(ep)
+}
 
 # Groq shut these model IDs down for free/developer tiers (see
 # https://console.groq.com/docs/deprecations). Requests to them now fail, so map
@@ -579,7 +584,9 @@ GROQ_REASONING_MIN_TOKENS=512
 def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API key', custom_url:str='')->tuple[str,str]:
     """Resolve `(endpoint_url, provider_label)` from key prefix or explicit provider choice."""
     key=(api_key or '').strip()
-    choice=(provider_choice or 'Auto-detect from API key').strip()
+    choice=(provider_choice or '').strip() or 'Auto-detect from API key'
+    if choice not in AI_PROVIDERS:
+        raise ValueError(f'Unknown AI provider: {choice}')
     if choice=='Custom OpenAI-compatible URL':
         url=ai_safety.validate_custom_ai_url(custom_url,key,expand_v1=True)
         return url,'Custom endpoint'
@@ -601,7 +608,7 @@ def normalize_ai_model(model:str, endpoint_url:str)->str:
     m=(model or '').strip()
     host=ai_safety.endpoint_hostname(endpoint_url)
     if not m:
-        return AI_DEFAULT_MODELS.get(endpoint_url,'gpt-4o-mini')
+        return AI_DEFAULT_MODELS.get(endpoint_url) or _HOST_DEFAULT_MODELS.get(host,'gpt-4o-mini')
     if host=='api.groq.com':
         groq_default=AI_DEFAULT_MODELS['https://api.groq.com/openai/v1/chat/completions']
         other_provider_defaults=set(AI_DEFAULT_MODELS.values())-{groq_default}

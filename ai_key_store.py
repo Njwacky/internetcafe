@@ -222,15 +222,17 @@ def saved_key_info(path=None) -> dict | None:
 
 def save_key(api_key: str, pin: str, *, provider: str = "", model: str = "", custom_url: str = "", path=None) -> dict:
     """Encrypt and store the key. `pin` must already be verified by the caller."""
+    import ai_safety
+
     key = _validate_key(api_key)
     if not isinstance(pin, str) or not pin:
         raise ValueError("The staff PIN is required to save the key.")
     provider = (provider or "").strip()[:80]
+    if provider and provider not in ai_safety.KNOWN_AI_PROVIDERS:
+        raise ValueError(f"Unknown AI provider: {provider}")
     model = (model or "").strip()[:120]
     raw_custom = (custom_url or "").strip()
     if provider == "Custom OpenAI-compatible URL" or raw_custom:
-        import ai_safety
-
         clean_custom = ai_safety.validate_custom_ai_url(raw_custom, key, expand_v1=False)
         if len(clean_custom) > 300:
             raise ValueError("Custom AI endpoint URL must be 300 characters or fewer.")

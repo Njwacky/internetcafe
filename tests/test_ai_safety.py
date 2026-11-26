@@ -548,6 +548,99 @@ class CustomAiEndpointHostnameTests(unittest.TestCase):
         self.assertEqual(payload["max_tokens"], 32)
         self.assertEqual(payload["model"], "gpt-4o-mini")
 
+    def test_recheck_ip_allowlist_blocks_this_network_cgnat_nat64_6to4_teredo_and_testnet(self):
+        import services
+
+        # Special-purpose blocks that Python's ipaddress does NOT flag as is_unspecified /
+        # is_reserved must still be rejected by positive unicast allowlisting.
+        non_routable_or_tunnel_ips = [
+            "https://0.0.0.1/v1",
+            "https://0.255.255.255/v1",
+            "https://100.100.100.200/v1",
+            "https://100.64.0.1/v1",
+            "https://192.0.0.1/v1",
+            "https://192.0.2.1/v1",
+            "https://198.18.0.1/v1",
+            "https://198.51.100.1/v1",
+            "https://203.0.113.1/v1",
+            "https://[2001:db8::1]/v1",
+            "https://[2002:a9fe:a9fe::1]/v1",
+            "https://[2002:7f00:1::1]/v1",
+            "https://[2001::a9fe:a9fe]/v1",
+            "https://[64:ff9b::169.254.169.254]/v1",
+            "https://[64:ff9b::8.8.8.8]/v1",
+            "https://[64:ff9b:1::1]/v1",
+        ]
+        for bad in non_routable_or_tunnel_ips:
+            with self.subTest(url=bad):
+                with self.assertRaises(ValueError):
+                    services.detect_ai_provider(self.KEY, self.CUSTOM, bad)
+
+        # Legitimate global unicast and RFC 1918 / RFC 4193 shop-LAN HTTPS IPs remain allowed.
+        for allowed in (
+            "https://1.1.1.1/v1",
+            "https://[2606:4700:4700::1111]/v1",
+            "https://10.0.0.5:8443/v1",
+            "https://172.16.0.5:8443/v1",
+            "https://192.168.1.50:8443/v1",
+            "https://[fd00::1]:8443/v1",
+        ):
+            with self.subTest(url=allowed):
+                resolved, _ = services.detect_ai_provider(self.KEY, self.CUSTOM, allowed)
+                self.assertTrue(resolved.endswith("/v1/chat/completions"))
+
+    def test_recheck_non_pattern_secret_query_params_and_unknown_providers_rejected(self):
+        import requests
+
+        import ai_safety
+        import services
+
+        # Provider allowlists in ai_safety and services must stay in exact lockstep.
+        self.assertEqual(set(services.AI_PROVIDERS), ai_safety.KNOWN_AI_PROVIDERS)
+
+        # Arbitrary hex/opaque third-party tokens in credential query params must be rejected
+        # even when they do not match sk-/gsk_/AIza prefixes or the key in the entry box.
+        for param in ("api_key", "apikey", "api-key", "key", "token", "access_token", "auth", "authorization", "secret"):
+            url = f"https://api.together.xyz/v1/chat/completions?{param}=9f8e7d6c5b4a32109f8e7d6c5b4a3210"
+            with self.subTest(param=param):
+                with self.assertRaises(ValueError) as ctx:
+                    services.detect_ai_provider("unrelated-box-key", self.CUSTOM, url)
+                self.assertIn("must not contain", str(ctx.exception))
+
+        # Semicolon-separated and percent-encoded secret param names are also rejected.
+        for tricky_url in (
+            "https://api.together.xyz/v1/chat/completions?v=1;api_key=9f8e7d6c5b4a3210",
+            "https://api.together.xyz/v1/chat/completions?%61pi_key=9f8e7d6c5b4a3210",
+        ):
+            with self.subTest(url=tricky_url):
+                with self.assertRaises(ValueError):
+                    services.detect_ai_provider("unrelated-box-key", self.CUSTOM, tricky_url)
+
+        # Benign query params like Azure api-version remain allowed, and empty path canonicalizes to "/".
+        azure_ep, _ = services.detect_ai_provider(
+            self.KEY,
+            self.CUSTOM,
+            "https://myshop.openai.azure.com/openai/deployments/gpt4o/chat/completions?api-version=2024-06-01",
+        )
+        self.assertTrue(azure_ep.endswith("?api-version=2024-06-01"))
+        bare_ep = ai_safety.validate_custom_ai_url("https://example.com", self.KEY, expand_v1=False)
+        self.assertEqual(bare_ep, "https://example.com/")
+        self.assertEqual(requests.Request("POST", bare_ep).prepare().url, bare_ep)
+
+        # Unknown provider names fail closed instead of silently falling back to OpenAI.
+        with self.assertRaises(ValueError):
+            services.detect_ai_provider(self.KEY, "Tampered Provider Name", "")
+
+        # Empty model resolves default by parsed hostname even on /v1 or query-bearing URLs.
+        self.assertEqual(
+            services.normalize_ai_model("", "https://api.groq.com/openai/v1/chat/completions?foo=1"),
+            "openai/gpt-oss-120b",
+        )
+        self.assertEqual(
+            services.normalize_ai_model("", "https://api.deepseek.com/v1/chat/completions"),
+            "deepseek-chat",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

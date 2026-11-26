@@ -409,6 +409,46 @@ class FiveWhysRegressionTests(unittest.TestCase):
             app.ai_custom_url.set.assert_not_called()
             self.assertIn("not loaded", app.status.set.call_args[0][0])
 
+    def test_recheck_unlock_overwrites_stale_custom_routing_and_rejects_unknown_provider(self):
+        import ast
+
+        import ai_safety
+        import services
+
+        # save_key refuses unrecognised non-empty provider names.
+        fresh = Path(self.tmp.name) / "unknown-prov.json"
+        with self.assertRaises(ValueError):
+            store.save_key(KEY, PIN, provider="Unknown Provider", path=fresh)
+        self.assertFalse(fresh.exists())
+
+        src = (REPO / "app.py").read_text(encoding="utf-8")
+        cls = next(n for n in ast.parse(src).body if isinstance(n, ast.ClassDef) and n.name == "CafeDesk")
+        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_load_saved_ai_key")
+        ns = {"ai_key_store": store, "services": services, "ai_safety": ai_safety}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), "app.py", "exec"), ns)
+
+        # If UI state held a custom URL before locking, unlocking an auto-detect key
+        # (saved with provider="", custom_url="") MUST reset ai_provider and ai_custom_url
+        # so the decrypted key cannot be sent to the previous session's custom URL.
+        app = mock.Mock()
+        app.key.get.return_value = ""
+        with mock.patch.object(store, "saved_key_info", return_value={"damaged": False, "hint": "gsk_…a1b2"}), \
+             mock.patch.object(store, "load_key", return_value={"api_key": KEY, "provider": "", "model": "", "custom_url": ""}):
+            ns["_load_saved_ai_key"](app, PIN)
+        app._set_key_memory.assert_called_once_with(KEY)
+        app.ai_provider.set.assert_called_once_with("Auto-detect from API key")
+        app.model.set.assert_called_once_with("openai/gpt-oss-120b")
+        app.ai_custom_url.set.assert_called_once_with("")
+
+        # An unrecognised provider inside a saved record must fail closed without loading the key.
+        app2 = mock.Mock()
+        app2.key.get.return_value = ""
+        with mock.patch.object(store, "saved_key_info", return_value={"damaged": False, "hint": "gsk_…a1b2"}), \
+             mock.patch.object(store, "load_key", return_value={"api_key": KEY, "provider": "RogueProvider", "model": "m", "custom_url": ""}):
+            ns["_load_saved_ai_key"](app2, PIN)
+        app2._set_key_memory.assert_called_once_with("")
+        app2.ai_provider.set.assert_not_called()
+
     def test_windows_ci_runs_the_real_dpapi_self_test(self):
         workflow = (REPO / ".github" / "workflows" / "build-usb.yml").read_text(encoding="utf-8")
         self.assertIn("python .github/dpapi_selftest.py", workflow)

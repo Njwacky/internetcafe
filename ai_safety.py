@@ -490,18 +490,58 @@ _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 # least 2 chars and start with an ASCII letter, which also rejects non-canonical numeric/
 # octal/hex/shorthand IPv4 literals (`127.1`, `0177.0.0.1`, `2130706433`, `0x7f000001`).
 _DNS_TLD = re.compile(r"^[a-z](?:[a-z0-9-]{1,61}[a-z0-9]|[a-z0-9])$")
+_SECRET_QUERY_PARAMS = frozenset({
+    "key", "api_key", "apikey", "api-key",
+    "token", "access_token", "auth", "authorization",
+    "secret", "password", "passwd", "bearer", "client_secret",
+})
+_ALLOWED_PRIVATE_IPV4 = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+)
+_ALLOWED_PRIVATE_IPV6 = ipaddress.IPv6Network("fc00::/7")
+_BLOCKED_NAT64_IPV6 = (
+    ipaddress.IPv6Network("64:ff9b::/96"),
+    ipaddress.IPv6Network("64:ff9b:1::/48"),
+)
+KNOWN_AI_PROVIDERS = frozenset({
+    "Auto-detect from API key",
+    "Google Gemini (aistudio.google.com)",
+    "OpenRouter (openrouter.ai)",
+    "OpenAI (api.openai.com)",
+    "Groq (api.groq.com)",
+    "DeepSeek (api.deepseek.com)",
+    "Custom OpenAI-compatible URL",
+})
 _CUSTOM_URL_SCHEME_HOST_ERROR = (
     "Custom AI endpoint must be a valid https:// URL "
     "(or http://localhost, http://127.0.0.1, or http://[::1] for local Ollama/LM Studio)."
 )
 
 
+def _has_secret_query_param(url: str) -> bool:
+    """True when `url` has a non-empty credential-named query parameter."""
+    try:
+        query = urllib.parse.urlsplit(url).query
+    except ValueError:
+        return False
+    if not query:
+        return False
+    for sep in ("&", ";"):
+        for param_name, param_value in urllib.parse.parse_qsl(query, keep_blank_values=True, separator=sep):
+            clean_name = urllib.parse.unquote(param_name).strip().lower()
+            if clean_name in _SECRET_QUERY_PARAMS and param_value.strip():
+                return True
+    return False
+
+
 def _url_contains_secret(url: str, api_key: str = "") -> bool:
-    """True when `url` carries `api_key` or a key-like token in raw or percent-decoded form."""
+    """True when `url` carries `api_key`, a key-like token, or a secret query parameter."""
     key = (api_key or "").strip()
     candidate = url
     for _ in range(4):
-        if redact_secrets(candidate, key) != candidate:
+        if redact_secrets(candidate, key) != candidate or _has_secret_query_param(candidate):
             return True
         decoded = urllib.parse.unquote(candidate)
         if decoded == candidate:
@@ -594,15 +634,14 @@ def validate_custom_ai_url(custom_url: str, api_key: str = "", *, expand_v1: boo
         else:
             if scheme != "https":
                 raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
-            if (
-                ipv6.ipv4_mapped is not None
-                or ipv6.is_loopback
-                or ipv6.is_unspecified
-                or ipv6.is_link_local
-                or ipv6.is_multicast
-                or ipv6.is_reserved
-                or ipv6.is_site_local
-            ):
+            allowed_v6 = (
+                ipv6.ipv4_mapped is None
+                and ipv6.sixtofour is None
+                and ipv6.teredo is None
+                and not any(ipv6 in net for net in _BLOCKED_NAT64_IPV6)
+                and ((ipv6.is_global and not ipv6.is_multicast) or ipv6 in _ALLOWED_PRIVATE_IPV6)
+            )
+            if not allowed_v6:
                 raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
             host_for_netloc = f"[{ipv6.compressed}]"
     else:
@@ -618,13 +657,10 @@ def validate_custom_ai_url(custom_url: str, api_key: str = "", *, expand_v1: boo
             else:
                 if scheme != "https":
                     raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
-                if (
-                    ipv4.is_loopback
-                    or ipv4.is_unspecified
-                    or ipv4.is_link_local
-                    or ipv4.is_multicast
-                    or ipv4.is_reserved
-                ):
+                allowed_v4 = (ipv4.is_global and not ipv4.is_multicast) or any(
+                    ipv4 in net for net in _ALLOWED_PRIVATE_IPV4
+                )
+                if not allowed_v4:
                     raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
                 host_for_netloc = ipv4.compressed
         else:
@@ -654,9 +690,7 @@ def validate_custom_ai_url(custom_url: str, api_key: str = "", *, expand_v1: boo
                     raise ValueError(_CUSTOM_URL_SCHEME_HOST_ERROR)
                 host_for_netloc = ascii_host
 
-    clean_path = parsed.path
-    if not clean_path and parsed.query:
-        clean_path = "/"
+    clean_path = parsed.path or "/"
     if expand_v1 and clean_path.rstrip("/").endswith("/v1"):
         clean_path = clean_path.rstrip("/") + "/chat/completions"
 
