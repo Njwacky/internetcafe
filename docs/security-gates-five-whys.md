@@ -812,3 +812,112 @@ four subtle residual gaps:
   `tests/test_ai_key_store.py`.
 - **353 Python tests OK (skipped=1), 39 JavaScript tests OK**; version-sync,
   owner-digest and `git diff --check` all clean.
+
+## Hardening sequence — Step 2: server-enforced owner MFA (2026-11-26)
+
+**Status:** implemented and tested in the repository; PR review/merge and live
+rollout are separate gates. No live database migration, Auth configuration or
+Edge Function deployment was performed. Apply/verify remains **Step 4**;
+duplicate-licence repair locking/concurrency remains **Step 3**.
+
+**Risk addressed:** a stolen password/email-login session could invoke privileged
+owner operations directly, even if the account had an enrolled authenticator or
+the browser concealed its controls. See baseline audit finding 7.
+
+### Five whys
+
+1. **Why could a single-factor session exercise owner privileges?** The central
+   SQL predicate and cloud endpoints authenticated owner identity without
+   requiring the session's authenticator assurance level to be `aal2`.
+2. **Why did enrolling an authenticator not fix that?** Enrollment establishes a
+   factor on the account; it does not establish that the current request passed
+   a second-factor challenge. An enrolled account still has AAL1 sessions.
+3. **Why was a dashboard-only challenge insufficient?** An attacker can bypass
+   the page and call PostgREST RLS-protected tables, SECURITY DEFINER RPCs or
+   service-role-backed Edge Functions directly. Every boundary needs a gate.
+4. **Why could sensitive actions lack attributable records?** Browser table
+   writes, SQL RPCs and service-role cloud actions had different execution paths;
+   there was no common append-only owner action trail across them.
+5. **Why did tests miss this?** Owner fixtures represented identity, not session
+   assurance. There was no adversarial owner-at-AAL1 fixture exercising actual
+   PostgreSQL RLS, owner RPCs and the shared cloud authorization code.
+
+**Root cause:** ownership and authentication assurance were conflated, and the
+security property was not tested across each independently callable boundary.
+
+### Changes and invariants
+
+- `20261126160000_owner_mfa_aal2_enforcement.sql` upgrades
+  `is_cafedesk_owner()` to require the owner email digest **and AAL2**. If an AMR
+  array is supplied it must contain an MFA method, not password alone. A supplied
+  server-managed `app_metadata.cafedesk_role` must be `owner`. Existing owner RLS
+  policies inherit the gate; release-bucket DELETE now uses it too. Public
+  releases, announcements and active templates remain public as intended.
+- Shop registration, duplicate repair and machine purge RPCs reject AAL1 and
+  record owner actions. This step deliberately preserves duplicate-repair lock
+  ordering for the dedicated Step 3 fix, rather than mixing the sequence.
+- Both `owner-admin` and `owner-resign` invoke the shared owner/MFA gate before
+  reading action bodies. Supabase Auth verifies the presented JWT; decoded claims
+  are bound to the returned user ID, owner digest (or explicit server-configured
+  owner email), optional pinned `CAFEDESK_OWNER_USER_ID`, and optional owner role.
+  AAL2, an MFA AMR method and a verified user factor are all mandatory here.
+  Browser claims are never treated as signature verification. The digest sync
+  tool now covers browser, SQL and shared Edge Function code.
+- The console offers TOTP QR/manual-secret enrollment and six-digit challenge
+  verification before revealing data. QR data goes into an image `src`, never
+  `innerHTML`; the secret uses `textContent`, is not persisted, and is cleared
+  after successful assurance or logout. A **2FA** control allows fresh challenge
+  confirmation. Password changes, licence re-signing and permanent purge request
+  a fresh code when verification is older than 15 minutes or its time is unknown.
+  Restoring/refreshing a session uses the MFA AMR timestamp, not page-load time.
+  This 15-minute prompt is **browser defence in depth**, not a server freshness
+  policy; SQL and Edge Functions enforce AAL2 regardless of browser behavior.
+- `owner_audit_log` is owner-AAL2-readable and append-only (UPDATE/DELETE/TRUNCATE
+  rejected). Authenticated clients cannot forge inserts. Explicit service-role
+  INSERT and sequence grants avoid reliance on Supabase default privileges.
+  Direct owner writes to releases, announcements, templates, keys and activation
+  requests use database triggers; RPC logs are transactional. Cloud actions log
+  all five owner-admin actions and licence re-signs without storing signing
+  secrets or full licence tokens. Audit write errors, including missing schema,
+  are surfaced rather than silently declaring success.
+- **Known boundary:** Edge Function mutation and audit INSERT are separate
+  requests, not one database transaction. If the mutation succeeds and audit
+  fails, the endpoint reports failure but the mutation may already be committed;
+  inspect current state before retrying (especially licence issuance). Database
+  administrators can disable triggers; append-only is not protection against a
+  compromised database administrator or stolen service credentials.
+- Service worker cache version is bumped so existing installations fetch the
+  updated console. No desktop rewrite or change to licensing/signing formats.
+
+### Regression coverage and verification
+
+- Executable PGlite tests exercise owner AAL1/AAL2 and non-owner authorization,
+  password-only AMR rejection, sensitive reads/writes, inactive-template privacy,
+  storage DELETE bucket scoping, all three owner RPC gates, transactional audit
+  records, service inserts, browser-forgery denial and append-only enforcement.
+- JavaScript tests exercise missing/invalid bearer claims, subject mismatch,
+  expired claims, missing/unverified factors, missing/invalid/password-only AMR,
+  pinned UUID mismatch, enrollment vs challenge routing, no AAL1 API dispatch,
+  stale/unknown step-up time, logout cleanup and audit-write failure reporting.
+  Prototype names such as `constructor` cannot masquerade as MFA methods.
+- Four Python tripwires cover SQL function/schema parity, shared cloud gate
+  placement, safe/nonpersistent QR-secret rendering and session-restore freshness;
+  existing login-email/privacy and signing tests remain in place.
+
+**Final local verification:** `npm test` **48/48 passed**; Python full suite
+**357 run, OK (1 skipped)**; version sync, owner-digest sync, release-key guard,
+full dashboard inline-script syntax and `git diff --check` all passed.
+
+### Step 4 rollout checklist (not executed here)
+
+1. Review/merge this PR, then complete Step 3 concurrency hardening first.
+2. Confirm owner account identity/optional pinned UUID, TOTP support and a safe
+   operator-led account recovery procedure; do not disable the server gate as a
+   recovery shortcut. Do not rotate/delete an enrolled factor casually.
+3. Apply the reviewed pending migrations before deploying cloud functions that
+   depend on `owner_audit_log`; deploy both functions with their shared module,
+   then publish the updated console. Preserve server-only signing secrets.
+4. With real Auth-issued tokens, verify AAL1 denials and successful TOTP→AAL2
+   reads/writes, storage access, RPCs, cloud signing/re-signing and audit records.
+   Check the browser QR/challenge/CSP flow on an actual authenticator. PGlite and
+   VM tests do not certify the deployed Auth service, browser or live policies.

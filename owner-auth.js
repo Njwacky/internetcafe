@@ -44,6 +44,103 @@
     return sha256Hex(DIGEST_DOMAIN + String(email || "").trim().toLowerCase());
   }
 
+  var B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+  function decodeBase64Url(segment) {
+    var clean = String(segment || "").trim().replace(/-/g, "+").replace(/_/g, "/");
+    if (!clean) return "";
+    var padLen = (4 - (clean.length % 4)) % 4;
+    var padded = clean + "=".repeat(padLen);
+    if (typeof global.atob === "function") {
+      return global.atob(padded);
+    }
+    var out = "";
+    for (var i = 0; i < padded.length; i += 4) {
+      var c0 = B64_CHARS.indexOf(padded.charAt(i));
+      var c1 = B64_CHARS.indexOf(padded.charAt(i + 1));
+      var c2 = padded.charAt(i + 2) === "=" ? 64 : B64_CHARS.indexOf(padded.charAt(i + 2));
+      var c3 = padded.charAt(i + 3) === "=" ? 64 : B64_CHARS.indexOf(padded.charAt(i + 3));
+      if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) return "";
+      var triple = (c0 << 18) | (c1 << 12) | ((c2 & 63) << 6) | (c3 & 63);
+      out += String.fromCharCode((triple >> 16) & 255);
+      if (c2 !== 64) out += String.fromCharCode((triple >> 8) & 255);
+      if (c3 !== 64) out += String.fromCharCode(triple & 255);
+    }
+    return out;
+  }
+
+  var MFA_AMR_METHODS = {
+    totp: true,
+    "mfa/totp": true,
+    webauthn: true,
+    passkey: true,
+    recovery_code: true
+  };
+
+  function parseJwtClaims(accessToken) {
+    try {
+      var parts = String(accessToken || "").trim().split(".");
+      if (parts.length !== 3 || !parts[1]) return null;
+      var raw = decodeBase64Url(parts[1]);
+      if (!raw) return null;
+      var jsonText = raw;
+      if (typeof TextDecoder === "function") {
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        jsonText = new TextDecoder().decode(bytes);
+      }
+      var json = JSON.parse(jsonText);
+      return json && typeof json === "object" ? json : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function parseJwtAal(accessToken) {
+    var json = parseJwtClaims(accessToken);
+    if (!json || json.aal !== "aal2") return "aal1";
+    if (Array.isArray(json.amr)) {
+      var hasFactor = false;
+      for (var i = 0; i < json.amr.length; i++) {
+        var entry = json.amr[i];
+        var method = typeof entry === "string"
+          ? entry
+          : (entry && typeof entry.method === "string" ? entry.method : "");
+        if (MFA_AMR_METHODS[method.trim().toLowerCase()] === true) {
+          hasFactor = true;
+          break;
+        }
+      }
+      if (!hasFactor) return "aal1";
+    }
+    return "aal2";
+  }
+
+  function parseJwtMfaTimestampMs(accessToken) {
+    var json = parseJwtClaims(accessToken);
+    if (!json || !Array.isArray(json.amr)) return 0;
+    var latestSec = 0;
+    for (var i = 0; i < json.amr.length; i++) {
+      var entry = json.amr[i];
+      if (!entry || typeof entry !== "object") continue;
+      var method = typeof entry.method === "string" ? entry.method.trim().toLowerCase() : "";
+      if (MFA_AMR_METHODS[method] === true && typeof entry.timestamp === "number" && entry.timestamp > latestSec) {
+        latestSec = entry.timestamp;
+      }
+    }
+    return latestSec > 0 ? latestSec * 1000 : 0;
+  }
+
+  function hasMfaAssurance(session, aalData) {
+    return Boolean(
+      session &&
+      session.access_token &&
+      aalData &&
+      aalData.currentLevel === "aal2" &&
+      parseJwtAal(session.access_token) === "aal2"
+    );
+  }
+
   /** Resolves true only when the email hashes to the stored owner digest. */
   function isOwnerEmail(email) {
     return emailDigest(email).then(function (hex) {
@@ -58,6 +155,9 @@
     ownerDigest: OWNER_EMAIL_SHA256,
     sha256Hex: sha256Hex,
     emailDigest: emailDigest,
-    isOwnerEmail: isOwnerEmail
+    isOwnerEmail: isOwnerEmail,
+    parseJwtAal: parseJwtAal,
+    parseJwtMfaTimestampMs: parseJwtMfaTimestampMs,
+    hasMfaAssurance: hasMfaAssurance
   };
-})(window);
+})(typeof window !== "undefined" ? window : globalThis);
