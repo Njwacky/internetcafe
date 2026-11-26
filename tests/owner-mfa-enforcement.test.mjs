@@ -135,6 +135,7 @@ before(async () => {
     create policy test_storage_read on storage.objects for select to authenticated using (true);
   `);
   await db.exec(mfaMigration);
+  await db.exec(await readFile(new URL('../supabase/migrations/20261126180000_duplicate_repair_lock_order.sql', import.meta.url), 'utf8'));
   await db.exec(`
     grant select on public.owner_audit_log to authenticated, service_role;
     grant execute on function public.cafedesk_owner_digest() to anon, authenticated;

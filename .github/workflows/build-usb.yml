@@ -18,6 +18,18 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: cafedesk-test-only
+        ports:
+          - "127.0.0.1:5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -30,7 +42,7 @@ jobs:
       - name: Install test dependencies (locked)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-lock.txt
+          python -m pip install -r requirements-lock.txt -r requirements-postgres-test.txt
 
       - name: Check version consistency (version.py is the single source)
         run: python tools/check_version_sync.py --check
@@ -38,7 +50,11 @@ jobs:
       - name: Check owner digest is in sync (browser == database)
         run: python tools/sync_owner_digest.py --check
 
-      - name: Run unit test suite
+      - name: Run unit tests including real PostgreSQL concurrency
+        env:
+          # Test-only local service. The suite creates/drops a random database;
+          # it never uses Supabase or any existing application's database.
+          CAFEDESK_TEST_POSTGRES_DSN: postgresql://postgres:cafedesk-test-only@127.0.0.1:5432/postgres
         run: python .github/run_tests.py
 
       - name: Set up Node 22 for signer tests

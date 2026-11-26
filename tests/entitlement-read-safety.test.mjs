@@ -68,7 +68,7 @@ before(async () => {
                    then decode('${OWNER_DIGEST}', 'hex')
                    else decode(repeat('00', 32), 'hex') end
     $$;`);
-  for (const name of ['issued_machine_keys', 'activation_requests', 'machine_rpc_rate_limits', 'owner_license_actions']) {
+  for (const name of ['issued_machine_keys', 'activation_requests', 'machine_rpc_rate_limits', 'owner_license_actions', 'owner_audit_log']) {
     await db.exec(extractTable(name));
     await db.exec(`alter table public.${name} enable row level security;`);
   }
@@ -77,6 +77,8 @@ before(async () => {
     await db.exec(extractFunction(name));
   }
   await db.exec(migration);
+  // Exercise the latest repair implementation, not only its historical version.
+  await db.exec(await readFile(new URL('../supabase/migrations/20261126180000_duplicate_repair_lock_order.sql', import.meta.url), 'utf8'));
 });
 
 after(async () => { await db?.close(); });
@@ -85,7 +87,7 @@ beforeEach(async () => {
   // The audit table is append-only in production; tests reset it as an operator
   // would (disable triggers, truncate, re-enable).
   await db.exec('alter table public.owner_license_actions disable trigger all;');
-  await db.exec(`truncate public.issued_machine_keys, public.activation_requests, public.owner_license_actions;`);
+  await db.exec(`truncate public.issued_machine_keys, public.activation_requests, public.owner_license_actions, public.owner_audit_log;`);
   await db.exec('alter table public.owner_license_actions enable trigger all;');
   await db.exec(`set app.jwt_email = '${OWNER_EMAIL}'; set app.jwt_aal = 'aal2';`);
 });
@@ -204,4 +206,52 @@ test('an owner session at AAL1 (without MFA) cannot review or resolve duplicate 
   await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'preview', '']), /Only the Café Desk owner/);
   await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']), /Only the Café Desk owner/);
   assert.deepEqual(await keyStates(), [['LIC-A', false], ['LIC-B', false]]);
+});
+
+test('retrying the same keeper is a no-op without a second repair audit', async () => {
+  await seedKey('LIC-A');
+  await seedKey('LIC-B');
+  await rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']);
+  const retry = await rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']);
+  assert.equal(retry.action, 'none');
+  assert.equal(retry.keep_license_id, 'LIC-A');
+  assert.deepEqual(retry.revoked_license_ids, []);
+  assert.equal(Number((await db.query('select count(*) as n from public.owner_license_actions')).rows[0].n), 1);
+  assert.deepEqual(await keyStates(), [['LIC-A', false], ['LIC-B', true]]);
+});
+
+test('a stale conflicting keeper is rejected even when only one active key remains', async () => {
+  await seedKey('LIC-A');
+  await seedKey('LIC-B');
+  await rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']);
+  await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-B']), /p_keep_license_id/);
+  assert.deepEqual(await keyStates(), [['LIC-A', false], ['LIC-B', true]]);
+});
+
+test('resolve validates the keeper with zero or one active candidates', async () => {
+  await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-Z']), /p_keep_license_id/);
+  await seedKey('LIC-A');
+  await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', '']), /p_keep_license_id/);
+  await assert.rejects(rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-Z']), /p_keep_license_id/);
+  assert.equal((await rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A'])).action, 'none');
+});
+
+test('repair does not revoke add-ons, expired keys or alter previously paused keys', async () => {
+  for (const lid of ['LIC-A', 'LIC-B', 'LIC-C', 'LIC-D', 'LIC-E']) await seedKey(lid);
+  await db.exec("update public.issued_machine_keys set key_type = 'addon' where license_id = 'LIC-C'");
+  await db.exec("update public.issued_machine_keys set expires_at = current_date - 1 where license_id = 'LIC-D'");
+  await db.exec("update public.issued_machine_keys set revoked = true, revoke_reason = 'Manual pause' where license_id = 'LIC-E'");
+  const result = await rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']);
+  assert.deepEqual(result.revoked_license_ids, ['LIC-B']);
+  assert.deepEqual(await keyStates(), [['LIC-A', false], ['LIC-B', true], ['LIC-C', false], ['LIC-D', false], ['LIC-E', true]]);
+  assert.equal((await db.query("select revoke_reason from public.issued_machine_keys where license_id = 'LIC-E'")).rows[0].revoke_reason, 'Manual pause');
+});
+
+test('machine and keeper input normalization is shared with issuance lock identity', async () => {
+  await seedKey('LIC-A');
+  await seedKey('LIC-B');
+  const result = await rpc('owner_review_duplicate_machine_keys', [`  ${MID.toLowerCase()} `, ' RESOLVE ', ' lic-a ']);
+  assert.equal(result.machine_id, MID);
+  assert.equal(result.keep_license_id, 'LIC-A');
+  assert.deepEqual(result.revoked_license_ids, ['LIC-B']);
 });
