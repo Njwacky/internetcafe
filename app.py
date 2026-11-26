@@ -8,6 +8,7 @@ import time
 import customtkinter as ctk
 from PIL import Image, ImageOps
 
+import logging_utils
 from logging_utils import logger, log_exception
 from ctk_safety import install_ctk_entry_guard, safe_destroy
 from workers import BackgroundTasks
@@ -118,13 +119,16 @@ class CafeDesk(ctk.CTk):
     def __init__(self):
         super().__init__(); self.title('Café Desk'); self.geometry('1250x800'); self.minsize(950,680); self.configure(fg_color=BG)
         self.events=queue.Queue(); self.busy=False; self.idle=privacy.IdleLock(300); self.recovery_enabled=False; self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-'); self.protocol('WM_DELETE_WINDOW',self.close_app); self.cv_photo=None; self.cv_thumbnail=None; self.doc_preview_page=1; self.doc_preview_total=1; self.doc_preview_image=None; self.doc_preview_label=None; self.doc_preview_page_label=None; self.company_cell=None; self.role_label_widget=None; self.company_label_widget=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec(); self.staff_unlocked=False; self.failed_attempts=0; self.lockout_until=0; self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_editor=None; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.pdf_files=[]; self.image_files=[]; self.split_source=''; self.split_preview_fingerprint=None; self.unlock_pdf_source=''; self.scanner_devices=[]; self.scanner_device_id=None; self.scanned_pages=[]; self.doc_type=ctk.StringVar(value=CATEGORIES[0]); self.template=ctk.StringVar(value=NAMES[0]); self.ai_provider=ctk.StringVar(value='Auto-detect from API key'); self.ai_custom_url=ctk.StringVar(); self.model=ctk.StringVar(value='gpt-4o-mini'); self.key=ctk.StringVar(); self.ai_generation=0; self.values={k:ctk.StringVar() for k in LABELS}; self.status=ctk.StringVar(value=f'Ready  •  v{APP_BUILD}  •  Local document processing')
+        # Keep the durable-log secret redactor in step with the key no matter how it
+        # enters memory (typing/pasting into the masked entry, programmatic set, clear).
+        self.key.trace_add('write',self._sync_key_registration)
         settings_corrupted=False
         try:
             preferences=settings_store.load_settings(strict=True)
         except settings_store.CorruptedSettingsError:
             settings_corrupted=True
             preferences=settings_store.load_settings(strict=False)
-        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._telemetry_online_anchor=0.0; self._pending_online_seconds=0; self._entitlement_sync_running=False; self._update_check_running=False; self._available_update=None; self._prepared_update=None; self.topbar_update_btn=None; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False
+        self.business_name=ctk.StringVar(value=preferences['business_name']); self.business_icon=preferences['business_icon']; self.icon_images=self.load_icon_images(); self.clock=ctk.StringVar(); self.body=None; self.doc_editor=None; self.long_fields={}; self.career_entry_hosts:dict[str,ctk.CTkFrame]={}; self.career_entry_controls:dict[str,list[tuple[ctk.StringVar,ctk.CTkTextbox]]]={}; self.doc_text=''; self.nav_buttons={}; self.current=''; self._telemetry_lock=threading.Lock(); self._telemetry_counts={}; self._telemetry_inflight=False; self._telemetry_enabled=False; self._telemetry_consent_asked=False; self._last_telemetry_flush=0.0; self._telemetry_online_anchor=0.0; self._pending_online_seconds=0; self._entitlement_sync_running=False; self._update_check_running=False; self._available_update=None; self._prepared_update=None; self.topbar_update_btn=None; self._last_gui_error=''; self._last_recovery_error=''; self._startup_error=''; self._active_job_id=None; self._close_confirmed_busy=False; self._licence_revoked=False; self._licence_enforcement_shown=False
         # Central state manager owns the shared, mutable session/telemetry containers so
         # screens and workers read from one source of truth (see app_state.SessionState).
         # The legacy self._telemetry_* names keep pointing at the same dict/lock objects.
@@ -177,7 +181,7 @@ class CafeDesk(ctk.CTk):
             if self.staff_unlocked and self.idle.expired(): self.lock_staff(); self.status.set('Staff access locked after five minutes of inactivity')
         except Exception:
             # Fail closed: drop staff privileges rather than leave the desk unlocked.
-            try: self.staff_unlocked=False; self.key.set(''); self.update_lock_button()
+            try: self.staff_unlocked=False; self._set_key_memory(''); self.update_lock_button()
             except Exception: pass
             self._log_exception('check_idle')
         finally:
@@ -224,17 +228,56 @@ class CafeDesk(ctk.CTk):
             or card_dirty
             or form_dirty
         )
-    def close_app(self):
+    def close_app(self,force=False):
         # Ask once if a job is still running, but never trap the user: the watchdog frees
         # `busy` after a timeout, and a second attempt always closes.
-        if self.busy and not getattr(self,'_close_confirmed_busy',False):
+        # `force=True` skips every confirmation: it is used when the owner has revoked the
+        # licence and the app must actually stop (a revoked licence cannot be kept alive by
+        # declining a close prompt).
+        if not force and self.busy and not getattr(self,'_close_confirmed_busy',False):
             self._close_confirmed_busy=True
             if not messagebox.askyesno('Task still running','A document is still being processed. Closing now abandons that task.\n\nClose Café Desk anyway?',parent=self):
                 self._close_confirmed_busy=False; return
-        if saved_services.unprotected_sales(self.receipt_items) and not messagebox.askyesno('Saved sales are not protected','Some saved work has neither a sales record nor a durable retry copy. Closing now can lose those earnings. Retry Record sale from Receipts first. Close anyway?',parent=self):return
-        if self.has_unsaved_work() and not messagebox.askyesno('Close Café Desk?','Current workspace data (drafts, scans, OCR text/images, PDF queues, cards, forms or sheets) will be closed. Save any work you need first. If recovery is enabled, the latest copy may not include recent changes. Close anyway?',parent=self): return
+        if not force and saved_services.unprotected_sales(self.receipt_items) and not messagebox.askyesno('Saved sales are not protected','Some saved work has neither a sales record nor a durable retry copy. Closing now can lose those earnings. Retry Record sale from Receipts first. Close anyway?',parent=self):return
+        if not force and self.has_unsaved_work() and not messagebox.askyesno('Close Café Desk?','Current workspace data (drafts, scans, OCR text/images, PDF queues, cards, forms or sheets) will be closed. Save any work you need first. If recovery is enabled, the latest copy may not include recent changes. Close anyway?',parent=self): return
         self._recovery_store.invalidate()
         self.remove_session_files(); self.destroy()
+    def _enforce_licence_revocation(self,reasons):
+        """Actually enforce an owner revocation - never rely on a cancelable close.
+
+        Locks the workspace, marks the session revoked and shows a non-dismissable
+        notice; the only way forward is quitting (which force-closes). A revoked
+        licence must not stay usable because the user declined a close prompt.
+        """
+        self._licence_revoked=True
+        try:
+            self.lock_staff()
+            self.status.set('License access paused by the owner • the workspace is locked')
+        except tk.TclError:
+            # The shell is already gone: enforce by force-closing.
+            self.close_app(force=True)
+            return
+        if getattr(self,'_licence_enforcement_shown',False):
+            # Already enforced and displayed: stay locked without stacking dialogs.
+            return
+        self._licence_enforcement_shown=True
+        try:
+            dlg=ctk.CTkToplevel(self)
+            dlg.title('Café Desk access paused')
+            dlg.configure(fg_color=BG)
+            dlg.transient(self)
+            dlg.grab_set()
+            # The notice cannot be dismissed: the licence was revoked by the owner.
+            dlg.protocol('WM_DELETE_WINDOW',lambda:None)
+            box=ctk.CTkFrame(dlg,fg_color=WHITE,corner_radius=14)
+            box.pack(fill='both',expand=True,padx=24,pady=24)
+            label(box,'This computer’s Café Desk licence was paused by the owner.',size=16,bold=True).pack(anchor='w',padx=20,pady=(18,8))
+            detail='\n\n'.join(str(r) for r in (reasons or []) if str(r).strip())
+            label(box,(detail+'\n\n' if detail else '')+'The workspace is locked and the app cannot be used with this licence. Quit Café Desk; contact the owner to request approval again.',size=12,color=MUTED,wraplength=560,justify='left').pack(anchor='w',padx=20,pady=(0,16))
+            button(box,'Quit Café Desk',lambda:self.close_app(force=True),fg_color=RED).pack(anchor='w',padx=20,pady=(0,20))
+        except tk.TclError:
+            # No display available (or the shell is already gone): enforce by force-closing.
+            self.close_app(force=True)
     def remove_session_files(self):
         try: self.session_temp.cleanup()
         except OSError: messagebox.showwarning('Temporary files remain',f'Could not remove temporary files. Check this folder manually:\n{self.session_temp.name}',parent=self)
@@ -453,6 +496,12 @@ class CafeDesk(ctk.CTk):
                               ('Pull Prices from Cloud',cloud_pull_prices)),
                    pady=(0,18))
     def require_staff(self):
+        if getattr(self,'_licence_revoked',False):
+            # Fail closed: a revoked licence must not be re-unlocked with the staff PIN.
+            # The deny path is the default; unlocking is a narrow exception that revocation
+            # removes (see _enforce_licence_revocation).
+            self._enforce_licence_revocation(None)
+            return False
         if self.staff_unlocked: return True
         try:
             rem=settings_store.lockout_remaining()
@@ -475,6 +524,9 @@ class CafeDesk(ctk.CTk):
                     if rem_after>0: self.lockout_until=time.monotonic()+rem_after
                     messagebox.showerror('Staff access','Incorrect PIN. After 5 failed attempts, staff access locks for 60 seconds.',parent=self); return False
             self.staff_unlocked=True; self.idle.touch(); self.failed_attempts=0; self.lockout_until=0; self.update_lock_button(); self.status.set('Staff settings unlocked • click the lock icon before leaving the computer')
+            if self._licence_revoked:
+                # Revocation landed while the PIN dialog was open: re-enforce immediately.
+                self._enforce_licence_revocation(None); return False
             self._load_saved_ai_key(pin)
             return True
         except settings_store.CorruptedSettingsError as exc:
@@ -498,7 +550,7 @@ class CafeDesk(ctk.CTk):
             if info.get('damaged'): self.status.set('Staff unlocked • saved AI key file is damaged (AI settings → Forget saved key)'); return
             data=ai_key_store.load_key(pin)
             if not data: return
-            self.key.set(data['api_key'])
+            self._set_key_memory(data['api_key'])
             if data.get('provider') in services.AI_PROVIDERS: self.ai_provider.set(data['provider'])
             if data.get('model'): self.model.set(data['model'])
             if data.get('custom_url'):
@@ -506,7 +558,7 @@ class CafeDesk(ctk.CTk):
                 self.ai_custom_url.set(data['custom_url'])
             self.status.set(f"Staff unlocked • saved AI key loaded ({info.get('hint','')})")
         except (ai_key_store.SavedKeyError,ValueError) as exc:
-            self.key.set('')
+            self._set_key_memory('')
             self.status.set(f'Staff unlocked • saved AI key not loaded: {exc}')
         except Exception:
             self._log_exception('load_saved_ai_key')
@@ -540,8 +592,23 @@ class CafeDesk(ctk.CTk):
         btn=getattr(self,'lock_staff_btn',None)
         if btn and btn.winfo_exists():
             btn.configure(image=self.icon_images['unlock_staff' if self.staff_unlocked else 'lock_staff'])
+    def _sync_key_registration(self,*_):
+        """Register/unregister the in-memory key with the log redactor on every change.
+
+        Driven by a trace on the key StringVar so the registry matches memory whether
+        the key arrived by typing, pasting, a programmatic set or a clear - no action
+        call site can forget to register it.
+        """
+        value=self.key.get()
+        old=getattr(self,'_registered_key','')
+        if old and old!=value: logging_utils.unregister_secret(old)
+        if value: logging_utils.register_secret(value)
+        self._registered_key=value
+    def _set_key_memory(self,value):
+        """Set the in-memory AI key; the StringVar trace syncs the log redactor."""
+        self.key.set(value or '')
     def lock_staff(self):
-        self.staff_unlocked=False; self.key.set(''); self.ai_generation+=1; self.update_lock_button()
+        self.staff_unlocked=False; self._set_key_memory(''); self.ai_generation+=1; self.update_lock_button()
         if self.current in ('Business settings','Price settings','AI settings','Sales reports'): self.show('Home')
         self.status.set('Staff access locked • session API key cleared')
     def _career_snapshot(self):
@@ -580,8 +647,14 @@ class CafeDesk(ctk.CTk):
     def recovery_dir(self):return settings_store.settings_path().parent/'recovery'
     def recovery_exists(self):return any((self.recovery_dir()/(name+ext)).exists() for name in ('career','sheet') for ext in ('.cafeproject','.prev.cafeproject'))
     def delete_recovery_copies(self,notify=True):
-        failed=self._recovery_store.clear()
-        if failed:messagebox.showwarning('Recovery files remain','Some recovery files could not be removed. Check the recovery folder manually.',parent=self)
+        try:
+            failed=self._recovery_store.clear()
+        except OSError:
+            # The cross-process publication lock is held by another instance that
+            # is mid-publish. Deleting now could let that worker resurrect the file
+            # afterwards, so report the failure instead of clearing unprotected.
+            failed=['recovery-lock']
+        if failed:messagebox.showwarning('Recovery files remain','Some recovery files could not be removed (another Café Desk instance may be saving). Check the recovery folder manually.',parent=self)
         elif notify:messagebox.showinfo('Recovery cleared','Recovery copies were deleted. Saved projects and original files were not deleted.',parent=self)
     def recover_project(self,kind):
         if not self.require_staff():return
@@ -652,7 +725,7 @@ class CafeDesk(ctk.CTk):
             self.status.set('License access paused by the owner • contact support if unexpected')
             messagebox.showwarning('Café Desk access paused', 'This computer’s license was paused. Contact the Café Desk owner to request approval again.\n\n'+'\n'.join(result.get('revocation_reasons') or []),parent=self)
             if license_guard.is_license_required() and not license_guard.current_license_status().get('valid'):
-                self.close_app()
+                self._enforce_licence_revocation(result.get('revocation_reasons') or [])
         elif activated:
             self.status.set('Cloud license approval applied successfully')
     def _consume_startup_update_notice(self):
@@ -1877,7 +1950,7 @@ class CafeDesk(ctk.CTk):
         for widget in self.long_fields.values():
             if widget.winfo_exists(): widget.delete('1.0','end')
         self.recovery_enabled=False; self.delete_recovery_copies(notify=False)
-        self.key.set(''); self.ai_generation+=1; self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
+        self._set_key_memory(''); self.ai_generation+=1; self.staff_unlocked=False; self.update_lock_button(); self.receipt_items=[]; self.receipt_currency=None; self.receipt_token=uuid.uuid4().hex; self.receipt_timestamp=None; self.receipt_business=None; self.receipt_recorded=False; self.ocr_text=''; self.ocr_images=[]; self.ocr_selected_index=None; self.ocr_scan_animating=True; self.cv_photo=None; self.cv_thumbnail=None; self.sheet={'items':[],'preset':'4 per page','page':0,'selected':None,'mode':'Fit whole image','brightness':100,'gray':False}; self.card_state={'kind':'Business card','template':cards_renderer.CARD_NAMES[0],'sheet':cards_renderer.SHEET_OPTIONS['Business card'][0][0],'crop_marks':True,'photo':None,'business_fields':cards_renderer.default_fields('Business card'),'invitation_fields':cards_renderer.default_fields('Invitation card')}; self.form_state=forms_renderer.default_form_spec()
         if self.ocr_editor and self.ocr_editor.winfo_exists(): self.ocr_editor.delete('1.0','end')
         self.doc_text=''; self.pdf_files=[]; self.image_files=[]; self.scanned_pages=[]; self.split_source=''; self.split_preview_fingerprint=None; self.unlock_pdf_source=''; self.remove_session_files(); self.session_temp=tempfile.TemporaryDirectory(prefix='cafedesk-')
         if self.doc_editor and self.doc_editor.winfo_exists(): self.doc_editor.delete('1.0','end')
@@ -2443,6 +2516,7 @@ class CafeDesk(ctk.CTk):
         def test_ai():
             key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
             if not key: return messagebox.showinfo('Enter API key','Paste your API key above first.',parent=self)
+            logging_utils.register_secret(key)
             def run_check():
                 return services.call_ai_chat(key,model,'Reply with the single word CONNECTED.',provider_choice=prov,custom_url=curl,system_prompt='Reply only with the single word CONNECTED.',max_tokens=16,timeout=30)
             def done(res):
@@ -2452,7 +2526,7 @@ class CafeDesk(ctk.CTk):
             self.job('Testing AI connection…',run_check,done)
 
         def clear_key():
-            self.key.set(''); self.ai_generation+=1
+            self._set_key_memory(''); self.ai_generation+=1
             self.status.set('Session AI key cleared' + (' • the saved copy stays on this computer (use “Forget saved key” to delete it)' if ai_key_store.saved_key_info() else ''))
         btn_row=ctk.CTkFrame(box,fg_color='transparent'); btn_row.pack(fill='x',padx=20,pady=(0,15))
         button(btn_row,'Test AI connection',test_ai,fg_color=LIME,hover_color='#A9EB65',text_color='#142018',width=195).pack(side='left',padx=(0,10))
@@ -2475,6 +2549,7 @@ class CafeDesk(ctk.CTk):
         def save_key_now():
             key=self.key.get().strip()
             if not key: return messagebox.showinfo('Paste API key','Paste your API key above first (and test the connection).',parent=self)
+            logging_utils.register_secret(key)
             try:
                 rem=settings_store.lockout_remaining()
                 if rem>0: return messagebox.showwarning('Try again later',f'Too many incorrect PIN attempts. Wait {int(rem)+1} seconds.',parent=self)
@@ -2495,7 +2570,7 @@ class CafeDesk(ctk.CTk):
             if not messagebox.askyesno('Forget saved key','Delete the saved AI key from this computer?\n\nThe key typed above for this session is also cleared.',parent=self): return
             try: ai_key_store.forget_key()
             except OSError as exc: return messagebox.showerror('Could not delete',str(exc),parent=self)
-            self.key.set(''); self.ai_generation+=1; refresh_saved(); self.status.set('Saved AI key deleted from this computer')
+            self._set_key_memory(''); self.ai_generation+=1; refresh_saved(); self.status.set('Saved AI key deleted from this computer')
         saved_btns=ctk.CTkFrame(saved_box,fg_color='transparent'); saved_btns.pack(fill='x',padx=14,pady=(0,12))
         button(saved_btns,'💾 Save key on this computer',save_key_now,width=230).pack(side='left',padx=(0,10))
         button(saved_btns,'Forget saved key',forget_key_now,secondary=True,width=150).pack(side='left')
@@ -2507,6 +2582,7 @@ class CafeDesk(ctk.CTk):
         text=self.current_text(); key=self.key.get().strip(); model=self.model.get().strip(); prov=self.ai_provider.get(); curl=self.ai_custom_url.get().strip()
         if not text: return messagebox.showinfo('Create a draft','Create or enter a document first.',parent=self)
         if not key or not model: return messagebox.showinfo('Set up AI','Add an API key and model in AI settings first.',parent=self)
+        logging_utils.register_secret(key)
         try:
             _,prov_label=services.detect_ai_provider(key,prov,curl)
         except ValueError as exc:

@@ -170,12 +170,135 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn("self._load_saved_ai_key(pin)", src)
         start = src.index("    def lock_staff(self):")
         lock_body = src[start:src.index("\n    def ", start + 10)]
-        self.assertIn("self.key.set('')", lock_body)
+        self.assertIn("self._set_key_memory('')", lock_body)
+        # The in-memory key set/clear is the single point that also keeps the
+        # durable-log secret redactor in sync.
+        self.assertIn("def _set_key_memory(self,value):", src)
+        self.assertIn("logging_utils.register_secret(value)", src)
+        self.assertIn("logging_utils.unregister_secret(old)", src)
+        # Request paths register the exact key with the log redactor as well.
+        for fn in ("def test_ai():", "def improve(self):", "def save_key_now():"):
+            body = src[src.index(fn):]
+            for stop in ("\n    def ", "\n        def ", "\n\nif __name__"):
+                idx = body.find(stop)
+                if idx != -1:
+                    body = body[:idx]
+                    break
+            self.assertIn("logging_utils.register_secret(key)", body)
         # Saving asks for and verifies the PIN first; PIN change re-encrypts.
         save_fn = src[src.index("        def save_key_now():"):src.index("        def forget_key_now():")]
         self.assertLess(save_fn.index("settings_store.verify_pin(pin)"), save_fn.index("ai_key_store.save_key("))
         self.assertIn("Incorrect PIN. The key was not saved.", save_fn)
         self.assertIn("ai_key_store.rewrap_for_new_pin(old,new)", src)
+
+    def test_logging_redactor_removes_registered_and_pattern_secrets(self):
+        import logging_utils
+
+        logging_utils.register_secret(KEY)
+        self.addCleanup(logging_utils.unregister_secret, KEY)
+        text = f"connection failed for {KEY} and gsk_othertoken123 and AIzaSyA1234567890abc"
+        out = logging_utils.redact_text(text)
+        self.assertNotIn(KEY, out)
+        self.assertNotIn("gsk_othertoken123", out)
+        self.assertNotIn("AIzaSyA1234567890abc", out)
+        self.assertIn("[hidden key]", out)
+        # A non-pattern secret is only redacted while it is registered.
+        plain = "plainsecretvalue123"
+        logging_utils.register_secret(plain)
+        self.addCleanup(logging_utils.unregister_secret, plain)
+        self.assertNotIn(plain, logging_utils.redact_text(f"now shows {plain}"))
+        logging_utils.unregister_secret(plain)
+        self.assertIn(plain, logging_utils.redact_text(f"now shows {plain}"))
+
+    def test_logger_formatter_redacts_messages_and_tracebacks(self):
+        import logging
+
+        import logging_utils
+
+        records = []
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                records.append(logging_utils._SecretRedactingFormatter(logging_utils._LOG_FORMAT).format(record))
+
+        handler = Capture()
+        handler.setFormatter(logging_utils._SecretRedactingFormatter(logging_utils._LOG_FORMAT))
+        log = logging.getLogger("cafedesk-redaction-test")
+        log.handlers = [handler]
+        log.setLevel(logging.INFO)
+        log.propagate = False
+        logging_utils.register_secret(KEY)
+        self.addCleanup(logging_utils.unregister_secret, KEY)
+        # A record whose message carries the key, and a chained traceback whose
+        # exception message carries it too - neither may reach the output.
+        try:
+            raise ValueError(f"request to https://example.com?key={KEY} failed")
+        except ValueError:
+            log.error("AI request failed with key %s", KEY, exc_info=True)
+        output = "\n".join(records)
+        self.assertNotIn(KEY, output)
+        self.assertIn("[hidden key]", output)
+
+    def test_record_last_error_stores_a_redacted_note(self):
+        # The note is surfaced in the Help screen, so the storage boundary needs the
+        # same redaction as the log sink (recheck finding).
+        import logging_utils
+
+        store = {}
+        logging_utils.register_secret("sk-live-abcdef123456")
+        try:
+            logging_utils.record_last_error(store, "ai call", "failed with sk-live-abcdef123456")
+            self.assertNotIn("sk-live-abcdef123456", store["_last_gui_error"])
+            self.assertIn("[hidden key]", store["_last_gui_error"])
+        finally:
+            logging_utils.unregister_secret("sk-live-abcdef123456")
+
+    def test_root_logger_has_a_redacting_handler(self):
+        # Library/third-party loggers propagate to root; without a redacting handler
+        # there, Python's lastResort would print their records unredacted (recheck).
+        import logging
+
+        import logging_utils
+
+        root = logging.getLogger()
+        handlers = [h for h in root.handlers if getattr(h, "_cafedesk_redacting", False)]
+        self.assertTrue(handlers, "root logger must carry a redacting handler")
+        self.assertIsInstance(handlers[0].formatter, logging_utils._SecretRedactingFormatter)
+
+    def test_set_key_memory_sets_var_and_trace_syncs_registry(self):
+        # Architecture (recheck): _set_key_memory only writes the StringVar; the
+        # trace-driven _sync_key_registration keeps the log redactor in step, so a
+        # key typed into the masked entry is registered too, not just programmatic sets.
+        import ast
+
+        import logging_utils
+
+        src = (REPO / "app.py").read_text(encoding="utf-8")
+        cls = next(n for n in ast.parse(src).body
+                   if isinstance(n, ast.ClassDef) and n.name == "CafeDesk")
+        methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
+        ns = {"logging_utils": logging_utils}
+        exec(compile(ast.Module(body=[methods["_set_key_memory"], methods["_sync_key_registration"]],
+                               type_ignores=[]), "app.py", "exec"), ns)
+        app = mock.Mock()
+        app._registered_key = "gsk_previouskey123"
+        app.key.get.side_effect = ["gsk_newkey456", ""]
+        with mock.patch.object(logging_utils, "register_secret") as register, \
+                mock.patch.object(logging_utils, "unregister_secret") as unregister:
+            ns["_set_key_memory"](app, "gsk_newkey456")
+            app.key.set.assert_called_once_with("gsk_newkey456")
+            # The trace handler (fired by the set in real Tk) registers the new key
+            # and unregisters the previous one.
+            ns["_sync_key_registration"](app)
+            register.assert_called_once_with("gsk_newkey456")
+            unregister.assert_called_once_with("gsk_previouskey123")
+            # Clearing: the trace unregisters the current key and stores an empty value.
+            ns["_set_key_memory"](app, "")
+            app.key.set.assert_called_with("")
+            ns["_sync_key_registration"](app)
+            self.assertEqual(register.call_count, 1)  # clearing registers nothing new
+            self.assertEqual(unregister.call_args_list,
+                             [mock.call("gsk_previouskey123"), mock.call("gsk_newkey456")])
 
 
 class FiveWhysRegressionTests(unittest.TestCase):
