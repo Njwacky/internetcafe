@@ -1,16 +1,18 @@
 """Real multi-connection PostgreSQL tests; PGlite cannot test lock contention.
 
-Set CAFEDESK_TEST_POSTGRES_DSN to a LOCAL disposable PostgreSQL server (CREATEDB
-required). Each run creates/drops its own random database, never an existing DB.
+Set CAFEDESK_TEST_POSTGRES_DSN to a LOCAL disposable PostgreSQL server (a test-only fixture superuser
+is required to create the database and roles). Each run creates/drops its own random database, never an existing DB.
 CI supplies a PostgreSQL service and runs these tests as a mandatory gate.
 """
 import concurrent.futures
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
 import re
 import time
 import unittest
+from unittest import mock
 import uuid
 
 DSN = os.environ.get('CAFEDESK_TEST_POSTGRES_DSN', '')
@@ -19,6 +21,52 @@ MID = 'CD-1234-5678-90AB'
 OTHER_MID = 'CD-AAAA-BBBB-CCCC'
 OWNER = 'owner@example.com'
 MIGRATION = ROOT / 'supabase/migrations/20261126180000_duplicate_repair_lock_order.sql'
+
+
+def validate_local_test_options(options, environ):
+    """Reject libpq routing that could escape the explicitly local test server.
+
+    In particular, hostaddr overrides host, service profiles can add routing,
+    and a Unix-socket-looking host can still be a comma-separated failover list.
+    Validation happens before opening *any* connection or creating roles/DBs.
+    """
+    if options.get('service') or environ.get('PGSERVICE'):
+        raise ValueError('Service profiles are not allowed for database tests')
+    host = options.get('host') or ''
+    if ',' in host or not (host in ('localhost', '127.0.0.1', '::1') or host.startswith('/')):
+        raise ValueError('Tests require an explicit single loopback or Unix-socket PostgreSQL host')
+    hostaddr = options.get('hostaddr') or environ.get('PGHOSTADDR', '')
+    if hostaddr not in ('', '127.0.0.1', '::1'):
+        raise ValueError('Non-local hostaddr is not allowed for database tests')
+
+
+class LocalPostgresRoutingTests(unittest.TestCase):
+    def test_explicit_local_targets_are_allowed(self):
+        for host in ('127.0.0.1', 'localhost', '::1', '/tmp/postgresql'):
+            with self.subTest(host=host):
+                validate_local_test_options({'host': host}, {})
+        validate_local_test_options({'host': 'localhost', 'hostaddr': '127.0.0.1'}, {})
+
+    def test_implicit_remote_and_multihost_targets_are_rejected(self):
+        for options in (
+            {}, {'host': ''}, {'host': 'db.example.com'},
+            {'host': '/tmp/postgresql,db.example.com'},
+            {'host': 'localhost,127.0.0.1'},
+            {'host': 'localhost', 'hostaddr': '203.0.113.1'},
+            {'host': 'localhost', 'hostaddr': '127.0.0.1,203.0.113.1'},
+            {'host': 'localhost', 'service': 'production'},
+        ):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                validate_local_test_options(options, {})
+
+    def test_libpq_environment_cannot_redirect_local_dsn(self):
+        for environ in ({'PGHOSTADDR': '203.0.113.1'}, {'PGSERVICE': 'production'}):
+            with self.subTest(environ=environ), self.assertRaises(ValueError):
+                validate_local_test_options({'host': 'localhost'}, environ)
+        validate_local_test_options({'host': 'localhost'}, {'PGHOSTADDR': '::1'})
+        # An explicit local hostaddr takes precedence over the environment.
+        validate_local_test_options({'host': 'localhost', 'hostaddr': '127.0.0.1'},
+                                    {'PGHOSTADDR': '203.0.113.1'})
 
 
 class DuplicateRepairMigrationTests(unittest.TestCase):
@@ -45,22 +93,27 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
         from psycopg.conninfo import conninfo_to_dict, make_conninfo
         cls.pg = psycopg
         options = conninfo_to_dict(DSN)
-        host = options.get('host', '')
-        if not (host in ('localhost', '127.0.0.1', '::1') or host.startswith('/')):
-            raise ValueError('Tests require an explicit loopback or Unix-socket PostgreSQL host')
-        if options.get('hostaddr', '') not in ('', '127.0.0.1', '::1'):
-            raise ValueError('Non-local hostaddr is not allowed')
+        validate_local_test_options(options, os.environ)
         cls.database = 'cafedesk_lock_test_' + uuid.uuid4().hex
         cls.admin = psycopg.connect(DSN, autocommit=True, connect_timeout=5)
         cls.addClassCleanup(cls.admin.close)
         cls.admin.execute(sql.SQL('create database {}').format(sql.Identifier(cls.database)))
-        cls.addClassCleanup(lambda: cls.admin.execute(
-            sql.SQL('drop database {} with (force)').format(sql.Identifier(cls.database))))
+        created_roles = []
+
+        def cleanup_database_and_roles():
+            # Roles are cluster-global. Remove only fixture-created roles, after
+            # dropping their disposable database and releasing all dependencies.
+            cls.admin.execute(sql.SQL('drop database {} with (force)').format(sql.Identifier(cls.database)))
+            for role in reversed(created_roles):
+                cls.admin.execute(sql.SQL('drop role {}').format(sql.Identifier(role)))
+
+        cls.addClassCleanup(cleanup_database_and_roles)
         cls.dsn = make_conninfo(DSN, dbname=cls.database)
         with psycopg.connect(cls.dsn, autocommit=True) as db:
             for role in ('anon', 'authenticated', 'service_role'):
                 if not db.execute('select 1 from pg_roles where rolname = %s', (role,)).fetchone():
                     db.execute(sql.SQL('create role {}').format(sql.Identifier(role)))
+                    created_roles.append(role)
             db.execute('''
                 create schema auth;
                 create function auth.jwt() returns jsonb language sql stable as $$
@@ -98,8 +151,13 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
             db.execute('grant select on public.owner_license_actions to authenticated;')
 
     def setUp(self):
+        resources = ExitStack()
+        self.addCleanup(resources.close)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        resources.callback(self.pool.shutdown, wait=True, cancel_futures=True)
         self.db = self.connect()
-        self.addCleanup(self.db.close)
+        # LIFO: rollback/close the holder before joining workers waiting on it.
+        resources.callback(self.db.close)
         self.db.execute('''
             alter table public.owner_license_actions disable trigger all;
             alter table public.owner_audit_log disable trigger all;
@@ -107,22 +165,22 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
             alter table public.owner_license_actions enable trigger all;
             alter table public.owner_audit_log enable trigger all;
         ''')
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-        # Close the holding connection before joining any waiting worker on failure.
-        self.addCleanup(self.pool.shutdown, wait=True, cancel_futures=True)
-        self.addCleanup(self.db.close)
 
     def connect(self, owner=False):
         conn = self.pg.connect(self.dsn, autocommit=True, connect_timeout=5)
-        conn.execute("set statement_timeout = '8s'; set lock_timeout = '6s';")
-        conn.execute("select set_config('request.jwt.claims', %s, false)", (json.dumps({
-            'sub': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 'email': OWNER,
-            'role': 'authenticated' if owner else 'service_role',
-            'aal': 'aal2', 'amr': [{'method': 'totp'}],
-        }),))
-        if owner:
-            conn.execute('set role authenticated;')
-        return conn
+        try:
+            conn.execute("set statement_timeout = '8s'; set lock_timeout = '6s';")
+            conn.execute("select set_config('request.jwt.claims', %s, false)", (json.dumps({
+                'sub': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 'email': OWNER,
+                'role': 'authenticated' if owner else 'service_role',
+                'aal': 'aal2', 'amr': [{'method': 'totp'}],
+            }),))
+            if owner:
+                conn.execute('set role authenticated;')
+            return conn
+        except BaseException:
+            conn.close()
+            raise
 
     def seed(self, *licenses, mid=MID):
         # Administrative import simulates legacy duplicates that the ordinary
@@ -140,13 +198,20 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
         return conn.execute('select public.owner_review_duplicate_machine_keys(%s, %s, %s)',
                             (mid, action, keep)).fetchone()[0]
 
-    def start_query(self, query):
+    def start_query(self, query, *, owner=True):
         pid = concurrent.futures.Future()
 
         def run():
-            with self.connect(owner=True) as conn:
-                pid.set_result(conn.info.backend_pid)
-                return query(conn)
+            try:
+                with self.connect(owner=owner) as conn:
+                    pid.set_result(conn.info.backend_pid)
+                    return query(conn)
+            except BaseException as exc:
+                # Preserve connection/setup errors rather than masking them as
+                # an unrelated timeout waiting for a backend PID.
+                if not pid.done():
+                    pid.set_exception(exc)
+                raise
 
         result = self.pool.submit(run)
         return result, pid.result(timeout=5)
@@ -155,7 +220,11 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:
             if result.done():
-                self.fail(f'Request completed instead of waiting for {locktype}: {result.result()}')
+                try:
+                    outcome = repr(result.result())
+                except Exception as exc:
+                    outcome = f'{type(exc).__name__}: {exc}'
+                self.fail(f'Request completed instead of waiting for {locktype}: {outcome}')
             row = self.db.execute('''select %s = any(pg_blocking_pids(%s)), exists (
                 select 1 from pg_locks where pid = %s and not granted and locktype = %s
             )''', (blocker, pid, pid, locktype)).fetchone()
@@ -173,6 +242,39 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
     def hold_machine(self):
         self.db.execute('begin;')
         self.db.execute('select pg_advisory_xact_lock(hashtextextended(%s, 0))', (MID,))
+
+    def test_worker_connection_failure_preserves_original_error(self):
+        with mock.patch.object(self, 'connect', side_effect=RuntimeError('test connection setup failed')):
+            with self.assertRaisesRegex(RuntimeError, 'test connection setup failed'):
+                self.start_query(lambda conn: None)
+
+    def test_keeper_deleted_while_waiting_cannot_revoke_remaining_licence(self):
+        self.seed('LIC-A', 'LIC-B')
+        self.hold_machine()
+        self.db.execute("delete from public.issued_machine_keys where license_id = 'LIC-A'")
+        result, pid = self.start_query(lambda conn: self.repair(conn))
+        self.assert_blocked(result, pid, self.db.info.backend_pid)
+        self.db.execute('commit;')
+        with self.assertRaisesRegex(self.pg.errors.InvalidParameterValue, 'p_keep_license_id'):
+            result.result(timeout=5)
+        self.assertEqual(self.states(), [('LIC-B', False)])
+        self.assertEqual(self.audit_count(), 0)
+
+    def test_aal1_owner_is_rejected_before_waiting_for_machine_lock(self):
+        self.seed('LIC-A', 'LIC-B')
+        self.hold_machine()
+
+        def without_mfa(conn):
+            conn.execute("""select set_config('request.jwt.claims',
+                (auth.jwt() || '{"aal":"aal1"}'::jsonb)::text, false)""")
+            return self.repair(conn)
+
+        result, _ = self.start_query(without_mfa)
+        with self.assertRaisesRegex(self.pg.errors.InsufficientPrivilege, 'MFA'):
+            result.result(timeout=3)
+        self.db.execute('rollback;')
+        self.assertEqual(self.states(), [('LIC-A', False), ('LIC-B', False)])
+        self.assertEqual(self.audit_count(), 0)
 
     def test_repair_waits_on_issuance_lock_before_reading_or_early_return(self):
         self.seed('LIC-A')
@@ -194,7 +296,9 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
             result, pid = self.start_query(lambda c: self.repair(c))
             self.assert_blocked(result, pid, first.info.backend_pid)
             first.execute('commit;')
-        self.assertEqual(result.result(timeout=5)['action'], 'none')
+        retry = result.result(timeout=5)
+        self.assertEqual(retry['action'], 'none')
+        self.assertEqual(retry['keep_license_id'], 'LIC-A')
         self.assertEqual(self.states(), [('LIC-A', False), ('LIC-B', True)])
         self.assertEqual(self.audit_count(), 1)
 
@@ -269,16 +373,12 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
             first.execute('begin;')
             self.repair(first)
 
-            # Publish the PID of the connection that actually calls the service RPC.
-            pid_ready = concurrent.futures.Future()
-            def call_resign():
-                with self.connect() as service:
-                    pid_ready.set_result(service.info.backend_pid)
-                    return service.execute('''select public.replace_license_signature(
-                        'LIC-A', repeat('0',64), 'new-token', %s, 'Test Cafe', current_date,
-                        current_date+365, 'license', '', null, null, '', '[]'::jsonb)''', (MID,)).fetchone()[0]
-            result = self.pool.submit(call_resign)
-            self.assert_blocked(result, pid_ready.result(timeout=5), first.info.backend_pid)
+            result, pid = self.start_query(lambda service: service.execute(
+                """select public.replace_license_signature(
+                    'LIC-A', repeat('0',64), 'new-token', %s, 'Test Cafe', current_date,
+                    current_date+365, 'license', '', null, null, '', '[]'::jsonb)""", (MID,)
+            ).fetchone()[0], owner=False)
+            self.assert_blocked(result, pid, first.info.backend_pid)
             first.execute('commit;')
         # Repair does not delete paused duplicates; existing re-sign guard remains fail-closed.
         self.assertFalse(result.result(timeout=5))
@@ -300,8 +400,11 @@ class DuplicateRepairConcurrencyTests(unittest.TestCase):
         self.db.execute('begin;')
         self.db.execute("select 1 from public.issued_machine_keys where license_id = 'LIC-A' for update")
         result, _ = self.start_query(lambda c: self.repair(c))
-        with self.assertRaises(self.pg.errors.LockNotAvailable):
+        with self.assertRaises(self.pg.errors.LockNotAvailable) as caught:
             result.result(timeout=3)
+        self.assertEqual(caught.exception.sqlstate, '55P03')
+        self.assertIn('retry the whole transaction', caught.exception.diag.message_primary)
+        self.assertIn('never retry only the failed statement', caught.exception.diag.message_hint)
         self.db.execute('rollback;')
         self.assertEqual(self.states(), [('LIC-A', False), ('LIC-B', False)])
         self.assertEqual(self.audit_count(), 0)

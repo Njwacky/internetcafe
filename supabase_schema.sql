@@ -1741,11 +1741,17 @@ begin
         -- trigger requests the machine lock. Waiting here could invert that
         -- order and deadlock. A busy row aborts safely with SQLSTATE 55P03; retry
         -- the entire transaction after refreshing, never continue partially.
-        perform 1 from public.issued_machine_keys k
-        where upper(trim(k.machine_id)) = v_mid
-          and k.key_type in ('license', 'combo') and k.expires_at >= current_date
-        order by k.id
-        for update nowait;
+        begin
+            perform 1 from public.issued_machine_keys k
+            where upper(trim(k.machine_id)) = v_mid
+              and k.key_type in ('license', 'combo') and k.expires_at >= current_date
+            order by k.id
+            for update nowait;
+        exception when lock_not_available then
+            raise exception 'Licence records are busy. Refresh the duplicate-key preview and retry the whole transaction.'
+                using errcode = '55P03',
+                      hint = 'Reconfirm the keeper after refreshing; never retry only the failed statement.';
+        end;
     end if;
 
     select coalesce(jsonb_agg(jsonb_build_object(
@@ -1778,6 +1784,7 @@ begin
     if jsonb_array_length(v_keys) <= 1 then
         return jsonb_build_object(
             'ok', true, 'machine_id', v_mid, 'action', 'none',
+            'keep_license_id', v_keep,
             'duplicate_keys', v_keys, 'revoked_license_ids', '[]'::jsonb
         );
     end if;

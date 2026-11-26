@@ -214,6 +214,7 @@ test('retrying the same keeper is a no-op without a second repair audit', async 
   await rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']);
   const retry = await rpc('owner_review_duplicate_machine_keys', [MID, 'resolve', 'LIC-A']);
   assert.equal(retry.action, 'none');
+  assert.equal(retry.keep_license_id, 'LIC-A');
   assert.deepEqual(retry.revoked_license_ids, []);
   assert.equal(Number((await db.query('select count(*) as n from public.owner_license_actions')).rows[0].n), 1);
   assert.deepEqual(await keyStates(), [['LIC-A', false], ['LIC-B', true]]);

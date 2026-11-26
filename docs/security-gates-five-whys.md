@@ -1015,7 +1015,8 @@ assuming sleeps prove that a request waited.
 
 ### Run locally / Step 4 hand-off
 
-Use a disposable local PostgreSQL 16 server whose test role can create databases:
+Use a disposable local PostgreSQL 16 server and a test-only fixture superuser
+(the bootstrap creates the database and any missing fixture roles):
 
 ```sh
 python -m pip install -r requirements-lock.txt -r requirements-postgres-test.txt
@@ -1043,3 +1044,55 @@ do not recreate duplicate customer licences in production to test contention.
 all real PostgreSQL tests enabled; JavaScript/PGlite suite **53/53 passed**;
 15-test PostgreSQL suite passed five additional consecutive runs. Version sync,
 owner digest sync, release-key guard and `git diff --check` all passed.
+
+### Step 3 polish follow-up
+
+A second review kept the migration/PR scope unchanged and tightened the operator
+contract and test harness rather than adding new application features.
+
+**Five Whys follow-up:**
+
+1. Why was a busy repair hard to act on? PostgreSQL returned a generic row-lock
+   error naming a table, without explaining the safe retry boundary.
+2. Why could test startup errors look like timing failures? A worker failing
+   before publishing its backend PID left the caller waiting for a PID timeout.
+3. Why could a run leave fixture roles behind? Cleanup removed the disposable
+   database but roles are cluster-global, not database objects.
+4. Why was a syntactically local DSN not enough? libpq can route through
+   `hostaddr`, service profiles or comma-separated failover hosts, including
+   a host list beginning with a Unix socket path.
+5. Why were these missed initially? Coverage focused on repair transactions and
+   ordinary DSNs, not the lifecycle and effective routing of the harness itself.
+
+**Polish applied:**
+
+- Busy candidate rows still fail atomically with SQLSTATE **55P03**, now with an
+  actionable message and hint: refresh the preview, reconfirm the explicit
+  keeper and retry the whole transaction, never only the failed statement.
+  A valid no-op retry now echoes `keep_license_id`, matching successful repair
+  responses and making the outcome easier for callers to interpret.
+- Worker connection/setup failures preserve their original exception instead of
+  becoming misleading PID timeouts. Failed connection initialization closes its
+  connection; ordered cleanup closes/rolls back the holder before joining workers.
+  Owner and service requests share the same bounded worker/PID helper.
+- The fixture drops only roles it created, after removing its random database;
+  pre-existing roles are preserved. This was checked on a fresh local cluster
+  both with and without a pre-existing `anon` role. Use a dedicated disposable
+  test server, not a developer/application server with unrelated test activity.
+- Local routing validation now rejects implicit/remote/multi-host destinations,
+  service profiles (including `PGSERVICE`) and non-local `PGHOSTADDR` overrides,
+  before any connection is opened. The CI PostgreSQL port is bound explicitly to
+  `127.0.0.1` rather than every interface. Documentation now states that bootstrap
+  requires a test-only fixture superuser, not merely CREATEDB permission.
+- Six added regression tests cover allowed/rejected/effective-environment routing,
+  worker startup errors, deletion of a keeper while repair waits, and AAL1 denial
+  before waiting for the machine lock. Existing tests assert the improved retry
+  message/hint and the no-op keeper response. Offline routing/schema tests still
+  run without an optional PostgreSQL DSN; database behavior tests explicitly skip.
+
+**Polish verification:** full Python suite **378 run, OK (1 skipped)** with
+PostgreSQL enabled; JavaScript/PGlite **53/53 passed**; the expanded 21-check
+PostgreSQL/routing suite passed three additional consecutive runs. Optional-DSN
+skip behavior, preservation of pre-existing roles and absence of leftover test
+databases/fixture-created roles were checked. Version sync, owner digest sync,
+release-key guard and `git diff --check` passed. No live rollout was performed.
