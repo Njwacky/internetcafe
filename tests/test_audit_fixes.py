@@ -2,6 +2,7 @@
 import ast
 from datetime import datetime
 import json
+import os
 import queue
 import shutil
 import tempfile
@@ -99,6 +100,42 @@ class RecoveryBarrierTests(FileFixture):
         self.assertEqual(data['draft'], 'NEW CUSTOMER')
         self.assertFalse((store.directory / 'career.prev.cafeproject').exists())
 
+    def test_lock_fails_fast_on_a_filesystem_without_locking(self):
+        # A filesystem that cannot enforce advisory locks (ENOLCK/EOPNOTSUPP/ENOSYS)
+        # is a permanent condition: retrying for the full timeout hides it and stalls
+        # clear/save. The barrier must fail closed, quickly and with a clear message.
+        import errno as errno_mod
+        import time
+
+        from recovery_store import _FileLock
+
+        lock = _FileLock(self.root / 'state' / '.cafedesk-recovery.lock', timeout=15.0)
+        with patch('fcntl.flock', side_effect=OSError(errno_mod.ENOLCK, 'no locks')):
+            start = time.monotonic()
+            with self.assertRaises(OSError) as ctx:
+                lock.__enter__()
+            elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 2.0, 'must fail fast, not retry for the full timeout')
+        self.assertIn('cross-process locking', str(ctx.exception))
+
+    def test_save_rejects_generation_below_the_inprocess_mirror(self):
+        # invalidate()'s in-memory fallback bumps only the mirror when the
+        # cross-process lock is unavailable. save() must consult the mirror too,
+        # otherwise an abandoned worker's snapshot (captured before the fallback)
+        # still publishes after the watchdog invalidated it.
+        store = RecoveryStore(self.root / 'recovery')
+        marker = store._state_dir / '.cafedesk-recovery.generation'
+        marker.write_text('5', encoding='ascii')
+        store._generation = 6  # mirror ahead, marker stale (invalidate fallback state)
+        self.assertFalse(store.save(5, [('career', self.snapshot())]))
+        self.assertFalse((store.directory / 'career.cafeproject').exists())
+        # The next successful invalidate/clear realigns the marker; saves resume.
+        store.invalidate()  # lock works in the test; marker 5 -> 6, mirror 6
+        self.assertTrue(store.save(6, [('career', self.snapshot('NEW CUSTOMER'))]))
+        path = store.directory / 'career.cafeproject'
+        _, data = projects.load(path, self.root / 'session', allow_internal=True)
+        self.assertEqual(data['draft'], 'NEW CUSTOMER')
+
     def test_unrelated_ui_errors_do_not_release_an_active_worker(self):
         ns = desktop_methods('report_callback_exception')
         ns.update(logger=Mock(),datetime=datetime)
@@ -153,6 +190,229 @@ class RecoveryBarrierTests(FileFixture):
         self.assertTrue(cleared.is_set())
         self.assertEqual(errors, [])
         self.assertEqual(list(store.directory.iterdir()), [])
+
+    # -- cross-process barrier (five-whys recheck, section 1) ------------------
+    # Two RecoveryStore instances in one test process model two Café Desk
+    # instances on one computer sharing the same recovery folder.
+
+    def test_cross_process_clear_rejects_late_worker_from_another_store(self):
+        directory = self.root / 'config' / 'recovery'
+        first, second = RecoveryStore(directory), RecoveryStore(directory)
+        old_generation = first.generation()
+        second.clear()
+        # The other instance's late worker captured the generation before the
+        # clear; it must not be able to publish the previous customer's file.
+        self.assertFalse(first.save(old_generation, [('career', self.snapshot('PRIVATE CUSTOMER A'))]))
+        self.assertFalse(directory.exists())
+        # A fresh worker for the new customer still publishes normally.
+        self.assertTrue(first.save(first.generation(), [('career', self.snapshot('NEW CUSTOMER'))]))
+        _, data = projects.load(directory / 'career.cafeproject', self.root / 'session', allow_internal=True)
+        self.assertEqual(data['draft'], 'NEW CUSTOMER')
+
+    def test_cross_process_invalidate_rejects_other_store_late_worker(self):
+        directory = self.root / 'config' / 'recovery'
+        first, second = RecoveryStore(directory), RecoveryStore(directory)
+        old_generation = first.generation()
+        second.invalidate()
+        self.assertFalse(first.save(old_generation, [('career', self.snapshot('PRIVATE CUSTOMER A'))]))
+        self.assertFalse(directory.exists())
+
+    def test_cross_process_save_rotation_keeps_other_store_in_sync(self):
+        directory = self.root / 'config' / 'recovery'
+        first, second = RecoveryStore(directory), RecoveryStore(directory)
+        self.assertTrue(first.save(first.generation(), [('career', self.snapshot('FIRST'))]))
+        # The second instance sees the same generation and can rotate the file.
+        self.assertTrue(second.save(second.generation(), [('career', self.snapshot('SECOND'))]))
+        _, data = projects.load(directory / 'career.prev.cafeproject', self.root / 'session', allow_internal=True)
+        self.assertEqual(data['draft'], 'FIRST')
+        # A worker that captured the original generation before the rotation is
+        # rejected, even in the other instance.
+        original = first.generation() - 1
+        self.assertFalse(first.save(original, [('career', self.snapshot('ABANDONED'))]))
+        _, data = projects.load(directory / 'career.cafeproject', self.root / 'session', allow_internal=True)
+        self.assertEqual(data['draft'], 'SECOND')
+
+    def test_marker_and_lock_live_outside_the_recovery_folder(self):
+        directory = self.root / 'config' / 'recovery'
+        store = RecoveryStore(directory)
+        store.save(store.generation(), [('career', self.snapshot())])
+        store.clear()
+        # The recovery folder holds only customer recovery data; shared state
+        # (generation marker + lock) lives in the protected parent folder.
+        self.assertEqual(list(store.directory.iterdir()), [])
+        self.assertTrue((store._state_dir / '.cafedesk-recovery.generation').exists())
+        self.assertTrue((store._state_dir / '.cafedesk-recovery.lock').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX flock conflicts across fds in one process')
+    def test_lock_contention_blocks_save_and_clear(self):
+        # A second process holds the publication lock: the store must fail
+        # cleanly instead of publishing or deleting under the concurrent write.
+        directory = self.root / 'config' / 'recovery'
+        store = RecoveryStore(directory, lock_timeout=0.5)
+        store.save(store.generation(), [('career', self.snapshot('CUSTOMER A'))])
+        lock_path = store._state_dir / '.cafedesk-recovery.lock'
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            with self.assertRaises(OSError):
+                store.save(store.generation(), [('career', self.snapshot('CUSTOMER B'))])
+            with self.assertRaises(OSError):
+                store.clear()
+            # Nothing was published and nothing was deleted.
+            _, data = projects.load(directory / 'career.cafeproject', self.root / 'session', allow_internal=True)
+            self.assertEqual(data['draft'], 'CUSTOMER A')
+        finally:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+
+class LicenceRevocationEnforcementTests(unittest.TestCase):
+    """Section 3, part B: remote revocation must actually stop the app."""
+
+    def _methods(self, *names):
+        ns = desktop_methods(*names)
+        ns.update(ctk=Mock(), label=Mock(), button=Mock(),
+                  BG='#000', WHITE='#fff', MUTED='#m', RED='#r',
+                  saved_services=Mock(), license_guard=Mock(),
+                  settings_store=Mock(), time=Mock(monotonic=lambda: 0.0),
+                  messagebox=Mock(), simpledialog=Mock())
+        return ns
+
+    def test_force_close_skips_every_confirmation(self):
+        ns = self._methods('close_app')
+        app = SimpleNamespace(busy=True, _close_confirmed_busy=False, receipt_items=[],
+                              has_unsaved_work=lambda: True, _recovery_store=Mock())
+        app.remove_session_files = Mock()
+        app.destroy = Mock()
+        ns['close_app'](app, force=True)
+        ns['messagebox'].askyesno.assert_not_called()
+        app._recovery_store.invalidate.assert_called_once()
+        app.remove_session_files.assert_called_once()
+        app.destroy.assert_called_once()
+
+    def test_ordinary_close_still_asks_before_closing(self):
+        ns = self._methods('close_app')
+        ns['messagebox'].askyesno.return_value = False
+        app = SimpleNamespace(busy=False, _close_confirmed_busy=False, receipt_items=[],
+                              has_unsaved_work=lambda: True, _recovery_store=Mock())
+        app.remove_session_files = Mock()
+        app.destroy = Mock()
+        ns['close_app'](app)
+        ns['messagebox'].askyesno.assert_called()
+        app.destroy.assert_not_called()
+
+    def test_revocation_callback_enforces_instead_of_cancelable_close(self):
+        ns = self._methods('_finish_remote_entitlement_sync')
+        ns['license_guard'].is_license_required.return_value = True
+        ns['license_guard'].current_license_status.return_value = {'valid': False}
+        app = SimpleNamespace(_entitlement_sync_running=True, status=Mock(),
+                              _enforce_licence_revocation=Mock(), close_app=Mock())
+        ns['_finish_remote_entitlement_sync'](app, {
+            'ok': True, 'revoked': ['Base License (L1)'], 'revocation_reasons': ['Paused by owner']})
+        app._enforce_licence_revocation.assert_called_once_with(['Paused by owner'])
+        app.close_app.assert_not_called()
+
+    def test_revocation_callback_does_not_enforce_when_not_required(self):
+        ns = self._methods('_finish_remote_entitlement_sync')
+        ns['license_guard'].is_license_required.return_value = False
+        app = SimpleNamespace(_entitlement_sync_running=True, status=Mock(),
+                              _enforce_licence_revocation=Mock(), close_app=Mock())
+        ns['_finish_remote_entitlement_sync'](app, {'ok': True, 'revoked': ['Base License (L1)']})
+        app._enforce_licence_revocation.assert_not_called()
+        app.close_app.assert_not_called()
+
+    def test_enforcement_locks_and_force_closes_when_no_display(self):
+        ns = self._methods('_enforce_licence_revocation')
+        ns['ctk'].CTkToplevel.side_effect = ns['tk'].TclError('no display')
+        app = SimpleNamespace(_licence_revoked=False, status=Mock(), lock_staff=Mock(), close_app=Mock())
+        ns['_enforce_licence_revocation'](app, ['Paused by owner'])
+        self.assertTrue(app._licence_revoked)
+        app.lock_staff.assert_called_once()
+        app.close_app.assert_called_once_with(force=True)
+
+    def test_enforcement_shows_a_non_dismissable_notice(self):
+        ns = self._methods('_enforce_licence_revocation')
+        dlg = Mock()
+        ns['ctk'].CTkToplevel.return_value = dlg
+        app = SimpleNamespace(_licence_revoked=False, status=Mock(), lock_staff=Mock(), close_app=Mock())
+        ns['_enforce_licence_revocation'](app, ['Paused by owner'])
+        self.assertTrue(app._licence_revoked)
+        app.lock_staff.assert_called_once()
+        dlg.transient.assert_called_once_with(app)
+        dlg.grab_set.assert_called_once()
+        dlg.protocol.assert_called_once()
+        protocol_args = dlg.protocol.call_args.args
+        self.assertEqual(protocol_args[0], 'WM_DELETE_WINDOW')
+        self.assertIsNone(protocol_args[1]())  # the handler is a no-op: cannot dismiss
+        # The only way forward is Quit, which force-closes.
+        quit_cmd = ns['button'].call_args.args[2]
+        quit_cmd()
+        app.close_app.assert_called_once_with(force=True)
+
+
+    def test_require_staff_refuses_while_revoked_even_if_unlocked(self):
+        # Fail closed: the deny path is the default once the licence is revoked;
+        # the staff PIN must not re-open the gate.
+        ns = self._methods('require_staff')
+        app = SimpleNamespace(_licence_revoked=True, staff_unlocked=True,
+                              _enforce_licence_revocation=Mock())
+        self.assertFalse(ns['require_staff'](app))
+        app._enforce_licence_revocation.assert_called_once_with(None)
+
+    def test_require_staff_still_unlocks_normally_when_not_revoked(self):
+        ns = self._methods('require_staff')
+        ns['settings_store'].lockout_remaining.return_value = 0
+        ns['settings_store'].pin_is_set.return_value = True
+        ns['settings_store'].verify_pin.return_value = True
+        app = SimpleNamespace(_licence_revoked=False, staff_unlocked=False, idle=Mock(touch=Mock()),
+                              failed_attempts=0, lockout_until=0, update_lock_button=Mock(),
+                              status=Mock(), _enforce_licence_revocation=Mock(),
+                              _load_saved_ai_key=Mock())
+        self.assertTrue(ns['require_staff'](app))
+        app._enforce_licence_revocation.assert_not_called()
+        app._load_saved_ai_key.assert_called_once()
+
+    def test_revocation_landing_during_pin_entry_re_enforces(self):
+        # Race: revocation confirmed while the PIN dialog is open - the unlock must
+        # be rolled back and enforcement applied before any saved key is loaded.
+        ns = self._methods('require_staff')
+        ns['settings_store'].lockout_remaining.return_value = 0
+        ns['settings_store'].pin_is_set.return_value = True
+        app = SimpleNamespace(_licence_revoked=False, staff_unlocked=False, idle=Mock(touch=Mock()),
+                              failed_attempts=0, lockout_until=0, update_lock_button=Mock(),
+                              status=Mock(), _enforce_licence_revocation=Mock(),
+                              _load_saved_ai_key=Mock())
+        ns['settings_store'].verify_pin.side_effect = lambda _pin: setattr(app, '_licence_revoked', True) or True
+        self.assertFalse(ns['require_staff'](app))
+        app._enforce_licence_revocation.assert_called_once_with(None)
+        app._load_saved_ai_key.assert_not_called()
+
+    def test_enforcement_force_closes_when_the_shell_is_gone(self):
+        # If the widget shell is already destroyed, lock_staff()/status raise
+        # TclError; enforcement must still hold by force-closing, not propagate.
+        ns = self._methods('_enforce_licence_revocation')
+        app = SimpleNamespace(_licence_revoked=False, _licence_enforcement_shown=False,
+                              status=Mock(), lock_staff=Mock(side_effect=ns['tk'].TclError('destroyed')),
+                              close_app=Mock())
+        ns['_enforce_licence_revocation'](app, ['Paused by owner'])
+        self.assertTrue(app._licence_revoked)
+        app.close_app.assert_called_once_with(force=True)
+
+    def test_enforcement_does_not_stack_dialogs(self):
+        ns = self._methods('_enforce_licence_revocation')
+        ns['ctk'].CTkToplevel.return_value = Mock()
+        app = SimpleNamespace(_licence_revoked=False, _licence_enforcement_shown=False,
+                              status=Mock(), lock_staff=Mock())
+        ns['_enforce_licence_revocation'](app, ['r1'])
+        ns['_enforce_licence_revocation'](app, ['r2'])
+        self.assertTrue(app._licence_revoked)
+        app.lock_staff.assert_called()
+        ns['ctk'].CTkToplevel.assert_called_once()
 
 
 class SalesSyncIntegrityTests(FileFixture):

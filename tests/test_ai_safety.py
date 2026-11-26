@@ -256,5 +256,92 @@ class FiveWhysRegressionTests(unittest.TestCase):
         )
 
 
+class ApiKeyExposureGateTests(unittest.TestCase):
+    """Section 2: the API key must never leave the app through errors or logs."""
+
+    KEY = "gsk_secretkey123456789"
+
+    def test_custom_url_with_embedded_key_is_rejected(self):
+        import services
+
+        url = "https://example.com/v1/chat/completions?key=" + self.KEY
+        with self.assertRaises(ValueError) as ctx:
+            services.detect_ai_provider(self.KEY, "Custom OpenAI-compatible URL", url)
+        self.assertIn("must not contain", str(ctx.exception))
+        # A clean endpoint still resolves.
+        endpoint, label = services.detect_ai_provider(
+            self.KEY, "Custom OpenAI-compatible URL", "https://example.com/v1/chat/completions")
+        self.assertEqual(label, "Custom endpoint")
+        self.assertEqual(endpoint, "https://example.com/v1/chat/completions")
+
+    def test_custom_url_with_key_like_token_is_rejected(self):
+        import services
+
+        url = "https://example.com/v1/chat/completions?auth=sk-or-v1-abcdef123456"
+        with self.assertRaises(ValueError):
+            services.detect_ai_provider("not-a-key", "Custom OpenAI-compatible URL", url)
+
+    def test_percent_encoded_key_in_custom_url_is_rejected(self):
+        # A key percent-encoded into the URL bypasses the raw-text exact match and
+        # the key-pattern regex; the decoded form must be checked too (recheck).
+        import urllib.parse
+
+        import services
+
+        encoded = urllib.parse.quote(self.KEY, safe="")
+        url = "https://example.com/v1/chat/completions?key=" + encoded
+        with self.assertRaises(ValueError) as ctx:
+            services.detect_ai_provider(self.KEY, "Custom OpenAI-compatible URL", url)
+        self.assertIn("must not contain", str(ctx.exception))
+        # A clean endpoint still resolves.
+        endpoint, label = services.detect_ai_provider(
+            self.KEY, "Custom OpenAI-compatible URL", "https://example.com/v1/chat/completions")
+        self.assertEqual(label, "Custom endpoint")
+
+    def test_connection_error_message_redacts_the_endpoint(self):
+        import requests
+
+        import services
+
+        url = "https://example.com/v1/chat/completions"
+        with mock.patch("requests.post", side_effect=requests.RequestException("boom")) as post:
+            with self.assertRaises(ValueError) as ctx:
+                services.call_ai_chat(self.KEY, "gpt-4o-mini", "hello",
+                                      provider_choice="Custom OpenAI-compatible URL", custom_url=url)
+        post.assert_called_once()
+        message = str(ctx.exception)
+        self.assertNotIn(self.KEY, message)
+        self.assertNotIn("sk-", message)
+        self.assertIn(url, message)  # the (clean) endpoint is still shown for debugging
+
+    def test_connection_error_with_key_bearing_url_is_redacted(self):
+        # Defence in depth: even if an endpoint carrying a key reached the request
+        # path, the error message must not carry the key out.
+        import requests
+
+        import services
+
+        leaky = "https://example.com/v1/chat/completions?key=" + self.KEY
+        with mock.patch("requests.post", side_effect=requests.RequestException("boom")), \
+                mock.patch.object(services, "detect_ai_provider",
+                                  return_value=(leaky, "Custom endpoint")):
+            with self.assertRaises(ValueError) as ctx:
+                services.call_ai_chat(self.KEY, "gpt-4o-mini", "hello",
+                                      provider_choice="Custom OpenAI-compatible URL", custom_url=leaky)
+        self.assertNotIn(self.KEY, str(ctx.exception))
+        self.assertIn("[hidden key]", str(ctx.exception))
+
+    def test_redirect_message_contains_no_key(self):
+        import services
+
+        redirect = mock.Mock(ok=False, status_code=307)
+        redirect.json.return_value = {}
+        with mock.patch("requests.post", return_value=redirect):
+            with self.assertRaises(ValueError) as ctx:
+                services.call_ai_chat(self.KEY, "gpt-4o-mini", "hello")
+        self.assertNotIn(self.KEY, str(ctx.exception))
+        self.assertIn("redirect", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

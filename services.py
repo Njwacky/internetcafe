@@ -1,6 +1,7 @@
 """Local document operations for Café Desk. No GUI dependencies."""
 from pathlib import Path
 import os, tempfile, io, shutil, subprocess, sys
+import urllib.parse
 import ai_safety
 from xml.sax.saxutils import escape
 from pypdf import PdfReader, PdfWriter
@@ -583,6 +584,13 @@ def detect_ai_provider(api_key:str, provider_choice:str='Auto-detect from API ke
         url=(custom_url or '').strip()
         if not url.startswith(('https://','http://localhost','http://127.0.0.1')):
             raise ValueError('Custom AI endpoint must start with https:// (or http://localhost for local Ollama/LM Studio).')
+        # Secrets must never travel in a URL: they leak into error messages, logs,
+        # proxy logs and browser history. Reject a URL that carries the key (or any
+        # key-like token) instead of sending it and leaking it later. Check both the
+        # raw URL and its percent-decoded form - an encoded key would otherwise
+        # bypass the exact match and the key-pattern regex.
+        if ai_safety.redact_secrets(url,key)!=url or ai_safety.redact_secrets(urllib.parse.unquote(url),key)!=url:
+            raise ValueError('The custom AI endpoint URL must not contain the API key or another key-like token. Paste the endpoint without the key.')
         if url.rstrip('/').endswith('/v1'):
             url=url.rstrip('/')+'/chat/completions'
         return url,'Custom endpoint'
@@ -687,7 +695,10 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
         # No redirects: a redirect could re-send the customer's text to another server.
         resp=requests.post(endpoint,headers=headers,json=payload,timeout=timeout,allow_redirects=False)
     except requests.RequestException as exc:
-        raise ValueError(f'Could not reach {provider_label} ({endpoint}). Check your internet connection and try again.') from exc
+        # The endpoint URL is user-supplied and may have carried a key; never let it
+        # (or a chained requests traceback) reach a message, log or dialog unredacted.
+        raise ValueError(ai_safety.redact_secrets(
+            f'Could not reach {provider_label} ({endpoint}). Check your internet connection and try again.',key)) from exc
 
     try:
         body=resp.json()
@@ -695,7 +706,9 @@ def call_ai_chat(api_key:str, model:str, user_text:str, *, provider_choice:str='
         body={}
 
     if 300<=resp.status_code<400:
-        raise ValueError(f'{provider_label} tried to redirect the request elsewhere (HTTP {resp.status_code}). It was blocked to protect customer data. Check the endpoint URL.')
+        raise ValueError(ai_safety.redact_secrets(
+            f'{provider_label} tried to redirect the request elsewhere (HTTP {resp.status_code}). '
+            f'It was blocked to protect customer data. Check the endpoint URL: {endpoint}.',key))
     if not resp.ok:
         detail=ai_safety.redact_secrets(_extract_ai_error_detail(body),key)
         hint=f': {detail[:220]}' if detail else '.'
